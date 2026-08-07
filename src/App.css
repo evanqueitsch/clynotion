@@ -196,6 +196,7 @@
 
 .note-card__main {
   flex: 1;
+  min-width: 0;
   text-align: left;
   background: transparent;
   border: none;
@@ -234,10 +235,12 @@
   color: var(--text);
   font-size: 14px;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   line-height: 1.5;
 }
 
 .note-card__delete {
+  flex-shrink: 0;
   margin: 10px 10px 10px 0;
   align-self: center;
 }
