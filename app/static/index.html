@@ -1,0 +1,800 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Clynotion — Attune</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
+  <style>
+    :root {
+      --ink: #1a2421;
+      --muted: #5c6b66;
+      --paper: #f3f6f4;
+      --panel: rgba(255, 255, 255, 0.78);
+      --line: #c5d0cb;
+      --accent: #0f6e56;
+      --accent-ink: #083d30;
+      --warn: #8a4b12;
+      --danger: #8b2e2e;
+      --ok: #1f6b4a;
+      --shadow: 0 18px 50px rgba(26, 36, 33, 0.12);
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      min-height: 100vh;
+      font-family: "IBM Plex Sans", sans-serif;
+      color: var(--ink);
+      background:
+        radial-gradient(1200px 600px at 10% -10%, #d7ebe3 0%, transparent 55%),
+        radial-gradient(900px 500px at 100% 0%, #e7eef2 0%, transparent 50%),
+        linear-gradient(165deg, #eef3f0 0%, var(--paper) 45%, #e4ebe7 100%);
+    }
+    main {
+      max-width: 720px;
+      margin: 0 auto;
+      padding: 2.5rem 1.25rem 4rem;
+    }
+    .brand {
+      font-family: Fraunces, Georgia, serif;
+      font-size: clamp(2.4rem, 6vw, 3.4rem);
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      margin: 0;
+      color: var(--accent-ink);
+      animation: rise 0.7s ease-out both;
+    }
+    .tagline {
+      margin: 0.35rem 0 1.75rem;
+      color: var(--muted);
+      font-size: 1.05rem;
+      max-width: 34ch;
+      animation: rise 0.7s ease-out 0.08s both;
+    }
+    .panel {
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 18px;
+      padding: 1.35rem 1.4rem 1.5rem;
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(10px);
+      animation: rise 0.75s ease-out 0.14s both;
+    }
+    @keyframes rise {
+      from { opacity: 0; transform: translateY(12px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    h2 {
+      font-family: Fraunces, Georgia, serif;
+      font-size: 1.35rem;
+      margin: 0 0 0.85rem;
+      font-weight: 500;
+    }
+    label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 500;
+      color: var(--muted);
+      margin-bottom: 0.35rem;
+    }
+    input[type="text"], input[type="password"], select, textarea {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.65rem 0.75rem;
+      font: inherit;
+      background: #fff;
+      color: var(--ink);
+      margin-bottom: 0.85rem;
+    }
+    textarea { min-height: 120px; resize: vertical; }
+    .row { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
+    .row > * { flex: 1 1 auto; }
+    button, .file-btn {
+      appearance: none;
+      border: none;
+      border-radius: 999px;
+      padding: 0.7rem 1.15rem;
+      font: inherit;
+      font-weight: 600;
+      cursor: pointer;
+      transition: transform 0.15s ease, background 0.15s ease, opacity 0.15s ease;
+    }
+    button:active { transform: scale(0.98); }
+    button.primary { background: var(--accent); color: #fff; }
+    button.primary:hover { background: #0c5c48; }
+    button.ghost {
+      background: transparent;
+      color: var(--accent-ink);
+      border: 1px solid var(--line);
+    }
+    button:disabled { opacity: 0.45; cursor: not-allowed; }
+    .file-btn {
+      display: inline-block;
+      background: #fff;
+      border: 1px dashed var(--line);
+      color: var(--ink);
+      text-align: center;
+    }
+    .status {
+      margin-top: 0.85rem;
+      font-size: 0.92rem;
+      color: var(--muted);
+      min-height: 1.25rem;
+    }
+    .status.error { color: var(--danger); }
+    .status.ok { color: var(--ok); }
+    .rec-dot {
+      width: 10px; height: 10px; border-radius: 50%;
+      background: var(--danger);
+      display: inline-block;
+      margin-right: 0.4rem;
+      animation: pulse 1.1s ease-in-out infinite;
+    }
+    @keyframes pulse {
+      0%, 100% { opacity: 1; transform: scale(1); }
+      50% { opacity: 0.35; transform: scale(0.85); }
+    }
+    .speakers { display: grid; gap: 0.65rem; margin: 0.5rem 0 1rem; }
+    .speaker {
+      display: grid;
+      grid-template-columns: 7rem 1fr;
+      gap: 0.5rem;
+      align-items: center;
+    }
+    .speaker span {
+      font-size: 0.85rem;
+      color: var(--muted);
+      font-weight: 500;
+    }
+    .note {
+      white-space: pre-wrap;
+      background: #fff;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 1rem;
+      font-size: 0.95rem;
+      line-height: 1.45;
+      max-height: 320px;
+      overflow: auto;
+    }
+    .warn {
+      background: #fff7ed;
+      border: 1px solid #f0d2a8;
+      color: var(--warn);
+      border-radius: 10px;
+      padding: 0.65rem 0.8rem;
+      font-size: 0.9rem;
+      margin-bottom: 0.85rem;
+    }
+    .hidden { display: none !important; }
+    .meta { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.75rem; }
+    .roster { display: grid; gap: 0.45rem; margin: 0.5rem 0 1rem; }
+    .roster-row {
+      display: grid;
+      grid-template-columns: auto 1fr auto auto;
+      gap: 0.5rem;
+      align-items: center;
+      font-size: 0.92rem;
+    }
+    .roster-row select {
+      margin: 0;
+      width: auto;
+      min-width: 8rem;
+      padding: 0.35rem 0.5rem;
+    }
+    .pill {
+      font-size: 0.72rem;
+      font-weight: 600;
+      padding: 0.15rem 0.45rem;
+      border-radius: 999px;
+      background: #e5efe9;
+      color: var(--accent-ink);
+    }
+    .pill.none { background: #f0e8e0; color: var(--warn); }
+    .mode-row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.85rem; }
+    .mode-row label {
+      display: flex;
+      align-items: center;
+      gap: 0.4rem;
+      margin: 0;
+      color: var(--ink);
+      font-weight: 500;
+      cursor: pointer;
+    }
+    footer {
+      margin-top: 1.5rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+      animation: rise 0.7s ease-out 0.2s both;
+    }
+  </style>
+</head>
+<body>
+  <main>
+    <h1 class="brand">Clynotion</h1>
+    <p class="tagline">Capture clinical supervision. Map voices to clinicians. Finalize the note.</p>
+
+    <section id="auth-panel" class="panel">
+      <h2>Sign in</h2>
+      <label for="username">Username</label>
+      <input id="username" type="text" value="alice" autocomplete="username" />
+      <label for="password">Password</label>
+      <input id="password" type="password" value="alice-pass" autocomplete="current-password" />
+      <div class="row">
+        <button class="primary" id="btn-login" type="button">Continue</button>
+      </div>
+      <p class="status" id="auth-status">Dev users: alice / alice-pass</p>
+    </section>
+
+    <section id="capture-panel" class="panel hidden">
+      <h2>Start session</h2>
+      <div id="provider-banner" class="warn hidden"></div>
+      <p class="meta">Choose who’s present, then capture in Clynotion (session surface). Meeting bot is stubbed until BAAs.</p>
+
+      <div class="mode-row">
+        <label><input type="radio" name="capture-mode" value="session_surface" checked /> Session surface</label>
+        <label><input type="radio" name="capture-mode" value="meeting_bot" /> Meeting bot (Zoom/Teams)</label>
+      </div>
+      <div id="bot-warn" class="warn hidden"></div>
+
+      <label>Who’s present</label>
+      <div class="roster" id="roster"></div>
+      <p class="meta" id="roster-hint">Select who’s present. Enroll voice (local embedding; sample deleted). Check in to verify before capture.</p>
+      <input id="enroll-file" type="file" accept="audio/*,.wav,.webm,.mp3,.m4a" class="hidden" />
+
+      <h2 style="margin-top: 1.25rem;">Capture</h2>
+      <div class="row" style="margin-bottom: 0.85rem;">
+        <button class="primary" id="btn-rec" type="button">Start live capture</button>
+        <button class="ghost" id="btn-stop" type="button" disabled>Stop &amp; draft</button>
+      </div>
+      <label class="file-btn" for="file-input">Or choose an audio file…</label>
+      <input id="file-input" type="file" accept="audio/*,.wav,.webm,.mp3,.m4a" class="hidden" />
+      <p class="status" id="capture-status"></p>
+      <details style="margin-top: 0.75rem;">
+        <summary style="cursor:pointer; color: var(--muted);">Paste transcript instead</summary>
+        <textarea id="transcript" placeholder="Speaker 0: …"></textarea>
+        <button class="ghost" id="btn-transcript" type="button">Draft from transcript</button>
+      </details>
+    </section>
+
+    <section id="review-panel" class="panel hidden">
+      <h2>Review</h2>
+      <p class="meta" id="session-meta"></p>
+      <div id="vignette-warn" class="warn hidden"></div>
+      <div id="unmap-warn" class="warn hidden">Map every speaker to a clinician name before finalize.</div>
+      <label>Speaker → clinician</label>
+      <div class="speakers" id="speakers"></div>
+      <label for="guidance">Guidance given (editable)</label>
+      <textarea id="guidance"></textarea>
+      <label>Note preview</label>
+      <div class="note" id="note-preview"></div>
+      <div class="row" style="margin-top: 1rem;">
+        <button class="ghost" id="btn-new" type="button">New capture</button>
+        <button class="primary" id="btn-finalize" type="button">Finalize</button>
+      </div>
+      <p class="status" id="review-status"></p>
+    </section>
+
+    <footer>Attune · Clynotion Phase 1b · who’s present + voice stub · audio deleted on finalize</footer>
+  </main>
+  <script>
+    const state = {
+      token: null,
+      sessionId: null,
+      fields: null,
+      mediaRecorder: null,
+      recordMime: "audio/webm",
+      chunks: [],
+      recording: false,
+      asr: "mock",
+      llm: "mock",
+      clinicians: [],
+      enrollTargetId: null,
+      enrollMode: "enroll",
+      rosterNames: [],
+    };
+
+    const $ = (id) => document.getElementById(id);
+
+    function refreshProviderBanner() {
+      const el = $("provider-banner");
+      const mock = state.asr === "mock" || state.llm === "mock";
+      if (!mock) {
+        el.classList.add("hidden");
+        el.textContent = "";
+        return;
+      }
+      el.classList.remove("hidden");
+      el.textContent =
+        `MOCK mode (ASR=${state.asr}, LLM=${state.llm}): your mic/upload is not transcribed. ` +
+        `Drafts use the canned supervision vignette. Set ATTUNE_ASR=deepgram and ATTUNE_LLM=anthropic ` +
+        `(with API keys), then restart the server to hear real speech.`;
+    }
+
+    async function loadProviderModes() {
+      try {
+        const h = await fetch("/health").then((r) => r.json());
+        state.asr = h.asr || "mock";
+        state.llm = h.llm || "mock";
+      } catch {
+        state.asr = "mock";
+        state.llm = "mock";
+      }
+      refreshProviderBanner();
+    }
+
+    function setStatus(el, msg, kind) {
+      el.textContent = msg || "";
+      el.classList.remove("error", "ok");
+      if (kind) el.classList.add(kind);
+    }
+
+    async function api(path, opts = {}) {
+      const headers = Object.assign({}, opts.headers || {});
+      if (state.token) headers["Authorization"] = `Bearer ${state.token}`;
+      if (opts.json) {
+        headers["Content-Type"] = "application/json";
+        opts.body = JSON.stringify(opts.json);
+      }
+      const res = await fetch(path, { ...opts, headers });
+      const text = await res.text();
+      let data = null;
+      try { data = text ? JSON.parse(text) : null; } catch { data = { detail: text }; }
+      if (!res.ok) {
+        const detail = data && data.detail;
+        const msg = typeof detail === "string"
+          ? detail
+          : (detail && detail.error) || res.statusText;
+        const err = new Error(msg);
+        err.payload = data;
+        err.status = res.status;
+        throw err;
+      }
+      return data;
+    }
+
+    function show(panel) {
+      ["auth-panel", "capture-panel", "review-panel"].forEach((id) => {
+        $(id).classList.toggle("hidden", id !== panel);
+      });
+    }
+
+    function selectedCaptureMode() {
+      const el = document.querySelector('input[name="capture-mode"]:checked');
+      return (el && el.value) || "session_surface";
+    }
+
+    function collectPresent() {
+      const present = [];
+      document.querySelectorAll("#roster .roster-row").forEach((row) => {
+        const cb = row.querySelector('input[type="checkbox"]');
+        if (!cb || !cb.checked) return;
+        const role = row.querySelector("select").value;
+        present.push({ clinician_id: cb.value, role });
+      });
+      return present;
+    }
+
+    function requirePresentOrThrow() {
+      const present = collectPresent();
+      if (!present.length) {
+        throw new Error("Select who’s present before capturing.");
+      }
+      if (selectedCaptureMode() === "meeting_bot") {
+        throw new Error("Meeting bot is not enabled yet (BAA required). Use Session surface.");
+      }
+      return present;
+    }
+
+    function renderRoster() {
+      const root = $("roster");
+      root.innerHTML = "";
+      state.clinicians.forEach((c) => {
+        const row = document.createElement("div");
+        row.className = "roster-row";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.value = c.clinician_id;
+        cb.checked = c.default_role === "supervisor";
+        const name = document.createElement("span");
+        name.textContent = c.display_name;
+        const role = document.createElement("select");
+        ["supervisor", "supervisee", "other"].forEach((r) => {
+          const opt = document.createElement("option");
+          opt.value = r;
+          opt.textContent = r;
+          if (r === c.default_role) opt.selected = true;
+          role.appendChild(opt);
+        });
+        const voice = document.createElement("button");
+        voice.type = "button";
+        voice.className = "ghost";
+        voice.style.padding = "0.35rem 0.7rem";
+        voice.style.fontSize = "0.8rem";
+        const enrolled = c.voice_status === "enrolled" || c.voice_enrolled;
+        voice.textContent = enrolled ? "Re-enroll" : "Enroll voice";
+        const pill = document.createElement("span");
+        pill.className = "pill" + (enrolled ? "" : " none");
+        pill.textContent = enrolled ? "enrolled" : "no voice";
+        const checkin = document.createElement("button");
+        checkin.type = "button";
+        checkin.className = "ghost";
+        checkin.style.padding = "0.35rem 0.7rem";
+        checkin.style.fontSize = "0.8rem";
+        checkin.textContent = "Check in";
+        checkin.disabled = !enrolled;
+        voice.onclick = () => {
+          state.enrollTargetId = c.clinician_id;
+          state.enrollMode = "enroll";
+          $("enroll-file").click();
+        };
+        checkin.onclick = () => {
+          state.enrollTargetId = c.clinician_id;
+          state.enrollMode = "checkin";
+          $("enroll-file").click();
+        };
+        row.appendChild(cb);
+        row.appendChild(name);
+        row.appendChild(role);
+        const actions = document.createElement("div");
+        actions.style.display = "flex";
+        actions.style.gap = "0.35rem";
+        actions.style.alignItems = "center";
+        actions.appendChild(pill);
+        actions.appendChild(voice);
+        actions.appendChild(checkin);
+        row.appendChild(actions);
+        root.appendChild(row);
+      });
+    }
+
+    async function loadClinicians() {
+      state.clinicians = await api("/clinicians");
+      renderRoster();
+      const bot = await api("/capture/meeting-bot");
+      $("bot-warn").textContent = bot.detail || "";
+    }
+
+    function renderReview(draft) {
+      state.sessionId = draft.session_id;
+      state.fields = draft.fields;
+      state.asr = draft.asr_provider || state.asr;
+      state.llm = draft.llm_provider || state.llm;
+      state.rosterNames = draft.roster_names || (draft.present || []).map((p) => p.display_name);
+      const va = draft.voice_assignments || [];
+      const vaTxt = va.length
+        ? ` · voice-matched ${va.length}: ` + va.map((a) => `${a.speaker_label}→${a.display_name}(${a.score})`).join(", ")
+        : "";
+      $("session-meta").textContent =
+        `Session ${draft.session_id.slice(0, 8)}… · ${draft.capture_mode || draft.modality} · ASR=${state.asr} · LLM=${state.llm}${vaTxt}`;
+      $("note-preview").textContent = draft.note;
+      $("guidance").value = draft.fields.guidance_given || "";
+
+      const vw = $("vignette-warn");
+      if (draft.used_vignette) {
+        vw.classList.remove("hidden");
+        vw.textContent =
+          "This draft is the canned MOCK vignette — not what you said. " +
+          "Enable Deepgram + a real LLM (env flags + keys) and restart to transcribe live audio.";
+      } else {
+        vw.classList.add("hidden");
+        vw.textContent = "";
+      }
+      const speakers = $("speakers");
+      speakers.innerHTML = "";
+      const participants = draft.fields.participants || [];
+      const map = Object.assign({}, draft.fields.speaker_map || {});
+      const names = state.rosterNames.length
+        ? state.rosterNames
+        : state.clinicians.map((c) => c.display_name);
+      participants.forEach((p) => {
+        const row = document.createElement("div");
+        row.className = "speaker";
+        const label = document.createElement("span");
+        label.textContent = p.speaker_label;
+        const select = document.createElement("select");
+        select.dataset.label = p.speaker_label;
+        const blank = document.createElement("option");
+        blank.value = "";
+        blank.textContent = "— select clinician —";
+        select.appendChild(blank);
+        const current = map[p.speaker_label] || p.name || "";
+        const options = names.slice();
+        if (current && !options.includes(current)) options.unshift(current);
+        options.forEach((n) => {
+          const opt = document.createElement("option");
+          opt.value = n;
+          opt.textContent = n;
+          if (n === current) opt.selected = true;
+          select.appendChild(opt);
+        });
+        row.appendChild(label);
+        row.appendChild(select);
+        speakers.appendChild(row);
+      });
+
+      const unmapped = draft.unmapped_speakers || [];
+      $("unmap-warn").classList.toggle("hidden", unmapped.length === 0);
+      show("review-panel");
+    }
+
+    function collectOverrides() {
+      const speaker_map = {};
+      document.querySelectorAll("#speakers select").forEach((sel) => {
+        const name = sel.value.trim();
+        if (name) speaker_map[sel.dataset.label] = name;
+      });
+      return {
+        speaker_map,
+        guidance_given: $("guidance").value.trim() || undefined,
+      };
+    }
+
+    $("btn-login").onclick = async () => {
+      setStatus($("auth-status"), "Signing in…");
+      try {
+        const data = await api("/auth/token", {
+          method: "POST",
+          json: { username: $("username").value, password: $("password").value },
+        });
+        state.token = data.access_token;
+        setStatus($("auth-status"), "Signed in", "ok");
+        await loadProviderModes();
+        await loadClinicians();
+        show("capture-panel");
+      } catch (e) {
+        setStatus($("auth-status"), e.message, "error");
+      }
+    };
+
+    document.querySelectorAll('input[name="capture-mode"]').forEach((el) => {
+      el.addEventListener("change", () => {
+        const bot = selectedCaptureMode() === "meeting_bot";
+        $("bot-warn").classList.toggle("hidden", !bot);
+      });
+    });
+
+    $("enroll-file").onchange = async (ev) => {
+      const file = ev.target.files && ev.target.files[0];
+      const id = state.enrollTargetId;
+      const mode = state.enrollMode || "enroll";
+      ev.target.value = "";
+      if (!file || !id) return;
+      setStatus($("capture-status"), mode === "checkin" ? "Checking voice…" : "Enrolling voice…");
+      try {
+        const fd = new FormData();
+        fd.append("audio", file, file.name);
+        if (mode === "checkin") {
+          fd.append("present_json", JSON.stringify(collectPresent()));
+          const res = await fetch(`/clinicians/${id}/voice-checkin`, {
+            method: "POST",
+            headers: { Authorization: `Bearer ${state.token}` },
+            body: fd,
+          });
+          const data = await res.json();
+          if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : res.statusText);
+          const msg = data.verified
+            ? `Check-in verified for ${data.display_name} (score ${data.claimed_score}).`
+            : `Check-in NOT verified for ${data.display_name} (score ${data.claimed_score} < ${data.threshold}).`;
+          setStatus($("capture-status"), msg, data.verified ? "ok" : "error");
+          return;
+        }
+        const res = await fetch(`/clinicians/${id}/voice-enroll`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${state.token}` },
+          body: fd,
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(typeof data.detail === "string" ? data.detail : res.statusText);
+        const idx = state.clinicians.findIndex((c) => c.clinician_id === id);
+        if (idx >= 0) state.clinicians[idx] = data;
+        renderRoster();
+        setStatus($("capture-status"), "Voice enrolled (local embedding); sample deleted.", "ok");
+      } catch (e) {
+        setStatus($("capture-status"), e.message, "error");
+      }
+    };
+
+    async function draftFromAudioBlob(blob, filename) {
+      const present = requirePresentOrThrow();
+      setStatus($("capture-status"), "Generating draft…");
+      const fd = new FormData();
+      fd.append("audio", blob, filename);
+      fd.append("present_json", JSON.stringify(present));
+      fd.append("capture_mode", selectedCaptureMode());
+      const res = await fetch("/sessions/draft", {
+        method: "POST",
+        headers: { Authorization: `Bearer ${state.token}` },
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        const d = data && data.detail;
+        const msg = typeof d === "string" ? d : (d && JSON.stringify(d)) || res.statusText;
+        throw new Error(msg);
+      }
+      setStatus($("capture-status"), "Draft ready", "ok");
+      renderReview(data);
+    }
+
+    function micErrorMessage(err) {
+      const name = (err && err.name) || "";
+      const msg = (err && err.message) || String(err || "unknown error");
+      if (name === "NotAllowedError" || name === "PermissionDeniedError") {
+        return "Browser blocked the mic. Use the lock icon → Microphone → Allow, then click Start again. (" + name + ")";
+      }
+      if (name === "NotFoundError" || name === "DevicesNotFoundError") {
+        return "No microphone found. Plug one in / enable it in Windows sound settings. (" + name + ")";
+      }
+      if (name === "NotReadableError" || name === "TrackStartError") {
+        return "Mic is busy (Zoom/Teams/another app). Close that app and try again. (" + name + ")";
+      }
+      if (name === "NotSupportedError" || name === "TypeError") {
+        return "Recorder not supported in this browser/context. Try Chrome, or use file upload / paste transcript. (" + name + ": " + msg + ")";
+      }
+      if (!window.isSecureContext) {
+        return "Page is not a secure context; mic APIs may be blocked. Open http://127.0.0.1:8000 (not a LAN IP). (" + name + ": " + msg + ")";
+      }
+      return "Could not start capture: " + name + " — " + msg;
+    }
+
+    function createMediaRecorder(stream) {
+      const candidates = [
+        "audio/webm;codecs=opus",
+        "audio/webm",
+        "audio/mp4",
+        "",
+      ];
+      let lastErr = null;
+      for (const mime of candidates) {
+        try {
+          if (mime && typeof MediaRecorder.isTypeSupported === "function" && !MediaRecorder.isTypeSupported(mime)) {
+            continue;
+          }
+          const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+          return rec;
+        } catch (e) {
+          lastErr = e;
+        }
+      }
+      throw lastErr || new Error("MediaRecorder unavailable");
+    }
+
+    $("btn-rec").onclick = async () => {
+      try {
+        requirePresentOrThrow();
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+          throw Object.assign(new Error("getUserMedia missing"), { name: "NotSupportedError" });
+        }
+        if (typeof MediaRecorder === "undefined") {
+          throw Object.assign(new Error("MediaRecorder missing"), { name: "NotSupportedError" });
+        }
+        const stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            echoCancellation: true,
+            noiseSuppression: true,
+          },
+        });
+        state.chunks = [];
+        state.mediaRecorder = createMediaRecorder(stream);
+        state.recordMime = state.mediaRecorder.mimeType || "audio/webm";
+        state.mediaRecorder.ondataavailable = (e) => {
+          if (e.data && e.data.size > 0) state.chunks.push(e.data);
+        };
+        state.mediaRecorder.onerror = (ev) => {
+          setStatus($("capture-status"), micErrorMessage(ev.error || ev), "error");
+        };
+        state.mediaRecorder.start(1000);
+        state.recording = true;
+        $("btn-rec").disabled = true;
+        $("btn-stop").disabled = false;
+        setStatus($("capture-status"), "");
+        $("capture-status").innerHTML =
+          '<span class="rec-dot"></span>Recording… (' + state.recordMime + ') speak naturally; names help speaker mapping.';
+      } catch (e) {
+        setStatus($("capture-status"), micErrorMessage(e), "error");
+      }
+    };
+
+    $("btn-stop").onclick = async () => {
+      if (!state.mediaRecorder) return;
+      $("btn-stop").disabled = true;
+      await new Promise((resolve) => {
+        state.mediaRecorder.onstop = resolve;
+        state.mediaRecorder.stop();
+        state.mediaRecorder.stream.getTracks().forEach((t) => t.stop());
+      });
+      state.recording = false;
+      $("btn-rec").disabled = false;
+      const mime = state.recordMime || "audio/webm";
+      const ext = mime.includes("mp4") ? "m4a" : "webm";
+      const blob = new Blob(state.chunks, { type: mime });
+      if (!blob.size) {
+        setStatus($("capture-status"), "Recording was empty (0 bytes). Try again or use file upload.", "error");
+        return;
+      }
+      try {
+        await draftFromAudioBlob(blob, `live_${Date.now()}.${ext}`);
+      } catch (e) {
+        setStatus($("capture-status"), e.message, "error");
+      }
+    };
+
+    $("file-input").onchange = async (ev) => {
+      const file = ev.target.files && ev.target.files[0];
+      if (!file) return;
+      try {
+        await draftFromAudioBlob(file, file.name);
+      } catch (e) {
+        setStatus($("capture-status"), e.message, "error");
+      }
+      ev.target.value = "";
+    };
+
+    $("btn-transcript").onclick = async () => {
+      const transcript = $("transcript").value.trim();
+      if (!transcript) {
+        setStatus($("capture-status"), "Paste a transcript first", "error");
+        return;
+      }
+      setStatus($("capture-status"), "Generating draft…");
+      try {
+        const present = requirePresentOrThrow();
+        const data = await api("/sessions/draft/json", {
+          method: "POST",
+          json: {
+            transcript,
+            present,
+            capture_mode: selectedCaptureMode(),
+          },
+        });
+        setStatus($("capture-status"), "Draft ready", "ok");
+        renderReview(data);
+      } catch (e) {
+        setStatus($("capture-status"), e.message, "error");
+      }
+    };
+
+    $("btn-finalize").onclick = async () => {
+      setStatus($("review-status"), "Finalizing…");
+      try {
+        const data = await api(`/sessions/${state.sessionId}/finalize`, {
+          method: "POST",
+          json: { overrides: collectOverrides() },
+        });
+        $("note-preview").textContent = data.note;
+        $("unmap-warn").classList.add("hidden");
+        setStatus(
+          $("review-status"),
+          data.audio_deleted ? "Finalized. Audio deleted." : "Finalized.",
+          "ok"
+        );
+        $("btn-finalize").disabled = true;
+      } catch (e) {
+        if (e.payload && e.payload.detail && e.payload.detail.unmapped) {
+          $("unmap-warn").classList.remove("hidden");
+          setStatus(
+            $("review-status"),
+            "Map speakers: " + e.payload.detail.unmapped.join(", "),
+            "error"
+          );
+        } else {
+          setStatus($("review-status"), e.message, "error");
+        }
+      }
+    };
+
+    $("btn-new").onclick = () => {
+      state.sessionId = null;
+      state.fields = null;
+      $("btn-finalize").disabled = false;
+      setStatus($("review-status"), "");
+      setStatus($("capture-status"), "");
+      show("capture-panel");
+    };
+  </script>
+</body>
+</html>

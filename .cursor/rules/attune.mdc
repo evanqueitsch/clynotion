@@ -1,0 +1,38 @@
+---
+description: Attune — non-negotiable invariants for a HIPAA behavioral-health scribe
+alwaysApply: true
+---
+
+You are working on Attune (practice product) with Clynotion (capture/notes tool inside Attune).
+It handles PHI. Phase 1 modality is clinical supervision; EMDR is parked for a later phase.
+These rules override convenience. If a requested change would violate one, STOP and say so.
+
+## Compliance invariants (never violate)
+- NEVER log PHI. The audit log and any logging records ACTIONS, IDs, and timestamps ONLY —
+  never transcript text, note content, audio, or client identifiers.
+- Audio is TRANSIENT. It is deleted when the note is finalized (DELETE_AUDIO_ON_FINALIZE).
+  Never add a code path that persists audio past finalization or uploads it anywhere new.
+- Synthetic/vignette data ONLY in dev, tests, fixtures, and examples. Never real client data.
+- Do NOT add any third-party network service in the PHI path (ASR, LLM, storage, logging,
+  analytics, error tracking). If a task seems to need one, STOP and flag it — it requires a
+  signed BAA first, which is a human decision.
+
+## Correctness invariants
+- Two-stage only: extract -> validate (Pydantic) -> render the note DETERMINISTICALLY from the
+  validated fields. Never let an LLM generate structured values into prose; render them from
+  the validated model so they are exact.
+- Multi-participant supervision: diarized speakers must map to clinician names; finalize is
+  blocked when ≥2 participants and any speaker is unmapped (clinician override can supply map).
+- Voice enrollment/matching is LOCAL only (no third-party biometrics network). Enrollment samples
+  are deleted immediately after embedding; never log embeddings or sample audio.
+- Clinician overrides ALWAYS win over extracted values at finalize.
+- Every extracted field keeps its source quote in `evidence` (field -> verbatim quote).
+- When EMDR modality is active (future): protocol values are VALIDATED INTEGERS via Pydantic —
+  phase 1–8, SUDS 0–10, VOC 1–7. A bad value must be rejected at validation, never charted.
+- MOCK providers must ALWAYS run with no API keys, so the app and tests run offline.
+
+## Working style
+- `python run_smoke_test.py` must PASS after every change. If you add behavior, add a test for it.
+- Small, reviewable diffs. State what changed and why. Run the smoke test and report the result.
+- Pydantic v2, full type hints. Keep ASR/LLM behind the provider interface in `app/providers.py`.
+- If unsure whether something touches PHI or breaks an invariant, ask before writing it.
