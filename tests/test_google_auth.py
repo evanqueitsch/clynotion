@@ -107,14 +107,13 @@ def test_google_callback_rejects_other_domain(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     monkeypatch.setenv("ATTUNE_AUTH", "google")
-    monkeypatch.setenv("ATTUNE_JWT_SECRET", "test-jwt-secret-for-google-mode")
+    monkeypatch.setenv("ATTUNE_JWT_SECRET", "test-jwt-secret-for-google-mode-32b")
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "client-id")
     monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "client-secret")
     monkeypatch.setenv("GOOGLE_ALLOWED_DOMAINS", "hfc.example")
     monkeypatch.setenv("ATTUNE_PUBLIC_BASE_URL", "https://clynotion.fly.dev")
 
     from app.auth import jwt_signing_secret
-    from app.google_oauth import make_state
 
     state = make_state(jwt_signing_secret())
     with patch(
