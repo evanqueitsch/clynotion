@@ -123,6 +123,27 @@ class ClinicianStore:
                     default_role="supervisee",
                 ),
             },
+            # Heart for Change (Google Workspace SSO default practice)
+            "practice-hfc": {
+                "clin-hfc-dana": Clinician(
+                    clinician_id="clin-hfc-dana",
+                    practice_id="practice-hfc",
+                    display_name="Dana Okonkwo",
+                    default_role="supervisor",
+                ),
+                "clin-hfc-jordan": Clinician(
+                    clinician_id="clin-hfc-jordan",
+                    practice_id="practice-hfc",
+                    display_name="Jordan Lee",
+                    default_role="supervisee",
+                ),
+                "clin-hfc-sam": Clinician(
+                    clinician_id="clin-hfc-sam",
+                    practice_id="practice-hfc",
+                    display_name="Sam Rivera",
+                    default_role="supervisee",
+                ),
+            },
         }
 
     def list_for_practice(self, practice_id: str) -> list[Clinician]:

@@ -51,19 +51,48 @@ def is_mock_mode() -> bool:
 def validate_startup_secrets() -> None:
     """
     REAL mode requires ATTUNE_DATA_ENCRYPTION_KEY and ATTUNE_JWT_SECRET.
-    MOCK may use ephemeral secrets. Refuse unknown modes.
+    Google auth requires OAuth client secrets, allowed domains, public URL, JWT secret.
+    MOCK + ATTUNE_AUTH=dev may use ephemeral secrets.
     """
     mode = get_mode()
     if mode not in (MODE_MOCK, MODE_REAL):
         raise RuntimeError(f"Unknown ATTUNE_MODE={mode!r}; use 'mock' or 'real'")
-    if mode != MODE_REAL:
-        return
+
+    from app.auth import auth_mode
+    from app.google_oauth import (
+        ENV_ALLOWED_DOMAINS,
+        ENV_CLIENT_ID,
+        ENV_CLIENT_SECRET,
+        ENV_PUBLIC_BASE_URL,
+        allowed_domains,
+        google_configured,
+    )
+
     missing: list[str] = []
-    if not os.environ.get("ATTUNE_DATA_ENCRYPTION_KEY", "").strip():
-        missing.append("ATTUNE_DATA_ENCRYPTION_KEY")
-    if not os.environ.get("ATTUNE_JWT_SECRET", "").strip():
-        missing.append("ATTUNE_JWT_SECRET")
+    if mode == MODE_REAL:
+        if not os.environ.get("ATTUNE_DATA_ENCRYPTION_KEY", "").strip():
+            missing.append("ATTUNE_DATA_ENCRYPTION_KEY")
+        if not os.environ.get("ATTUNE_JWT_SECRET", "").strip():
+            missing.append("ATTUNE_JWT_SECRET")
+
+    if auth_mode() == "google":
+        if not google_configured():
+            missing.extend([ENV_CLIENT_ID, ENV_CLIENT_SECRET])
+        if not allowed_domains():
+            missing.append(ENV_ALLOWED_DOMAINS)
+        if not os.environ.get(ENV_PUBLIC_BASE_URL, "").strip():
+            missing.append(ENV_PUBLIC_BASE_URL)
+        if not os.environ.get("ATTUNE_JWT_SECRET", "").strip():
+            missing.append("ATTUNE_JWT_SECRET")
+
     if missing:
+        # de-dupe while preserving order
+        seen: set[str] = set()
+        ordered = []
+        for item in missing:
+            if item not in seen:
+                seen.add(item)
+                ordered.append(item)
         raise RuntimeError(
-            "REAL mode refuses to start without secrets set: " + ", ".join(missing)
+            "Refusing to start without required secrets/config: " + ", ".join(ordered)
         )

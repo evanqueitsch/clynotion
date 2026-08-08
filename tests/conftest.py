@@ -10,6 +10,10 @@ import pytest
 os.environ["ATTUNE_ASR"] = "mock"
 os.environ["ATTUNE_LLM"] = "mock"
 os.environ["ATTUNE_CLINICIAN_PERSISTENCE"] = "memory"
+os.environ["ATTUNE_AUTH"] = "dev"
+# Prevent a developer env.local Google config from flipping tests to SSO mode.
+os.environ.pop("GOOGLE_CLIENT_ID", None)
+os.environ.pop("GOOGLE_CLIENT_SECRET", None)
 
 
 @pytest.fixture(autouse=True)
