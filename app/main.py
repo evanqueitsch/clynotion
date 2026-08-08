@@ -59,10 +59,12 @@ validate_startup_secrets()
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
+APP_VERSION = "0.4.0"
+
 app = FastAPI(
     title="Attune — Clynotion",
     description="Clinical supervision capture and notes (Phase 1 / 1b)",
-    version="0.3.0",
+    version=APP_VERSION,
 )
 
 _UPLOAD_ROOT = Path(tempfile.gettempdir()) / "clynotion_uploads"
@@ -208,6 +210,8 @@ def health() -> dict[str, str]:
     modes = provider_modes()
     return {
         "status": "ok",
+        "version": APP_VERSION,
+        "auth": auth_mode(),
         "product": "attune",
         "tool": "clynotion",
         "modality": "supervision",
