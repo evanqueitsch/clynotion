@@ -26,6 +26,17 @@ def test_auth_config_dev_by_default(client: TestClient) -> None:
     assert body["google_login_url"] is None
 
 
+def test_env_secret_quote_stripping(monkeypatch: pytest.MonkeyPatch) -> None:
+    from app.google_oauth import _client_id, _client_secret, redirect_uri
+
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", '"abc.apps.googleusercontent.com"')
+    monkeypatch.setenv("GOOGLE_CLIENT_SECRET", "'GOCSPX-test'")
+    monkeypatch.setenv("ATTUNE_PUBLIC_BASE_URL", '"https://clynotion.fly.dev"')
+    assert _client_id() == "abc.apps.googleusercontent.com"
+    assert _client_secret() == "GOCSPX-test"
+    assert redirect_uri() == "https://clynotion.fly.dev/auth/google/callback"
+
+
 def test_password_login_works_in_dev(client: TestClient) -> None:
     r = client.post("/auth/token", json={"username": "alice", "password": "alice-pass"})
     assert r.status_code == 200
@@ -70,6 +81,9 @@ def test_google_mode_disables_password_and_completes_callback(
     assert cfg["auth"] == "google"
     assert cfg["password_login"] is False
     assert cfg["google_login_url"] == "/auth/google/start"
+    assert cfg["redirect_uri"] == "https://clynotion.fly.dev/auth/google/callback"
+    assert cfg["allowed_domains"] == ["hfc.example"]
+    assert cfg["client_secret_set"] is True
 
     start = client.get("/auth/google/start", follow_redirects=False)
     assert start.status_code == 302

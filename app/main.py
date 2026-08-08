@@ -28,10 +28,12 @@ from app.auth import (
 from app.clinicians import clinician_store
 from app.config import load_env_local, validate_startup_secrets
 from app.google_oauth import (
+    GoogleOAuthError,
     authorization_url,
     exchange_code,
     google_configured,
     make_state,
+    oauth_public_diagnostics,
     verify_state,
 )
 from app.pipeline import (
@@ -59,7 +61,7 @@ validate_startup_secrets()
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
-APP_VERSION = "0.4.0"
+APP_VERSION = "0.4.1"
 
 app = FastAPI(
     title="Attune — Clynotion",
@@ -87,6 +89,10 @@ class AuthConfigResponse(BaseModel):
     auth: str
     password_login: bool
     google_login_url: Optional[str] = None
+    redirect_uri: Optional[str] = None
+    allowed_domains: list[str] = Field(default_factory=list)
+    client_secret_set: bool = False
+    client_id_suffix: str = ""
 
 
 class MeResponse(BaseModel):
@@ -223,10 +229,15 @@ def health() -> dict[str, str]:
 @app.get("/auth/config", response_model=AuthConfigResponse)
 def auth_config() -> AuthConfigResponse:
     mode = auth_mode()
+    diag = oauth_public_diagnostics() if mode == "google" else {}
     return AuthConfigResponse(
         auth=mode,
         password_login=password_login_enabled(),
         google_login_url="/auth/google/start" if mode == "google" else None,
+        redirect_uri=str(diag.get("redirect_uri") or "") or None,
+        allowed_domains=list(diag.get("allowed_domains") or []),
+        client_secret_set=bool(diag.get("client_secret_set")),
+        client_id_suffix=str(diag.get("client_id_suffix") or ""),
     )
 
 
@@ -313,6 +324,8 @@ def google_callback(
         identity = exchange_code(code)
     except PermissionError:
         return RedirectResponse("/?auth_error=google_domain", status_code=302)
+    except GoogleOAuthError as e:
+        return RedirectResponse(f"/?auth_error={e.code}", status_code=302)
     except Exception:
         return RedirectResponse("/?auth_error=google_exchange", status_code=302)
 
