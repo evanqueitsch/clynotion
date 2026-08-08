@@ -376,7 +376,10 @@
         google_missing: "Google sign-in failed (missing code).",
         google_state: "Google sign-in failed (security check). Try again.",
         google_domain: "That Google account is not on the allowed Workspace domain.",
-        google_exchange: "Google sign-in failed. Try again.",
+        google_exchange: "Google sign-in failed exchanging the login code. Check Client Secret + redirect URI.",
+        google_redirect: "Google redirect URI mismatch. In Google Cloud, set Authorized redirect URI to exactly https://clynotion.fly.dev/auth/google/callback",
+        google_client: "Google rejected the Client ID/Secret. Re-paste GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Fly Secrets without quotes.",
+        google_grant: "Google login code expired or was reused. Click Sign in with Google once more.",
       };
       return map[code] || "Sign-in failed.";
     }

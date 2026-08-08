@@ -27,6 +27,15 @@ DEFAULT_PRACTICE_ID = "practice-hfc"
 OAUTH_SCOPES = "openid email profile"
 
 
+class GoogleOAuthError(RuntimeError):
+    """Safe, non-secret failure code for redirects / logs."""
+
+    def __init__(self, code: str, *, detail: str = "") -> None:
+        super().__init__(code)
+        self.code = code
+        self.detail = detail
+
+
 @dataclass(frozen=True)
 class GoogleIdentity:
     sub: str
@@ -35,28 +44,31 @@ class GoogleIdentity:
     hd: Optional[str]
 
 
+def _clean_env(value: str) -> str:
+    """Strip whitespace and accidental wrapping quotes from Fly/dashboard pastes."""
+    return value.strip().strip('"').strip("'").strip()
+
+
 def google_configured() -> bool:
     return bool(
-        os.environ.get(ENV_CLIENT_ID, "").strip()
-        and os.environ.get(ENV_CLIENT_SECRET, "").strip()
+        _clean_env(os.environ.get(ENV_CLIENT_ID, ""))
+        and _clean_env(os.environ.get(ENV_CLIENT_SECRET, ""))
     )
 
 
 def allowed_domains() -> list[str]:
-    raw = os.environ.get(ENV_ALLOWED_DOMAINS, "").strip()
+    raw = _clean_env(os.environ.get(ENV_ALLOWED_DOMAINS, ""))
     if not raw:
         return []
     return [d.strip().lower().lstrip("@") for d in raw.split(",") if d.strip()]
 
 
 def public_base_url() -> str:
-    return os.environ.get(ENV_PUBLIC_BASE_URL, "").strip().rstrip("/")
+    return _clean_env(os.environ.get(ENV_PUBLIC_BASE_URL, "")).rstrip("/")
 
 
 def default_practice_id() -> str:
-    return (
-        os.environ.get(ENV_DEFAULT_PRACTICE, "").strip() or DEFAULT_PRACTICE_ID
-    )
+    return _clean_env(os.environ.get(ENV_DEFAULT_PRACTICE, "")) or DEFAULT_PRACTICE_ID
 
 
 def redirect_uri() -> str:
@@ -70,14 +82,14 @@ def redirect_uri() -> str:
 
 
 def _client_id() -> str:
-    value = os.environ.get(ENV_CLIENT_ID, "").strip()
+    value = _clean_env(os.environ.get(ENV_CLIENT_ID, ""))
     if not value:
         raise RuntimeError(f"{ENV_CLIENT_ID} is required for Google OAuth")
     return value
 
 
 def _client_secret() -> str:
-    value = os.environ.get(ENV_CLIENT_SECRET, "").strip()
+    value = _clean_env(os.environ.get(ENV_CLIENT_SECRET, ""))
     if not value:
         raise RuntimeError(f"{ENV_CLIENT_SECRET} is required for Google OAuth")
     return value
@@ -143,6 +155,19 @@ def _email_allowed(email: str, hd: Optional[str]) -> bool:
     return True
 
 
+def _map_token_error(payload: dict) -> str:
+    err = str(payload.get("error") or "").strip().lower()
+    if err == "redirect_uri_mismatch":
+        return "google_redirect"
+    if err == "invalid_client":
+        return "google_client"
+    if err == "invalid_grant":
+        return "google_grant"
+    if err:
+        return "google_exchange"
+    return "google_exchange"
+
+
 def exchange_code(code: str) -> GoogleIdentity:
     with httpx.Client(timeout=20.0) as client:
         token_resp = client.post(
@@ -156,18 +181,44 @@ def exchange_code(code: str) -> GoogleIdentity:
             },
         )
         if token_resp.status_code >= 400:
-            raise RuntimeError("google_token_exchange_failed")
+            try:
+                payload = token_resp.json()
+            except Exception:
+                payload = {}
+            mapped = _map_token_error(payload if isinstance(payload, dict) else {})
+            # Log non-secret Google error fields for Fly dashboard debugging.
+            print(
+                "google_token_exchange_failed",
+                {
+                    "status": token_resp.status_code,
+                    "error": (payload or {}).get("error") if isinstance(payload, dict) else None,
+                    "error_description": (
+                        (payload or {}).get("error_description")
+                        if isinstance(payload, dict)
+                        else None
+                    ),
+                    "redirect_uri": redirect_uri(),
+                },
+                flush=True,
+            )
+            raise GoogleOAuthError(mapped)
+
         tokens = token_resp.json()
         access_token = tokens.get("access_token")
         if not access_token:
-            raise RuntimeError("google_token_missing")
+            raise GoogleOAuthError("google_exchange", detail="token_missing")
 
         info_resp = client.get(
             GOOGLE_USERINFO_URL,
             headers={"Authorization": f"Bearer {access_token}"},
         )
         if info_resp.status_code >= 400:
-            raise RuntimeError("google_userinfo_failed")
+            print(
+                "google_userinfo_failed",
+                {"status": info_resp.status_code},
+                flush=True,
+            )
+            raise GoogleOAuthError("google_exchange", detail="userinfo_failed")
         info = info_resp.json()
 
     email = str(info.get("email") or "").strip().lower()
@@ -183,3 +234,19 @@ def exchange_code(code: str) -> GoogleIdentity:
         raise PermissionError("google_domain_not_allowed")
 
     return GoogleIdentity(sub=sub, email=email, name=name, hd=hd_s)
+
+
+def oauth_public_diagnostics() -> dict[str, object]:
+    """Non-secret config snapshot for /auth/config debugging."""
+    cid = _clean_env(os.environ.get(ENV_CLIENT_ID, ""))
+    csec = _clean_env(os.environ.get(ENV_CLIENT_SECRET, ""))
+    base = public_base_url()
+    return {
+        "google_configured": bool(cid and csec),
+        "client_id_suffix": cid[-12:] if len(cid) >= 12 else "",
+        "client_secret_set": bool(csec),
+        "client_secret_len": len(csec),
+        "redirect_uri": f"{base}/auth/google/callback" if base else "",
+        "allowed_domains": allowed_domains(),
+        "public_base_url": base,
+    }
