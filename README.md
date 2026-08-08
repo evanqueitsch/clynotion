@@ -48,6 +48,13 @@ ANTHROPIC_API_KEY=...         # https://console.anthropic.com/
 
 Hard-refresh the UI after restart. If draft fails, the red status now shows the vendor status/body (not just `ApiError`). Synthetic audio only until BAAs.
 
+To keep voice enrollments across restarts (encrypted at rest):
+
+```
+ATTUNE_CLINICIAN_PERSISTENCE=file
+ATTUNE_DATA_ENCRYPTION_KEY=...   # python -c "from app.crypto import generate_key; print(generate_key())"
+```
+
 ### Curl flow (transcript)
 
 ```powershell
@@ -67,6 +74,8 @@ python -c "from pathlib import Path; import httpx, json; t=Path('sample_supervis
 | `ATTUNE_MODE` | `mock` | `mock` or `real` (requires encryption + JWT secrets) |
 | `ATTUNE_DATA_ENCRYPTION_KEY` | *(ephemeral in mock)* | Fernet key. **Required in real. Never commit.** |
 | `ATTUNE_PERSISTENCE` | `memory` | `memory` or `postgres` (stub — needs BAA) |
+| `ATTUNE_CLINICIAN_PERSISTENCE` | `memory` | `memory` \| `file` — encrypted voice enrollments on disk |
+| `ATTUNE_CLINICIAN_DATA_PATH` | `.attune_data/clinicians.enc` | Path when clinician persistence is `file` |
 | `ATTUNE_JWT_SECRET` | *(ephemeral in mock)* | HS256 secret. **Required in real.** |
 
 Fake users (dev): `alice` / `alice-pass` → `practice-a`; `bob` / `bob-pass` → `practice-b`.

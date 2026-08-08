@@ -18,3 +18,4 @@ htmlcov/
 *.wav
 synthetic_audio/
 .clynotion_uploads/
+.attune_data/

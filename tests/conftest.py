@@ -1,4 +1,4 @@
-"""Force MOCK providers for the test suite even if env.local enables real vendors."""
+"""Force MOCK providers + in-memory clinician store for the test suite."""
 
 from __future__ import annotations
 
@@ -9,6 +9,7 @@ import pytest
 # Must run before test modules import app.main (which loads env.local).
 os.environ["ATTUNE_ASR"] = "mock"
 os.environ["ATTUNE_LLM"] = "mock"
+os.environ["ATTUNE_CLINICIAN_PERSISTENCE"] = "memory"
 
 
 @pytest.fixture(autouse=True)
