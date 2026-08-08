@@ -34,6 +34,7 @@ from app.google_oauth import (
     google_configured,
     make_state,
     oauth_public_diagnostics,
+    probe_token_endpoint,
     verify_state,
 )
 from app.pipeline import (
@@ -61,7 +62,7 @@ validate_startup_secrets()
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
-APP_VERSION = "0.4.1"
+APP_VERSION = "0.4.2"
 
 app = FastAPI(
     title="Attune — Clynotion",
@@ -239,6 +240,14 @@ def auth_config() -> AuthConfigResponse:
         client_secret_set=bool(diag.get("client_secret_set")),
         client_id_suffix=str(diag.get("client_id_suffix") or ""),
     )
+
+
+@app.get("/auth/google/probe")
+def google_probe() -> dict[str, object]:
+    """Safe credential/redirect check (uses an invalid code on purpose)."""
+    if auth_mode() != "google" or not google_configured():
+        raise HTTPException(status_code=404, detail="Google auth not enabled")
+    return probe_token_endpoint()
 
 
 @app.get("/auth/me", response_model=MeResponse)
