@@ -78,7 +78,45 @@ python -c "from pathlib import Path; import httpx, json; t=Path('sample_supervis
 | `ATTUNE_CLINICIAN_DATA_PATH` | `.attune_data/clinicians.enc` | Path when clinician persistence is `file` |
 | `ATTUNE_JWT_SECRET` | *(ephemeral in mock)* | HS256 secret. **Required in real.** |
 
-Fake users (dev): `alice` / `alice-pass` → `practice-a`; `bob` / `bob-pass` → `practice-b`.
+Fake users (dev only, `ATTUNE_AUTH=dev`): `alice` / `alice-pass` → `practice-a`; `bob` / `bob-pass` → `practice-b`.
+
+## Google Workspace SSO (Fly / production)
+
+Production gates the app behind Google OAuth. Password login is disabled when `ATTUNE_AUTH=google`.
+
+Google sees **identity only** (email/profile) on the login path — not session audio, transcripts, or notes. Still use your org’s Workspace policies; do not put real PHI through Attune until vendor BAAs are in place.
+
+### 1) Google Cloud OAuth client
+
+1. [Google Cloud Console](https://console.cloud.google.com/) → APIs & Services → Credentials → Create **OAuth client ID** (Web application).
+2. Authorized redirect URI: `https://clynotion.fly.dev/auth/google/callback`
+3. Copy Client ID + Client Secret.
+4. (Preferred) In Google Admin, restrict the OAuth app to your Workspace org.
+
+### 2) Fly secrets
+
+```bash
+fly secrets set -a clynotion \
+  ATTUNE_AUTH=google \
+  ATTUNE_JWT_SECRET="$(python -c 'import secrets; print(secrets.token_urlsafe(48))')" \
+  ATTUNE_PUBLIC_BASE_URL=https://clynotion.fly.dev \
+  GOOGLE_CLIENT_ID=... \
+  GOOGLE_CLIENT_SECRET=... \
+  GOOGLE_ALLOWED_DOMAINS=your-workspace-domain.com \
+  ATTUNE_DEFAULT_PRACTICE_ID=practice-hfc
+```
+
+| Var | Required | Purpose |
+|---|---|---|
+| `GOOGLE_CLIENT_ID` | yes (google mode) | OAuth client ID from Google Cloud Console |
+| `GOOGLE_CLIENT_SECRET` | yes (google mode) | OAuth client secret |
+| `GOOGLE_ALLOWED_DOMAINS` | yes (google mode) | Comma-separated Workspace domains allowed to sign in |
+| `ATTUNE_PUBLIC_BASE_URL` | yes (google mode) | Public origin used to build the redirect URI |
+| `ATTUNE_JWT_SECRET` | yes (google mode) | Signs session cookies / JWTs |
+| `ATTUNE_DEFAULT_PRACTICE_ID` | optional | Defaults to `practice-hfc` |
+| `ATTUNE_AUTH` | optional | `google` or `dev` (default: google if client ID set) |
+
+Sign-in URL: `https://clynotion.fly.dev/` → **Sign in with Google**.
 
 ## Tests
 

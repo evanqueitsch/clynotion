@@ -219,14 +219,25 @@
 
     <section id="auth-panel" class="panel">
       <h2>Sign in</h2>
-      <label for="username">Username</label>
-      <input id="username" type="text" value="alice" autocomplete="username" />
-      <label for="password">Password</label>
-      <input id="password" type="password" value="alice-pass" autocomplete="current-password" />
-      <div class="row">
-        <button class="primary" id="btn-login" type="button">Continue</button>
+      <p class="meta" id="auth-blurb">Use your Google Workspace account.</p>
+      <div id="google-login" class="hidden">
+        <div class="row">
+          <a class="primary" id="btn-google" href="/auth/google/start" style="text-align:center;text-decoration:none;display:inline-block;">Sign in with Google</a>
+        </div>
       </div>
-      <p class="status" id="auth-status">Dev users: alice / alice-pass</p>
+      <div id="dev-login" class="hidden">
+        <label for="username">Username</label>
+        <input id="username" type="text" value="alice" autocomplete="username" />
+        <label for="password">Password</label>
+        <input id="password" type="password" value="alice-pass" autocomplete="current-password" />
+        <div class="row">
+          <button class="primary" id="btn-login" type="button">Continue</button>
+        </div>
+      </div>
+      <div class="row" style="margin-top:0.75rem;">
+        <button class="ghost hidden" id="btn-logout" type="button">Sign out</button>
+      </div>
+      <p class="status" id="auth-status"></p>
     </section>
 
     <section id="capture-panel" class="panel hidden">
@@ -339,7 +350,7 @@
         headers["Content-Type"] = "application/json";
         opts.body = JSON.stringify(opts.json);
       }
-      const res = await fetch(path, { ...opts, headers });
+      const res = await fetch(path, { ...opts, headers, credentials: "include" });
       const text = await res.text();
       let data = null;
       try { data = text ? JSON.parse(text) : null; } catch { data = { detail: text }; }
@@ -354,6 +365,53 @@
         throw err;
       }
       return data;
+    }
+
+    function authErrorMessage() {
+      const params = new URLSearchParams(window.location.search);
+      const code = params.get("auth_error");
+      if (!code) return "";
+      const map = {
+        google_denied: "Google sign-in was cancelled.",
+        google_missing: "Google sign-in failed (missing code).",
+        google_state: "Google sign-in failed (security check). Try again.",
+        google_domain: "That Google account is not on the allowed Workspace domain.",
+        google_exchange: "Google sign-in failed. Try again.",
+      };
+      return map[code] || "Sign-in failed.";
+    }
+
+    async function bootstrapAuth() {
+      const err = authErrorMessage();
+      if (err) setStatus($("auth-status"), err, "error");
+      let cfg = { auth: "dev", password_login: true, google_login_url: null };
+      try {
+        cfg = await api("/auth/config");
+      } catch {
+        /* keep defaults */
+      }
+      $("google-login").classList.toggle("hidden", cfg.auth !== "google");
+      $("dev-login").classList.toggle("hidden", !cfg.password_login);
+      if (cfg.auth === "google") {
+        $("auth-blurb").textContent = "Sign in with your Google Workspace account.";
+      } else {
+        $("auth-blurb").textContent = "Dev sign-in (password). Production uses Google Workspace SSO.";
+      }
+      try {
+        const me = await api("/auth/me");
+        state.user = me;
+        $("btn-logout").classList.remove("hidden");
+        setStatus($("auth-status"), `Signed in as ${me.email || me.username}`, "ok");
+        await loadProviderModes();
+        await loadClinicians();
+        show("capture-panel");
+        if (window.location.search.includes("auth_error=")) {
+          window.history.replaceState({}, "", "/");
+        }
+        return;
+      } catch {
+        show("auth-panel");
+      }
     }
 
     function show(panel) {
@@ -533,21 +591,39 @@
       };
     }
 
-    $("btn-login").onclick = async () => {
-      setStatus($("auth-status"), "Signing in…");
+    const btnLogin = $("btn-login");
+    if (btnLogin) {
+      btnLogin.onclick = async () => {
+        setStatus($("auth-status"), "Signing in…");
+        try {
+          const data = await api("/auth/token", {
+            method: "POST",
+            json: { username: $("username").value, password: $("password").value },
+          });
+          state.token = data.access_token;
+          $("btn-logout").classList.remove("hidden");
+          setStatus($("auth-status"), "Signed in", "ok");
+          await loadProviderModes();
+          await loadClinicians();
+          show("capture-panel");
+        } catch (e) {
+          setStatus($("auth-status"), e.message, "error");
+        }
+      };
+    }
+
+    $("btn-logout").onclick = async () => {
       try {
-        const data = await api("/auth/token", {
-          method: "POST",
-          json: { username: $("username").value, password: $("password").value },
-        });
-        state.token = data.access_token;
-        setStatus($("auth-status"), "Signed in", "ok");
-        await loadProviderModes();
-        await loadClinicians();
-        show("capture-panel");
-      } catch (e) {
-        setStatus($("auth-status"), e.message, "error");
+        await api("/auth/logout", { method: "POST" });
+      } catch {
+        /* ignore */
       }
+      state.token = null;
+      state.user = null;
+      $("btn-logout").classList.add("hidden");
+      show("auth-panel");
+      setStatus($("auth-status"), "Signed out", "ok");
+      await bootstrapAuth();
     };
 
     document.querySelectorAll('input[name="capture-mode"]').forEach((el) => {
@@ -569,9 +645,12 @@
         fd.append("audio", file, file.name);
         if (mode === "checkin") {
           fd.append("present_json", JSON.stringify(collectPresent()));
+          const headers = {};
+          if (state.token) headers.Authorization = `Bearer ${state.token}`;
           const res = await fetch(`/clinicians/${id}/voice-checkin`, {
             method: "POST",
-            headers: { Authorization: `Bearer ${state.token}` },
+            headers,
+            credentials: "include",
             body: fd,
           });
           const data = await res.json();
@@ -582,9 +661,12 @@
           setStatus($("capture-status"), msg, data.verified ? "ok" : "error");
           return;
         }
+        const headers = {};
+        if (state.token) headers.Authorization = `Bearer ${state.token}`;
         const res = await fetch(`/clinicians/${id}/voice-enroll`, {
           method: "POST",
-          headers: { Authorization: `Bearer ${state.token}` },
+          headers,
+          credentials: "include",
           body: fd,
         });
         const data = await res.json();
@@ -605,9 +687,12 @@
       fd.append("audio", blob, filename);
       fd.append("present_json", JSON.stringify(present));
       fd.append("capture_mode", selectedCaptureMode());
+      const headers = {};
+      if (state.token) headers.Authorization = `Bearer ${state.token}`;
       const res = await fetch("/sessions/draft", {
         method: "POST",
-        headers: { Authorization: `Bearer ${state.token}` },
+        headers,
+        credentials: "include",
         body: fd,
       });
       const data = await res.json();
@@ -795,6 +880,8 @@
       setStatus($("capture-status"), "");
       show("capture-panel");
     };
+
+    bootstrapAuth();
   </script>
 </body>
 </html>

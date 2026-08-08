@@ -8,15 +8,32 @@ import tempfile
 from pathlib import Path
 from typing import Any, Literal, Optional
 
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, File, Form, HTTPException, Request, Response, UploadFile
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
 from app.audit import AuditAction, AuditReason, audit_log
-from app.auth import CurrentUser, User, issue_token, user_store
+from app.auth import (
+    COOKIE_NAME,
+    CurrentUser,
+    User,
+    auth_mode,
+    issue_token,
+    jwt_signing_secret,
+    password_login_enabled,
+    user_from_google,
+    user_store,
+)
 from app.clinicians import clinician_store
 from app.config import load_env_local, validate_startup_secrets
+from app.google_oauth import (
+    authorization_url,
+    exchange_code,
+    google_configured,
+    make_state,
+    verify_state,
+)
 from app.pipeline import (
     SpeakerMapIncompleteError,
     draft_from_audio,
@@ -62,6 +79,39 @@ class TokenRequest(BaseModel):
 class TokenResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
+
+
+class AuthConfigResponse(BaseModel):
+    auth: str
+    password_login: bool
+    google_login_url: Optional[str] = None
+
+
+class MeResponse(BaseModel):
+    user_id: str
+    username: str
+    practice_id: str
+    email: str = ""
+
+
+_OAUTH_STATE_COOKIE = "attune_oauth_state"
+_SESSION_TTL_SEC = 60 * 60 * 12
+
+
+def _set_session_cookie(response: Response, token: str) -> None:
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=_SESSION_TTL_SEC,
+        path="/",
+    )
+
+
+def _clear_session_cookie(response: Response) -> None:
+    response.delete_cookie(key=COOKIE_NAME, path="/")
 
 
 class DraftJsonBody(BaseModel):
@@ -166,12 +216,112 @@ def health() -> dict[str, str]:
     }
 
 
+@app.get("/auth/config", response_model=AuthConfigResponse)
+def auth_config() -> AuthConfigResponse:
+    mode = auth_mode()
+    return AuthConfigResponse(
+        auth=mode,
+        password_login=password_login_enabled(),
+        google_login_url="/auth/google/start" if mode == "google" else None,
+    )
+
+
+@app.get("/auth/me", response_model=MeResponse)
+def auth_me(user: CurrentUser) -> MeResponse:
+    return MeResponse(
+        user_id=user.user_id,
+        username=user.username,
+        practice_id=user.practice_id,
+        email=user.email,
+    )
+
+
+@app.post("/auth/logout")
+def auth_logout() -> Response:
+    response = Response(content='{"ok":true}', media_type="application/json")
+    _clear_session_cookie(response)
+    return response
+
+
 @app.post("/auth/token", response_model=TokenResponse)
-def login(body: TokenRequest) -> TokenResponse:
+def login(body: TokenRequest, response: Response) -> TokenResponse:
+    if not password_login_enabled():
+        raise HTTPException(
+            status_code=403,
+            detail="password login disabled; use Google Workspace SSO",
+        )
     user = user_store.authenticate(body.username, body.password)
     if user is None:
         raise HTTPException(status_code=401, detail="invalid credentials")
-    return TokenResponse(access_token=issue_token(user))
+    token = issue_token(user)
+    # Dev convenience: also set cookie (Secure may be ignored on http://localhost by browsers).
+    response.set_cookie(
+        key=COOKIE_NAME,
+        value=token,
+        httponly=True,
+        secure=False,
+        samesite="lax",
+        max_age=_SESSION_TTL_SEC,
+        path="/",
+    )
+    return TokenResponse(access_token=token)
+
+
+@app.get("/auth/google/start")
+def google_start() -> RedirectResponse:
+    if auth_mode() != "google" or not google_configured():
+        raise HTTPException(status_code=404, detail="Google auth not enabled")
+    state = make_state(jwt_signing_secret())
+    response = RedirectResponse(authorization_url(state), status_code=302)
+    response.set_cookie(
+        key=_OAUTH_STATE_COOKIE,
+        value=state,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=600,
+        path="/",
+    )
+    return response
+
+
+@app.get("/auth/google/callback")
+def google_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+) -> RedirectResponse:
+    if auth_mode() != "google" or not google_configured():
+        raise HTTPException(status_code=404, detail="Google auth not enabled")
+    if error:
+        return RedirectResponse("/?auth_error=google_denied", status_code=302)
+    if not code or not state:
+        return RedirectResponse("/?auth_error=google_missing", status_code=302)
+
+    cookie_state = request.cookies.get(_OAUTH_STATE_COOKIE, "")
+    if not cookie_state or cookie_state != state:
+        return RedirectResponse("/?auth_error=google_state", status_code=302)
+    if not verify_state(state, jwt_signing_secret()):
+        return RedirectResponse("/?auth_error=google_state", status_code=302)
+
+    try:
+        identity = exchange_code(code)
+    except PermissionError:
+        return RedirectResponse("/?auth_error=google_domain", status_code=302)
+    except Exception:
+        return RedirectResponse("/?auth_error=google_exchange", status_code=302)
+
+    user = user_from_google(
+        sub=identity.sub,
+        email=identity.email,
+        name=identity.name,
+    )
+    token = issue_token(user)
+    response = RedirectResponse("/", status_code=302)
+    _set_session_cookie(response, token)
+    response.delete_cookie(key=_OAUTH_STATE_COOKIE, path="/")
+    return response
 
 
 @app.get("/clinicians", response_model=list[ClinicianOut])

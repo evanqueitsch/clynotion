@@ -1,4 +1,4 @@
-"""JWT bearer auth + fake user/practice store (dev/MOCK — no external IdP)."""
+"""JWT auth: Google Workspace SSO (prod) + optional dev password store."""
 
 from __future__ import annotations
 
@@ -8,12 +8,15 @@ from dataclasses import dataclass
 from typing import Annotated, Optional
 
 import jwt
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app.config import is_real_mode
+from app.google_oauth import default_practice_id
 
 ENV_JWT_SECRET = "ATTUNE_JWT_SECRET"
+ENV_AUTH_MODE = "ATTUNE_AUTH"
+COOKIE_NAME = "attune_token"
 _ALGORITHM = "HS256"
 _TOKEN_TTL_SEC = 60 * 60 * 12
 
@@ -26,6 +29,7 @@ class User:
     user_id: str
     username: str
     practice_id: str
+    email: str = ""
 
 
 class FakeUserStore:
@@ -35,11 +39,21 @@ class FakeUserStore:
         self._users: dict[str, tuple[str, User]] = {
             "alice": (
                 "alice-pass",
-                User(user_id="user-alice", username="alice", practice_id="practice-a"),
+                User(
+                    user_id="user-alice",
+                    username="alice",
+                    practice_id="practice-a",
+                    email="alice@example.com",
+                ),
             ),
             "bob": (
                 "bob-pass",
-                User(user_id="user-bob", username="bob", practice_id="practice-b"),
+                User(
+                    user_id="user-bob",
+                    username="bob",
+                    practice_id="practice-b",
+                    email="bob@example.com",
+                ),
             ),
         }
 
@@ -65,6 +79,23 @@ class FakeUserStore:
 user_store = FakeUserStore()
 
 
+def auth_mode() -> str:
+    """
+    ATTUNE_AUTH=dev|google
+    Default: google when GOOGLE_CLIENT_ID is set, else dev.
+    """
+    raw = (os.environ.get(ENV_AUTH_MODE) or "").strip().lower()
+    if raw in ("dev", "google"):
+        return raw
+    from app.google_oauth import google_configured
+
+    return "google" if google_configured() else "dev"
+
+
+def password_login_enabled() -> bool:
+    return auth_mode() == "dev"
+
+
 def reset_ephemeral_jwt_secret_for_tests() -> None:
     global _ephemeral_secret
     _ephemeral_secret = None
@@ -75,13 +106,18 @@ def _jwt_secret() -> str:
     env = os.environ.get(ENV_JWT_SECRET, "").strip()
     if env:
         return env
-    if is_real_mode():
+    if is_real_mode() or auth_mode() == "google":
         raise RuntimeError(
-            f"{ENV_JWT_SECRET} is required when ATTUNE_MODE=real; refusing ephemeral JWT secret"
+            f"{ENV_JWT_SECRET} is required when ATTUNE_MODE=real or ATTUNE_AUTH=google; "
+            "refusing ephemeral JWT secret"
         )
     if _ephemeral_secret is None:
         _ephemeral_secret = os.urandom(32).hex()
     return _ephemeral_secret
+
+
+def jwt_signing_secret() -> str:
+    return _jwt_secret()
 
 
 def issue_token(user: User, *, ttl_sec: Optional[int] = None) -> str:
@@ -91,10 +127,22 @@ def issue_token(user: User, *, ttl_sec: Optional[int] = None) -> str:
         "sub": user.user_id,
         "username": user.username,
         "practice_id": user.practice_id,
+        "email": user.email,
         "iat": now,
         "exp": now + ttl,
     }
     return jwt.encode(payload, _jwt_secret(), algorithm=_ALGORITHM)
+
+
+def user_from_google(*, sub: str, email: str, name: str) -> User:
+    local = email.split("@", 1)[0] if "@" in email else email
+    username = (name or local or email).strip() or email
+    return User(
+        user_id=f"google:{sub}",
+        username=username,
+        practice_id=default_practice_id(),
+        email=email.strip().lower(),
+    )
 
 
 def decode_token(token: str) -> User:
@@ -113,6 +161,7 @@ def decode_token(token: str) -> User:
     user_id = payload.get("sub")
     practice_id = payload.get("practice_id")
     username = payload.get("username", "")
+    email = payload.get("email", "")
     if not user_id or not practice_id:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
@@ -120,19 +169,52 @@ def decode_token(token: str) -> User:
         )
     user = user_store.get(str(user_id))
     if user is None:
-        return User(user_id=str(user_id), username=str(username), practice_id=str(practice_id))
+        return User(
+            user_id=str(user_id),
+            username=str(username),
+            practice_id=str(practice_id),
+            email=str(email or ""),
+        )
     return user
 
 
+def _token_from_request(
+    request: Request,
+    creds: Optional[HTTPAuthorizationCredentials],
+) -> Optional[str]:
+    if creds is not None and creds.scheme.lower() == "bearer" and creds.credentials:
+        return creds.credentials
+    cookie = request.cookies.get(COOKIE_NAME)
+    if cookie:
+        return cookie
+    return None
+
+
 def get_current_user(
+    request: Request,
     creds: Annotated[Optional[HTTPAuthorizationCredentials], Depends(_security)],
 ) -> User:
-    if creds is None or creds.scheme.lower() != "bearer":
+    token = _token_from_request(request, creds)
+    if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="missing bearer token",
         )
-    return decode_token(creds.credentials)
+    return decode_token(token)
+
+
+def get_optional_user(
+    request: Request,
+    creds: Annotated[Optional[HTTPAuthorizationCredentials], Depends(_security)],
+) -> Optional[User]:
+    token = _token_from_request(request, creds)
+    if not token:
+        return None
+    try:
+        return decode_token(token)
+    except HTTPException:
+        return None
 
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
+OptionalUser = Annotated[Optional[User], Depends(get_optional_user)]
