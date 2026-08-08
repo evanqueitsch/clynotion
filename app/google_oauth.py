@@ -179,6 +179,7 @@ def exchange_code(code: str) -> GoogleIdentity:
                 "redirect_uri": redirect_uri(),
                 "grant_type": "authorization_code",
             },
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
         if token_resp.status_code >= 400:
             try:
@@ -250,3 +251,59 @@ def oauth_public_diagnostics() -> dict[str, object]:
         "allowed_domains": allowed_domains(),
         "public_base_url": base,
     }
+
+
+def probe_token_endpoint() -> dict[str, object]:
+    """
+    POST a deliberately invalid code to Google's token endpoint.
+    Interprets the error to validate client id/secret + redirect_uri without
+    exposing secret values.
+    - invalid_grant => client + redirect look accepted
+    - invalid_client => bad Client ID/Secret pair
+    - redirect_uri_mismatch => Google Console redirect URI wrong
+    """
+    try:
+        with httpx.Client(timeout=20.0) as client:
+            resp = client.post(
+                GOOGLE_TOKEN_URL,
+                data={
+                    "code": "attune-diagnostic-invalid-code",
+                    "client_id": _client_id(),
+                    "client_secret": _client_secret(),
+                    "redirect_uri": redirect_uri(),
+                    "grant_type": "authorization_code",
+                },
+                headers={"Content-Type": "application/x-www-form-urlencoded"},
+            )
+        try:
+            payload = resp.json()
+        except Exception:
+            payload = {}
+        err = str((payload or {}).get("error") or "")
+        desc = str((payload or {}).get("error_description") or "")
+        verdict = "unknown"
+        if err == "invalid_grant":
+            verdict = "client_and_redirect_ok"
+        elif err == "invalid_client":
+            verdict = "bad_client_id_or_secret"
+        elif err == "redirect_uri_mismatch":
+            verdict = "redirect_uri_mismatch"
+        elif err == "unauthorized_client":
+            verdict = "unauthorized_client"
+        return {
+            "http_status": resp.status_code,
+            "error": err,
+            "error_description": desc[:300],
+            "verdict": verdict,
+            "redirect_uri": redirect_uri(),
+            "client_id_suffix": _client_id()[-20:],
+            "client_secret_len": len(_client_secret()),
+        }
+    except Exception as e:
+        return {
+            "http_status": 0,
+            "error": "probe_failed",
+            "error_description": type(e).__name__,
+            "verdict": "probe_failed",
+            "redirect_uri": public_base_url() and redirect_uri() or "",
+        }
