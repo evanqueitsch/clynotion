@@ -37,6 +37,30 @@ def test_env_secret_quote_stripping(monkeypatch: pytest.MonkeyPatch) -> None:
     assert redirect_uri() == "https://clynotion.fly.dev/auth/google/callback"
 
 
+def test_identity_from_id_token_claims(monkeypatch: pytest.MonkeyPatch) -> None:
+    import base64
+    import json
+
+    from app.google_oauth import _claims_from_id_token, _identity_from_claims
+
+    monkeypatch.setenv("GOOGLE_CLIENT_ID", "client.apps.googleusercontent.com")
+    monkeypatch.setenv("GOOGLE_ALLOWED_DOMAINS", "hfc.example")
+    payload = {
+        "sub": "99",
+        "email": "pat@hfc.example",
+        "email_verified": "true",
+        "name": "Pat",
+        "hd": "hfc.example",
+        "aud": "client.apps.googleusercontent.com",
+    }
+    body = base64.urlsafe_b64encode(json.dumps(payload).encode()).decode().rstrip("=")
+    token = f"hdr.{body}.sig"
+    claims = _claims_from_id_token(token)
+    ident = _identity_from_claims(claims)
+    assert ident.email == "pat@hfc.example"
+    assert ident.sub == "99"
+
+
 def test_password_login_works_in_dev(client: TestClient) -> None:
     r = client.post("/auth/token", json={"username": "alice", "password": "alice-pass"})
     assert r.status_code == 200

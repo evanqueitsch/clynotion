@@ -379,7 +379,9 @@
         google_exchange: "Google sign-in failed exchanging the login code. Check Client Secret + redirect URI.",
         google_redirect: "Google redirect URI mismatch. In Google Cloud, set Authorized redirect URI to exactly https://clynotion.fly.dev/auth/google/callback",
         google_client: "Google rejected the Client ID/Secret. Re-paste GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET in Fly Secrets without quotes.",
-        google_grant: "Google login code expired or was reused. Click Sign in with Google once more.",
+        google_grant: "Google login code expired or was reused. Click Sign in with Google once more (single click).",
+        google_userinfo: "Google signed you in but profile lookup failed. Try again.",
+        google_unverified: "Google account email is not verified.",
       };
       return map[code] || "Sign-in failed.";
     }

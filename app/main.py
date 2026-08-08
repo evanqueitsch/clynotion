@@ -62,7 +62,7 @@ validate_startup_secrets()
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
-APP_VERSION = "0.4.2"
+APP_VERSION = "0.4.3"
 
 app = FastAPI(
     title="Attune — Clynotion",
@@ -331,11 +331,16 @@ def google_callback(
 
     try:
         identity = exchange_code(code)
-    except PermissionError:
+    except PermissionError as e:
+        msg = str(e)
+        if "unverified" in msg:
+            return RedirectResponse("/?auth_error=google_unverified", status_code=302)
         return RedirectResponse("/?auth_error=google_domain", status_code=302)
     except GoogleOAuthError as e:
+        print("google_oauth_error", {"code": e.code, "detail": e.detail}, flush=True)
         return RedirectResponse(f"/?auth_error={e.code}", status_code=302)
-    except Exception:
+    except Exception as e:
+        print("google_oauth_unexpected", {"type": type(e).__name__}, flush=True)
         return RedirectResponse("/?auth_error=google_exchange", status_code=302)
 
     user = user_from_google(

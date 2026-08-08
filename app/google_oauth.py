@@ -130,13 +130,65 @@ def authorization_url(state: str) -> str:
         "scope": OAUTH_SCOPES,
         "state": state,
         "access_type": "online",
-        "include_granted_scopes": "true",
         "prompt": "select_account",
     }
     # Workspace SSO hint — Google shows the org account picker when set.
     if len(domains) == 1:
         params["hd"] = domains[0]
     return f"{GOOGLE_AUTH_URL}?{urlencode(params)}"
+
+
+def _truthy(value: object) -> bool:
+    if value is True or value == 1:
+        return True
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    return False
+
+
+def _identity_from_claims(info: dict) -> GoogleIdentity:
+    email = str(info.get("email") or "").strip().lower()
+    sub = str(info.get("sub") or "").strip()
+    name = str(info.get("name") or info.get("given_name") or email).strip()
+    hd = info.get("hd")
+    hd_s = str(hd).strip().lower() if hd else None
+    verified = _truthy(info.get("email_verified"))
+
+    if not email or not sub:
+        raise GoogleOAuthError("google_exchange", detail="identity_missing")
+    if not verified:
+        raise PermissionError("google_email_unverified")
+    if not _email_allowed(email, hd_s):
+        raise PermissionError("google_domain_not_allowed")
+    return GoogleIdentity(sub=sub, email=email, name=name, hd=hd_s)
+
+
+def _claims_from_id_token(id_token: str) -> dict:
+    """Decode ID token payload. Token was just issued to us by Google over TLS."""
+    import base64
+    import json
+
+    parts = id_token.split(".")
+    if len(parts) < 2:
+        raise GoogleOAuthError("google_exchange", detail="id_token_malformed")
+    payload = parts[1]
+    padded = payload + "=" * (-len(payload) % 4)
+    try:
+        raw = base64.urlsafe_b64decode(padded.encode("ascii"))
+        data = json.loads(raw.decode("utf-8"))
+    except Exception as e:
+        raise GoogleOAuthError("google_exchange", detail="id_token_decode") from e
+    if not isinstance(data, dict):
+        raise GoogleOAuthError("google_exchange", detail="id_token_payload")
+    # Basic audience check — must be our client id.
+    aud = data.get("aud")
+    if isinstance(aud, list):
+        ok = _client_id() in aud
+    else:
+        ok = str(aud or "") == _client_id()
+    if not ok:
+        raise GoogleOAuthError("google_exchange", detail="id_token_aud")
+    return data
 
 
 def _email_allowed(email: str, hd: Optional[str]) -> bool:
@@ -205,7 +257,13 @@ def exchange_code(code: str) -> GoogleIdentity:
             raise GoogleOAuthError(mapped)
 
         tokens = token_resp.json()
-        access_token = tokens.get("access_token")
+        id_token = str(tokens.get("id_token") or "").strip()
+        access_token = str(tokens.get("access_token") or "").strip()
+
+        if id_token:
+            print("google_token_ok_using_id_token", flush=True)
+            return _identity_from_claims(_claims_from_id_token(id_token))
+
         if not access_token:
             raise GoogleOAuthError("google_exchange", detail="token_missing")
 
@@ -219,22 +277,12 @@ def exchange_code(code: str) -> GoogleIdentity:
                 {"status": info_resp.status_code},
                 flush=True,
             )
-            raise GoogleOAuthError("google_exchange", detail="userinfo_failed")
+            raise GoogleOAuthError("google_userinfo", detail="userinfo_failed")
         info = info_resp.json()
-
-    email = str(info.get("email") or "").strip().lower()
-    sub = str(info.get("sub") or "").strip()
-    name = str(info.get("name") or info.get("given_name") or email).strip()
-    hd = info.get("hd")
-    hd_s = str(hd).strip().lower() if hd else None
-    verified = bool(info.get("email_verified"))
-
-    if not email or not sub or not verified:
-        raise PermissionError("google_email_unverified")
-    if not _email_allowed(email, hd_s):
-        raise PermissionError("google_domain_not_allowed")
-
-    return GoogleIdentity(sub=sub, email=email, name=name, hd=hd_s)
+        if not isinstance(info, dict):
+            raise GoogleOAuthError("google_userinfo", detail="userinfo_payload")
+        print("google_token_ok_using_userinfo", flush=True)
+        return _identity_from_claims(info)
 
 
 def oauth_public_diagnostics() -> dict[str, object]:
