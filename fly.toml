@@ -11,7 +11,7 @@ primary_region = 'iad'
   force_https = true
   auto_stop_machines = 'stop'
   auto_start_machines = true
-  # Keep one machine warm while finishing Google SSO rollout.
+  # One warm machine; volume-backed roster/tokens need a single writer.
   min_machines_running = 1
   processes = ['app']
 
@@ -21,6 +21,11 @@ primary_region = 'iad'
     grace_period = '30s'
     method = 'GET'
     path = '/health'
+
+# Durable roster + Workspace directory tokens (create with deploy workflow).
+[[mounts]]
+  source = 'attune_data'
+  destination = '/data'
 
 [[vm]]
   memory = '1gb'

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import tempfile
 from pathlib import Path
@@ -74,7 +75,7 @@ validate_startup_secrets()
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
-APP_VERSION = "0.5.1"
+APP_VERSION = "0.5.2"
 
 app = FastAPI(
     title="Attune — Clynotion",
@@ -228,6 +229,7 @@ def _parse_present_form(present_json: Optional[str]) -> list[PresentMember]:
 @app.get("/health")
 def health() -> dict[str, str]:
     modes = provider_modes()
+    data_path = os.environ.get("ATTUNE_CLINICIAN_DATA_PATH", "")
     return {
         "status": "ok",
         "version": APP_VERSION,
@@ -237,6 +239,8 @@ def health() -> dict[str, str]:
         "modality": "supervision",
         "asr": modes["asr"],
         "llm": modes["llm"],
+        "clinician_persistence": os.environ.get("ATTUNE_CLINICIAN_PERSISTENCE", "memory"),
+        "data_path": data_path,
     }
 
 

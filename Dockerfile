@@ -12,7 +12,10 @@ FROM python:3.12-slim
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH" \
-    ATTUNE_MODE=mock
+    ATTUNE_MODE=mock \
+    ATTUNE_CLINICIAN_PERSISTENCE=file \
+    ATTUNE_CLINICIAN_DATA_PATH=/data/clinicians.enc \
+    ATTUNE_WORKSPACE_TOKEN_PATH=/data/workspace_tokens.enc
 WORKDIR /app
 
 COPY --from=builder /app/.venv .venv/
