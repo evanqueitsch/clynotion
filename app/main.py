@@ -75,7 +75,7 @@ validate_startup_secrets()
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
-APP_VERSION = "0.5.3"
+APP_VERSION = "0.5.4"
 
 app = FastAPI(
     title="Attune — Clynotion",
