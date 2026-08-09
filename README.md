@@ -118,6 +118,35 @@ fly secrets set -a clynotion \
 
 Sign-in URL: `https://clynotion.fly.dev/` → **Sign in with Google**.
 
+## Google Workspace directory → practice roster
+
+Clynotion can list users from your Workspace domain and let you **choose who to include** on the practice clinician roster (identity only — not session PHI).
+
+### Google Cloud setup (one-time)
+1. Enable **Admin SDK API** on the `attune-clynotion` project.
+2. OAuth consent → add scope  
+   `https://www.googleapis.com/auth/admin.directory.user.readonly`
+3. OAuth client → Authorized redirect URIs, add:  
+   `https://clynotion.fly.dev/auth/google/directory/callback`  
+   (keep the existing login callback too)
+4. Connect must be done by a **Workspace admin** (or delegated admin with User Read privilege).
+
+### In the app
+1. Sign in with Google.
+2. Open **Practice roster · Google Workspace**.
+3. **Connect Workspace directory** (admin consent).
+4. **Load directory users** → check who to include → set supervisor/supervisee → **Include selected on roster**.
+
+### Env
+| Var | Default | Meaning |
+|---|---|---|
+| `ATTUNE_WORKSPACE_DIRECTORY` | `live` when `ATTUNE_AUTH=google`, else `mock` | `live` \| `mock` \| `off` |
+| `ATTUNE_CLINICIAN_PERSISTENCE` | `memory` | Use `file` on Fly so roster survives restarts |
+| `ATTUNE_DATA_ENCRYPTION_KEY` | ephemeral in mock | Required for durable encrypted roster + directory tokens |
+| `ATTUNE_WORKSPACE_TOKEN_PATH` | `.attune_data/workspace_tokens.enc` | Encrypted Workspace refresh tokens |
+
+On Fly, also mount a volume for `.attune_data` (or set paths onto a volume) so roster/tokens are not lost on redeploy.
+
 ## Tests
 
 ```powershell
