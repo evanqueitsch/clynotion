@@ -53,6 +53,32 @@
       max-width: 34ch;
       animation: rise 0.7s ease-out 0.08s both;
     }
+    .topbar {
+      display: flex;
+      align-items: flex-start;
+      justify-content: space-between;
+      gap: 1rem;
+      margin-bottom: 0.25rem;
+    }
+    .topbar-user {
+      display: none;
+      flex-direction: column;
+      align-items: flex-end;
+      gap: 0.35rem;
+      margin-top: 0.35rem;
+    }
+    .topbar-user.visible { display: flex; }
+    .topbar-user .who {
+      font-size: 0.85rem;
+      color: var(--muted);
+      max-width: 22ch;
+      text-align: right;
+    }
+    .topbar-user button {
+      flex: 0 0 auto;
+      padding: 0.45rem 0.9rem;
+      font-size: 0.85rem;
+    }
     .panel {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -214,8 +240,16 @@
 </head>
 <body>
   <main>
-    <h1 class="brand">Clynotion</h1>
-    <p class="tagline">Capture clinical supervision. Map voices to clinicians. Finalize the note.</p>
+    <div class="topbar">
+      <div>
+        <h1 class="brand">Clynotion</h1>
+        <p class="tagline">Capture clinical supervision. Map voices to clinicians. Finalize the note.</p>
+      </div>
+      <div class="topbar-user" id="topbar-user">
+        <span class="who" id="signed-in-as"></span>
+        <button class="ghost" id="btn-logout" type="button">Sign out</button>
+      </div>
+    </div>
 
     <section id="auth-panel" class="panel">
       <h2>Sign in</h2>
@@ -233,9 +267,6 @@
         <div class="row">
           <button class="primary" id="btn-login" type="button">Continue</button>
         </div>
-      </div>
-      <div class="row" style="margin-top:0.75rem;">
-        <button class="ghost hidden" id="btn-logout" type="button">Sign out</button>
       </div>
       <p class="status" id="auth-status"></p>
     </section>
@@ -400,6 +431,19 @@
       return map[code] || "Sign-in failed.";
     }
 
+    function setSignedInChrome(me) {
+      const bar = $("topbar-user");
+      const who = $("signed-in-as");
+      if (!bar || !who) return;
+      if (me) {
+        who.textContent = me.email || me.username || "Signed in";
+        bar.classList.add("visible");
+      } else {
+        who.textContent = "";
+        bar.classList.remove("visible");
+      }
+    }
+
     function directoryBannerMessage() {
       const params = new URLSearchParams(window.location.search);
       if (params.get("directory") === "connected") {
@@ -439,7 +483,7 @@
       try {
         const me = await api("/auth/me");
         state.user = me;
-        $("btn-logout").classList.remove("hidden");
+        setSignedInChrome(me);
         setStatus($("auth-status"), `Signed in as ${me.email || me.username}`, "ok");
         await loadProviderModes();
         await loadClinicians();
@@ -702,10 +746,17 @@
             json: { username: $("username").value, password: $("password").value },
           });
           state.token = data.access_token;
-          $("btn-logout").classList.remove("hidden");
+          try {
+            const me = await api("/auth/me");
+            state.user = me;
+            setSignedInChrome(me);
+          } catch {
+            setSignedInChrome({ username: $("username").value });
+          }
           setStatus($("auth-status"), "Signed in", "ok");
           await loadProviderModes();
           await loadClinicians();
+          await loadWorkspaceStatus();
           show("capture-panel");
         } catch (e) {
           setStatus($("auth-status"), e.message, "error");
@@ -767,7 +818,7 @@
       }
       state.token = null;
       state.user = null;
-      $("btn-logout").classList.add("hidden");
+      setSignedInChrome(null);
       show("auth-panel");
       setStatus($("auth-status"), "Signed out", "ok");
       await bootstrapAuth();
