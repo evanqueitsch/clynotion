@@ -12,7 +12,7 @@ import os
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Literal, Optional
+from typing import Any, Literal, Optional  # noqa: F401 — Literal used for roles/sources
 
 from app.crypto import decrypt_utf8, encrypt_utf8
 from app.schemas import ParticipantRole
@@ -37,12 +37,19 @@ class ClinicianVoiceProfile:
         return self.status == "enrolled" and bool(self.embedding)
 
 
+ClinicianSource = Literal["seed", "workspace"]
+
+
 @dataclass
 class Clinician:
     clinician_id: str
     practice_id: str
     display_name: str
     default_role: ParticipantRole = "supervisee"
+    email: str = ""
+    google_id: str = ""
+    source: ClinicianSource = "seed"
+    included: bool = True
     voice: ClinicianVoiceProfile = field(default_factory=ClinicianVoiceProfile)
 
     def to_public_dict(self) -> dict:
@@ -51,6 +58,10 @@ class Clinician:
             "practice_id": self.practice_id,
             "display_name": self.display_name,
             "default_role": self.default_role,
+            "email": self.email,
+            "google_id": self.google_id,
+            "source": self.source,
+            "included": self.included,
             "voice_status": self.voice.status,
             "voice_enrolled_at": self.voice.enrolled_at,
             "voice_sample_bytes": self.voice.sample_bytes,
@@ -148,7 +159,63 @@ class ClinicianStore:
 
     def list_for_practice(self, practice_id: str) -> list[Clinician]:
         rows = self._by_practice.get(practice_id, {})
+        included = [c for c in rows.values() if c.included]
+        return sorted(included, key=lambda c: c.display_name.lower())
+
+    def list_all_for_practice(self, practice_id: str) -> list[Clinician]:
+        rows = self._by_practice.get(practice_id, {})
         return sorted(rows.values(), key=lambda c: c.display_name.lower())
+
+    def upsert_workspace_user(
+        self,
+        practice_id: str,
+        *,
+        google_id: str,
+        email: str,
+        display_name: str,
+        default_role: ParticipantRole = "supervisee",
+        included: bool = True,
+    ) -> Clinician:
+        if practice_id not in self._by_practice:
+            self._by_practice[practice_id] = {}
+        rows = self._by_practice[practice_id]
+        clinician_id = f"gw:{google_id}"
+        existing = rows.get(clinician_id)
+        voice = existing.voice if existing is not None else ClinicianVoiceProfile()
+        clin = Clinician(
+            clinician_id=clinician_id,
+            practice_id=practice_id,
+            display_name=(display_name or email).strip(),
+            default_role=default_role,
+            email=email.strip().lower(),
+            google_id=str(google_id),
+            source="workspace",
+            included=included,
+            voice=voice,
+        )
+        rows[clinician_id] = clin
+        self._save_to_disk()
+        return clin
+
+    def set_included(
+        self, practice_id: str, clinician_id: str, *, included: bool
+    ) -> Clinician:
+        clin = self.get(practice_id, clinician_id)
+        if clin is None:
+            raise KeyError(clinician_id)
+        clin.included = included
+        self._save_to_disk()
+        return clin
+
+    def clear_seed_clinicians(self, practice_id: str) -> int:
+        """Remove seed-source clinicians for a practice (keep Workspace imports)."""
+        rows = self._by_practice.get(practice_id) or {}
+        remove = [cid for cid, c in rows.items() if c.source == "seed"]
+        for cid in remove:
+            del rows[cid]
+        if remove:
+            self._save_to_disk()
+        return len(remove)
 
     def get(self, practice_id: str, clinician_id: str) -> Optional[Clinician]:
         return self._by_practice.get(practice_id, {}).get(clinician_id)
@@ -249,28 +316,80 @@ class ClinicianStore:
         if path is not None and path.is_file():
             path.unlink()
 
-    def _voice_snapshot(self) -> dict[str, Any]:
-        """Serialize voice profiles only (never log this payload)."""
+    def _roster_snapshot(self) -> dict[str, Any]:
+        """Serialize roster + voice (never log this payload)."""
         practices: dict[str, Any] = {}
         for practice_id, rows in self._by_practice.items():
             bucket: dict[str, Any] = {}
             for cid, clin in rows.items():
-                if not clin.voice.has_embedding() and clin.voice.status == "none":
+                # Persist Workspace members always; seed only when voice enrolled.
+                if clin.source != "workspace" and not clin.voice.has_embedding():
                     continue
                 bucket[cid] = {
-                    "status": clin.voice.status,
-                    "enrolled_at": clin.voice.enrolled_at,
-                    "sample_bytes": clin.voice.sample_bytes,
-                    "embedding": list(clin.voice.embedding),
+                    "display_name": clin.display_name,
+                    "default_role": clin.default_role,
+                    "email": clin.email,
+                    "google_id": clin.google_id,
+                    "source": clin.source,
+                    "included": clin.included,
+                    "voice": {
+                        "status": clin.voice.status,
+                        "enrolled_at": clin.voice.enrolled_at,
+                        "sample_bytes": clin.voice.sample_bytes,
+                        "embedding": list(clin.voice.embedding),
+                    },
                 }
             if bucket:
                 practices[practice_id] = bucket
-        return {"version": 1, "practices": practices}
+        return {"version": 2, "practices": practices}
 
-    def _apply_voice_snapshot(self, payload: dict[str, Any]) -> None:
+    def _apply_roster_snapshot(self, payload: dict[str, Any]) -> None:
+        version = int(payload.get("version") or 1)
         practices = payload.get("practices") or {}
         if not isinstance(practices, dict):
             return
+        if version <= 1:
+            self._apply_voice_snapshot_v1(practices)
+            return
+        for practice_id, bucket in practices.items():
+            if not isinstance(bucket, dict):
+                continue
+            pid = str(practice_id)
+            if pid not in self._by_practice:
+                self._by_practice[pid] = {}
+            rows = self._by_practice[pid]
+            for cid, raw in bucket.items():
+                if not isinstance(raw, dict):
+                    continue
+                source = raw.get("source") or "seed"
+                voice_raw = raw.get("voice") if isinstance(raw.get("voice"), dict) else {}
+                status = (voice_raw or {}).get("status") or "none"
+                emb = (voice_raw or {}).get("embedding") or []
+                voice = ClinicianVoiceProfile()
+                if status == "enrolled" and isinstance(emb, list) and emb:
+                    voice = ClinicianVoiceProfile(
+                        status="enrolled",
+                        enrolled_at=(voice_raw or {}).get("enrolled_at"),
+                        sample_bytes=int((voice_raw or {}).get("sample_bytes") or 0),
+                        embedding=[float(x) for x in emb],
+                    )
+                role = raw.get("default_role") or "supervisee"
+                if role not in ("supervisor", "supervisee", "other"):
+                    role = "supervisee"
+                clin = Clinician(
+                    clinician_id=str(cid),
+                    practice_id=pid,
+                    display_name=str(raw.get("display_name") or cid),
+                    default_role=role,  # type: ignore[arg-type]
+                    email=str(raw.get("email") or ""),
+                    google_id=str(raw.get("google_id") or ""),
+                    source="workspace" if source == "workspace" else "seed",
+                    included=bool(raw.get("included", True)),
+                    voice=voice,
+                )
+                rows[str(cid)] = clin
+
+    def _apply_voice_snapshot_v1(self, practices: dict[str, Any]) -> None:
         for practice_id, bucket in practices.items():
             if not isinstance(bucket, dict):
                 continue
@@ -298,7 +417,7 @@ class ClinicianStore:
         if path is None:
             return
         path.parent.mkdir(parents=True, exist_ok=True)
-        blob = encrypt_utf8(json.dumps(self._voice_snapshot()))
+        blob = encrypt_utf8(json.dumps(self._roster_snapshot()))
         path.write_bytes(blob)
 
     def _load_from_disk(self) -> None:
@@ -312,7 +431,7 @@ class ClinicianStore:
             # Wrong key / corrupt file — keep seed roster; do not crash API startup.
             return
         if isinstance(payload, dict):
-            self._apply_voice_snapshot(payload)
+            self._apply_roster_snapshot(payload)
 
 
 clinician_store = ClinicianStore()

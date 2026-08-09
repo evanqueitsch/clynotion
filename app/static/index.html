@@ -251,6 +251,20 @@
       </div>
       <div id="bot-warn" class="warn hidden"></div>
 
+      <details id="workspace-panel" style="margin-bottom: 1rem;">
+        <summary style="cursor:pointer; color: var(--muted);">Practice roster · Google Workspace</summary>
+        <p class="meta" id="workspace-status-line">Connect Workspace to import clinicians.</p>
+        <div class="row" style="margin: 0.5rem 0;">
+          <a class="ghost" id="btn-workspace-connect" href="/auth/google/directory/start" style="text-align:center;text-decoration:none;display:inline-block;">Connect Workspace directory</a>
+          <button class="ghost" id="btn-workspace-load" type="button">Load directory users</button>
+        </div>
+        <div id="workspace-users" class="roster"></div>
+        <div class="row" style="margin-top: 0.5rem;">
+          <button class="primary" id="btn-workspace-include" type="button" disabled>Include selected on roster</button>
+        </div>
+        <p class="status" id="workspace-status"></p>
+      </details>
+
       <label>Who’s present</label>
       <div class="roster" id="roster"></div>
       <p class="meta" id="roster-hint">Select who’s present. Enroll voice (local embedding; sample deleted). Check in to verify before capture.</p>
@@ -386,6 +400,26 @@
       return map[code] || "Sign-in failed.";
     }
 
+    function directoryBannerMessage() {
+      const params = new URLSearchParams(window.location.search);
+      if (params.get("directory") === "connected") {
+        return { text: "Workspace directory connected. Load users and choose who to include.", kind: "ok" };
+      }
+      if (params.get("directory") === "mock_ready") {
+        return { text: "Mock Workspace directory ready. Load users to pick a roster.", kind: "ok" };
+      }
+      const err = params.get("directory_error");
+      if (!err) return null;
+      const map = {
+        denied: "Workspace directory access was denied.",
+        missing: "Workspace directory connect failed (missing code).",
+        state: "Workspace directory connect failed (security check).",
+        session: "Sign in again, then connect Workspace directory.",
+        exchange: "Workspace directory token exchange failed.",
+      };
+      return { text: map[err] || "Workspace directory connect failed.", kind: "error" };
+    }
+
     async function bootstrapAuth() {
       const err = authErrorMessage();
       if (err) setStatus($("auth-status"), err, "error");
@@ -409,8 +443,11 @@
         setStatus($("auth-status"), `Signed in as ${me.email || me.username}`, "ok");
         await loadProviderModes();
         await loadClinicians();
+        await loadWorkspaceStatus();
+        const dirMsg = directoryBannerMessage();
+        if (dirMsg) setStatus($("workspace-status"), dirMsg.text, dirMsg.kind);
         show("capture-panel");
-        if (window.location.search.includes("auth_error=")) {
+        if (window.location.search.includes("auth_error=") || window.location.search.includes("directory")) {
           window.history.replaceState({}, "", "/");
         }
         return;
@@ -521,6 +558,65 @@
       $("bot-warn").textContent = bot.detail || "";
     }
 
+    async function loadWorkspaceStatus() {
+      try {
+        const st = await api("/workspace/status");
+        state.workspace = st;
+        const line = $("workspace-status-line");
+        if (!line) return;
+        if (st.connected) {
+          line.textContent = st.mode === "mock"
+            ? "Mock Workspace directory connected (dev)."
+            : `Connected as ${st.admin_email || "admin"} · domain ${st.domain || "—"}.`;
+        } else {
+          line.textContent = "Connect a Workspace admin account to import clinicians.";
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    function renderWorkspaceUsers(users) {
+      const root = $("workspace-users");
+      if (!root) return;
+      root.innerHTML = "";
+      state.workspaceUsers = users || [];
+      if (!users.length) {
+        root.innerHTML = "<p class='meta'>No directory users returned.</p>";
+        $("btn-workspace-include").disabled = true;
+        return;
+      }
+      users.forEach((u) => {
+        const row = document.createElement("label");
+        row.className = "roster-item";
+        row.style.display = "flex";
+        row.style.gap = "0.5rem";
+        row.style.alignItems = "center";
+        row.style.marginBottom = "0.35rem";
+        const cb = document.createElement("input");
+        cb.type = "checkbox";
+        cb.dataset.googleId = u.google_id;
+        cb.dataset.email = u.email;
+        cb.dataset.name = u.display_name;
+        cb.checked = !!u.already_included;
+        const role = document.createElement("select");
+        role.dataset.googleId = u.google_id;
+        ["supervisee", "supervisor", "other"].forEach((r) => {
+          const opt = document.createElement("option");
+          opt.value = r;
+          opt.textContent = r;
+          role.appendChild(opt);
+        });
+        const text = document.createElement("span");
+        text.textContent = `${u.display_name} · ${u.email}${u.already_included ? " (on roster)" : ""}`;
+        row.appendChild(cb);
+        row.appendChild(role);
+        row.appendChild(text);
+        root.appendChild(row);
+      });
+      $("btn-workspace-include").disabled = false;
+    }
+
     function renderReview(draft) {
       state.sessionId = draft.session_id;
       state.fields = draft.fields;
@@ -613,6 +709,52 @@
           show("capture-panel");
         } catch (e) {
           setStatus($("auth-status"), e.message, "error");
+        }
+      };
+    }
+
+    const btnWorkspaceLoad = $("btn-workspace-load");
+    if (btnWorkspaceLoad) {
+      btnWorkspaceLoad.onclick = async () => {
+        setStatus($("workspace-status"), "Loading Workspace directory…");
+        try {
+          await loadWorkspaceStatus();
+          const users = await api("/workspace/users");
+          renderWorkspaceUsers(users);
+          setStatus($("workspace-status"), `${users.length} directory user(s) loaded.`, "ok");
+        } catch (e) {
+          setStatus($("workspace-status"), e.message, "error");
+        }
+      };
+    }
+
+    const btnWorkspaceInclude = $("btn-workspace-include");
+    if (btnWorkspaceInclude) {
+      btnWorkspaceInclude.onclick = async () => {
+        const members = [];
+        document.querySelectorAll("#workspace-users input[type=checkbox]:checked").forEach((cb) => {
+          const roleSel = document.querySelector(`#workspace-users select[data-google-id="${cb.dataset.googleId}"]`);
+          members.push({
+            google_id: cb.dataset.googleId,
+            email: cb.dataset.email,
+            display_name: cb.dataset.name,
+            default_role: (roleSel && roleSel.value) || "supervisee",
+          });
+        });
+        if (!members.length) {
+          setStatus($("workspace-status"), "Select at least one user to include.", "error");
+          return;
+        }
+        setStatus($("workspace-status"), "Updating roster…");
+        try {
+          await api("/workspace/include", {
+            method: "POST",
+            json: { members, clear_seed_roster: true },
+          });
+          await loadClinicians();
+          setStatus($("workspace-status"), `Included ${members.length} clinician(s) on the practice roster.`, "ok");
+        } catch (e) {
+          setStatus($("workspace-status"), e.message, "error");
         }
       };
     }

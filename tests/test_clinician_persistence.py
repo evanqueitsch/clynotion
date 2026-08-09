@@ -100,4 +100,7 @@ def test_ciphertext_roundtrip_contains_embedding_after_decrypt(
         "practice-a", "clin-a-dana", sample_bytes=5, embedding=emb
     )
     plain = json.loads(decrypt_utf8(file_persist.read_bytes()))
-    assert plain["practices"]["practice-a"]["clin-a-dana"]["embedding"] == emb
+    assert plain["version"] == 2
+    assert (
+        plain["practices"]["practice-a"]["clin-a-dana"]["voice"]["embedding"] == emb
+    )

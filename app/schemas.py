@@ -100,10 +100,35 @@ class ClinicianOut(BaseModel):
     practice_id: str
     display_name: str
     default_role: ParticipantRole
+    email: str = ""
+    google_id: str = ""
+    source: str = "seed"
+    included: bool = True
     voice_status: str
     voice_enrolled_at: Optional[str] = None
     voice_sample_bytes: int = 0
     voice_enrolled: bool = False
+
+
+class WorkspaceUserOut(BaseModel):
+    google_id: str
+    email: str
+    display_name: str
+    suspended: bool = False
+    org_unit: str = ""
+    already_included: bool = False
+
+
+class WorkspaceIncludeMember(BaseModel):
+    google_id: str = Field(min_length=1)
+    email: str = Field(min_length=3)
+    display_name: str = ""
+    default_role: ParticipantRole = "supervisee"
+
+
+class WorkspaceIncludeBody(BaseModel):
+    members: list[WorkspaceIncludeMember] = Field(min_length=1)
+    clear_seed_roster: bool = True
 
 
 class PresentClinicianOut(BaseModel):

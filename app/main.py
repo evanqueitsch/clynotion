@@ -52,17 +52,29 @@ from app.schemas import (
     PresentMember,
     SupervisionOverrides,
     VoiceCheckinResponse,
+    WorkspaceIncludeBody,
+    WorkspaceUserOut,
 )
 from app.store import Session, store
 from app.voice_id import get_voice_id_provider
 from app.voice_match import verify_checkin
+from app.workspace_directory import (
+    WorkspaceDirectoryError,
+    clear_directory_tokens,
+    directory_authorization_url,
+    directory_connection_status,
+    directory_mode,
+    exchange_directory_code,
+    list_directory_users,
+    save_directory_tokens,
+)
 
 load_env_local()
 validate_startup_secrets()
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
-APP_VERSION = "0.4.3"
+APP_VERSION = "0.5.0"
 
 app = FastAPI(
     title="Attune — Clynotion",
@@ -104,6 +116,7 @@ class MeResponse(BaseModel):
 
 
 _OAUTH_STATE_COOKIE = "attune_oauth_state"
+_DIRECTORY_STATE_COOKIE = "attune_directory_oauth_state"
 _SESSION_TTL_SEC = 60 * 60 * 12
 
 
@@ -361,6 +374,146 @@ def list_clinicians(user: CurrentUser) -> list[ClinicianOut]:
         ClinicianOut.model_validate(c.to_public_dict())
         for c in clinician_store.list_for_practice(user.practice_id)
     ]
+
+
+@app.get("/workspace/status")
+def workspace_status(user: CurrentUser) -> dict[str, Any]:
+    return directory_connection_status(user.practice_id)
+
+
+@app.get("/auth/google/directory/start")
+def google_directory_start(user: CurrentUser) -> RedirectResponse:
+    if auth_mode() != "google" or not google_configured():
+        if directory_mode() != "mock":
+            raise HTTPException(status_code=404, detail="Google auth not enabled")
+    if directory_mode() == "off":
+        raise HTTPException(status_code=404, detail="Workspace directory disabled")
+    if directory_mode() == "mock":
+        return RedirectResponse("/?directory=mock_ready", status_code=302)
+    state = make_state(jwt_signing_secret())
+    response = RedirectResponse(directory_authorization_url(state), status_code=302)
+    response.set_cookie(
+        key=_DIRECTORY_STATE_COOKIE,
+        value=state,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=600,
+        path="/",
+    )
+    return response
+
+
+@app.get("/auth/google/directory/callback")
+def google_directory_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+) -> RedirectResponse:
+    if error:
+        return RedirectResponse("/?directory_error=denied", status_code=302)
+    if not code or not state:
+        return RedirectResponse("/?directory_error=missing", status_code=302)
+    cookie_state = request.cookies.get(_DIRECTORY_STATE_COOKIE, "")
+    if not cookie_state or cookie_state != state:
+        return RedirectResponse("/?directory_error=state", status_code=302)
+    if not verify_state(state, jwt_signing_secret()):
+        return RedirectResponse("/?directory_error=state", status_code=302)
+
+    # Practice comes from the signed-in session cookie.
+    token = request.cookies.get(COOKIE_NAME)
+    if not token:
+        return RedirectResponse("/?directory_error=session", status_code=302)
+    try:
+        user = decode_token_safe(token)
+    except Exception:
+        return RedirectResponse("/?directory_error=session", status_code=302)
+
+    try:
+        tokens = exchange_directory_code(code)
+        save_directory_tokens(
+            user.practice_id,
+            refresh_token=tokens.get("refresh_token") or "",
+            access_token=tokens.get("access_token") or "",
+            email=tokens.get("email") or "",
+        )
+    except WorkspaceDirectoryError:
+        return RedirectResponse("/?directory_error=exchange", status_code=302)
+    except Exception:
+        return RedirectResponse("/?directory_error=exchange", status_code=302)
+
+    response = RedirectResponse("/?directory=connected", status_code=302)
+    response.delete_cookie(key=_DIRECTORY_STATE_COOKIE, path="/")
+    return response
+
+
+def decode_token_safe(token: str) -> User:
+    from app.auth import decode_token
+
+    return decode_token(token)
+
+
+@app.get("/workspace/users", response_model=list[WorkspaceUserOut])
+def workspace_users(user: CurrentUser) -> list[WorkspaceUserOut]:
+    try:
+        users = list_directory_users(user.practice_id)
+    except WorkspaceDirectoryError as e:
+        raise HTTPException(status_code=400, detail=e.code) from e
+    existing = {
+        c.google_id: c
+        for c in clinician_store.list_all_for_practice(user.practice_id)
+        if c.google_id
+    }
+    return [
+        WorkspaceUserOut(
+            google_id=u.google_id,
+            email=u.email,
+            display_name=u.display_name,
+            suspended=u.suspended,
+            org_unit=u.org_unit,
+            already_included=bool(
+                existing.get(u.google_id) and existing[u.google_id].included
+            ),
+        )
+        for u in users
+        if not u.suspended
+    ]
+
+
+@app.post("/workspace/include", response_model=list[ClinicianOut])
+def workspace_include(user: CurrentUser, body: WorkspaceIncludeBody) -> list[ClinicianOut]:
+    if body.clear_seed_roster:
+        clinician_store.clear_seed_clinicians(user.practice_id)
+    out: list[ClinicianOut] = []
+    for member in body.members:
+        clin = clinician_store.upsert_workspace_user(
+            user.practice_id,
+            google_id=member.google_id,
+            email=member.email,
+            display_name=member.display_name or member.email,
+            default_role=member.default_role,
+            included=True,
+        )
+        out.append(ClinicianOut.model_validate(clin.to_public_dict()))
+    return out
+
+
+@app.post("/workspace/exclude/{clinician_id}", response_model=ClinicianOut)
+def workspace_exclude(clinician_id: str, user: CurrentUser) -> ClinicianOut:
+    try:
+        clin = clinician_store.set_included(
+            user.practice_id, clinician_id, included=False
+        )
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail="clinician not found") from e
+    return ClinicianOut.model_validate(clin.to_public_dict())
+
+
+@app.delete("/workspace/connection")
+def workspace_disconnect(user: CurrentUser) -> dict[str, bool]:
+    clear_directory_tokens(user.practice_id)
+    return {"ok": True}
 
 
 @app.post("/clinicians/{clinician_id}/voice-enroll", response_model=ClinicianOut)
