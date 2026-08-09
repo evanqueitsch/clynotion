@@ -61,24 +61,38 @@
       margin-bottom: 0.25rem;
     }
     .topbar-user {
-      display: none;
+      display: flex;
       flex-direction: column;
       align-items: flex-end;
       gap: 0.35rem;
       margin-top: 0.35rem;
+      flex: 0 0 auto;
     }
-    .topbar-user.visible { display: flex; }
     .topbar-user .who {
       font-size: 0.85rem;
       color: var(--muted);
-      max-width: 22ch;
+      max-width: 28ch;
       text-align: right;
+      word-break: break-all;
     }
-    .topbar-user button {
+    .topbar-user button,
+    #btn-logout-session {
       flex: 0 0 auto;
       padding: 0.45rem 0.9rem;
       font-size: 0.85rem;
+      border: 1px solid var(--line);
+      background: #fff;
+      color: var(--ink);
+      cursor: pointer;
     }
+    .session-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      margin-bottom: 0.85rem;
+    }
+    .session-head h2 { margin: 0; }
     .panel {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -245,9 +259,9 @@
         <h1 class="brand">Clynotion</h1>
         <p class="tagline">Capture clinical supervision. Map voices to clinicians. Finalize the note.</p>
       </div>
-      <div class="topbar-user" id="topbar-user">
+      <div class="topbar-user hidden" id="topbar-user">
         <span class="who" id="signed-in-as"></span>
-        <button class="ghost" id="btn-logout" type="button">Sign out</button>
+        <button id="btn-logout" type="button">Sign out</button>
       </div>
     </div>
 
@@ -272,7 +286,10 @@
     </section>
 
     <section id="capture-panel" class="panel hidden">
-      <h2>Start session</h2>
+      <div class="session-head">
+        <h2>Start session</h2>
+        <button id="btn-logout-session" type="button">Sign out</button>
+      </div>
       <div id="provider-banner" class="warn hidden"></div>
       <p class="meta">Choose who’s present, then capture in Clynotion (session surface). Meeting bot is stubbed until BAAs.</p>
 
@@ -434,14 +451,30 @@
     function setSignedInChrome(me) {
       const bar = $("topbar-user");
       const who = $("signed-in-as");
-      if (!bar || !who) return;
+      const sessionLogout = $("btn-logout-session");
       if (me) {
-        who.textContent = me.email || me.username || "Signed in";
-        bar.classList.add("visible");
+        if (who) who.textContent = me.email || me.username || "Signed in";
+        if (bar) bar.classList.remove("hidden");
+        if (sessionLogout) sessionLogout.classList.remove("hidden");
       } else {
-        who.textContent = "";
-        bar.classList.remove("visible");
+        if (who) who.textContent = "";
+        if (bar) bar.classList.add("hidden");
+        if (sessionLogout) sessionLogout.classList.add("hidden");
       }
+    }
+
+    async function doLogout() {
+      try {
+        await api("/auth/logout", { method: "POST" });
+      } catch {
+        /* ignore */
+      }
+      state.token = null;
+      state.user = null;
+      setSignedInChrome(null);
+      show("auth-panel");
+      setStatus($("auth-status"), "Signed out", "ok");
+      await bootstrapAuth();
     }
 
     function directoryBannerMessage() {
@@ -810,19 +843,9 @@
       };
     }
 
-    $("btn-logout").onclick = async () => {
-      try {
-        await api("/auth/logout", { method: "POST" });
-      } catch {
-        /* ignore */
-      }
-      state.token = null;
-      state.user = null;
-      setSignedInChrome(null);
-      show("auth-panel");
-      setStatus($("auth-status"), "Signed out", "ok");
-      await bootstrapAuth();
-    };
+    $("btn-logout").onclick = () => { doLogout(); };
+    const btnLogoutSession = $("btn-logout-session");
+    if (btnLogoutSession) btnLogoutSession.onclick = () => { doLogout(); };
 
     document.querySelectorAll('input[name="capture-mode"]').forEach((el) => {
       el.addEventListener("change", () => {
