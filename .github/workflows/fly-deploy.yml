@@ -18,6 +18,20 @@ jobs:
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
+      - name: Ensure attune_data volume in iad
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          vols="$(flyctl volumes list -a clynotion --json)"
+          count="$(echo "$vols" | jq '[.[] | select(.Name=="attune_data" and .Region=="iad")] | length')"
+          echo "Existing attune_data volumes in iad: $count"
+          if [ "$count" -lt 1 ]; then
+            flyctl volumes create attune_data --region iad --size 1 -a clynotion -y
+          fi
+          # Volume apps should not run two machines on one volume.
+          flyctl scale count 1 -a clynotion -y || true
+
       - name: Deploy
         run: flyctl deploy --remote-only --config fly.toml
         env:

@@ -145,7 +145,14 @@ Clynotion can list users from your Workspace domain and let you **choose who to 
 | `ATTUNE_DATA_ENCRYPTION_KEY` | ephemeral in mock | Required for durable encrypted roster + directory tokens |
 | `ATTUNE_WORKSPACE_TOKEN_PATH` | `.attune_data/workspace_tokens.enc` | Encrypted Workspace refresh tokens |
 
-On Fly, also mount a volume for `.attune_data` (or set paths onto a volume) so roster/tokens are not lost on redeploy.
+### Fly volume (`/data`)
+Deploy mounts Fly volume `attune_data` at `/data`. The GitHub Action creates it in `iad` if missing and scales to **1 machine** (one volume writer).
+
+Paths on Fly:
+- `/data/clinicians.enc` — roster + voice embeddings  
+- `/data/workspace_tokens.enc` — Workspace directory refresh token  
+
+Also set Fly secret `ATTUNE_DATA_ENCRYPTION_KEY` (stable Fernet key) so encrypted files remain readable across deploys.
 
 ## Tests
 
