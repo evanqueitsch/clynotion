@@ -299,16 +299,16 @@
       </div>
       <div id="bot-warn" class="warn hidden"></div>
 
-      <details id="workspace-panel" style="margin-bottom: 1rem;">
+      <details id="workspace-panel" style="margin-bottom: 1rem;" open>
         <summary style="cursor:pointer; color: var(--muted);">Practice roster · Google Workspace</summary>
-        <p class="meta" id="workspace-status-line">Connect Workspace to import clinicians.</p>
+        <p class="meta" id="workspace-status-line">Step 1: Connect a Workspace <strong>admin</strong> account. Step 2: Load users. Step 3: Include selected.</p>
         <div class="row" style="margin: 0.5rem 0;">
-          <a class="ghost" id="btn-workspace-connect" href="/auth/google/directory/start" style="text-align:center;text-decoration:none;display:inline-block;">Connect Workspace directory</a>
-          <button class="ghost" id="btn-workspace-load" type="button">Load directory users</button>
+          <a class="primary" id="btn-workspace-connect" href="/auth/google/directory/start" style="text-align:center;text-decoration:none;display:inline-block;">1. Connect Workspace directory</a>
+          <button class="ghost" id="btn-workspace-load" type="button" disabled>2. Load directory users</button>
         </div>
         <div id="workspace-users" class="roster"></div>
         <div class="row" style="margin-top: 0.5rem;">
-          <button class="primary" id="btn-workspace-include" type="button" disabled>Include selected on roster</button>
+          <button class="primary" id="btn-workspace-include" type="button" disabled>3. Include selected on roster</button>
         </div>
         <p class="status" id="workspace-status"></p>
       </details>
@@ -635,18 +635,34 @@
       $("bot-warn").textContent = bot.detail || "";
     }
 
+    function workspaceErrorMessage(code) {
+      const map = {
+        directory_not_connected:
+          "Workspace directory is not connected yet. Click “1. Connect Workspace directory” first (must be a Workspace admin).",
+        directory_forbidden:
+          "Google denied Directory access. Sign in with a Workspace admin, and ensure Admin SDK + directory.user.readonly scope are enabled.",
+        directory_list_failed: "Could not list Workspace users. Try Connect again.",
+        directory_refresh_failed: "Workspace connection expired. Click Connect again.",
+        directory_off: "Workspace directory sync is disabled on this server.",
+      };
+      return map[code] || code;
+    }
+
     async function loadWorkspaceStatus() {
       try {
         const st = await api("/workspace/status");
         state.workspace = st;
         const line = $("workspace-status-line");
+        const loadBtn = $("btn-workspace-load");
+        if (loadBtn) loadBtn.disabled = !st.connected;
         if (!line) return;
         if (st.connected) {
           line.textContent = st.mode === "mock"
-            ? "Mock Workspace directory connected (dev)."
-            : `Connected as ${st.admin_email || "admin"} · domain ${st.domain || "—"}.`;
+            ? "Mock Workspace directory connected (dev). Next: Load directory users."
+            : `Connected as ${st.admin_email || "admin"} · ${st.domain || "—"}. Next: Load directory users.`;
         } else {
-          line.textContent = "Connect a Workspace admin account to import clinicians.";
+          line.textContent =
+            "Not connected. Click “1. Connect Workspace directory” and approve access with a Workspace admin account (operations@ may need admin rights).";
         }
       } catch {
         /* ignore */
@@ -803,11 +819,19 @@
         setStatus($("workspace-status"), "Loading Workspace directory…");
         try {
           await loadWorkspaceStatus();
+          if (!state.workspace || !state.workspace.connected) {
+            setStatus(
+              $("workspace-status"),
+              workspaceErrorMessage("directory_not_connected"),
+              "error"
+            );
+            return;
+          }
           const users = await api("/workspace/users");
           renderWorkspaceUsers(users);
           setStatus($("workspace-status"), `${users.length} directory user(s) loaded.`, "ok");
         } catch (e) {
-          setStatus($("workspace-status"), e.message, "error");
+          setStatus($("workspace-status"), workspaceErrorMessage(e.message), "error");
         }
       };
     }
