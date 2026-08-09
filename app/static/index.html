@@ -635,18 +635,34 @@
       $("bot-warn").textContent = bot.detail || "";
     }
 
+    function workspaceErrorMessage(code) {
+      const map = {
+        directory_not_connected:
+          "Workspace directory is not connected yet. Click “1. Connect Workspace directory” first (must be a Workspace admin).",
+        directory_forbidden:
+          "Google denied Directory access. Sign in with a Workspace admin, and ensure Admin SDK + directory.user.readonly scope are enabled.",
+        directory_list_failed: "Could not list Workspace users. Try Connect again.",
+        directory_refresh_failed: "Workspace connection expired. Click Connect again.",
+        directory_off: "Workspace directory sync is disabled on this server.",
+      };
+      return map[code] || code;
+    }
+
     async function loadWorkspaceStatus() {
       try {
         const st = await api("/workspace/status");
         state.workspace = st;
         const line = $("workspace-status-line");
+        const loadBtn = $("btn-workspace-load");
+        if (loadBtn) loadBtn.disabled = !st.connected;
         if (!line) return;
         if (st.connected) {
           line.textContent = st.mode === "mock"
-            ? "Mock Workspace directory connected (dev)."
-            : `Connected as ${st.admin_email || "admin"} · domain ${st.domain || "—"}.`;
+            ? "Mock Workspace directory connected (dev). Next: Load directory users."
+            : `Connected as ${st.admin_email || "admin"} · ${st.domain || "—"}. Next: Load directory users.`;
         } else {
-          line.textContent = "Connect a Workspace admin account to import clinicians.";
+          line.textContent =
+            "Not connected. Click “1. Connect Workspace directory” and approve access with a Workspace admin account (operations@ may need admin rights).";
         }
       } catch {
         /* ignore */
@@ -803,11 +819,19 @@
         setStatus($("workspace-status"), "Loading Workspace directory…");
         try {
           await loadWorkspaceStatus();
+          if (!state.workspace || !state.workspace.connected) {
+            setStatus(
+              $("workspace-status"),
+              workspaceErrorMessage("directory_not_connected"),
+              "error"
+            );
+            return;
+          }
           const users = await api("/workspace/users");
           renderWorkspaceUsers(users);
           setStatus($("workspace-status"), `${users.length} directory user(s) loaded.`, "ok");
         } catch (e) {
-          setStatus($("workspace-status"), e.message, "error");
+          setStatus($("workspace-status"), workspaceErrorMessage(e.message), "error");
         }
       };
     }
