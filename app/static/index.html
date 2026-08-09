@@ -75,8 +75,7 @@
       text-align: right;
       word-break: break-all;
     }
-    .topbar-user button,
-    #btn-logout-session {
+    .topbar-user button {
       flex: 0 0 auto;
       padding: 0.45rem 0.9rem;
       font-size: 0.85rem;
@@ -84,15 +83,8 @@
       background: #fff;
       color: var(--ink);
       cursor: pointer;
+      border-radius: 999px;
     }
-    .session-head {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 0.75rem;
-      margin-bottom: 0.85rem;
-    }
-    .session-head h2 { margin: 0; }
     .panel {
       background: var(--panel);
       border: 1px solid var(--line);
@@ -211,19 +203,111 @@
     }
     .hidden { display: none !important; }
     .meta { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.75rem; }
-    .roster { display: grid; gap: 0.45rem; margin: 0.5rem 0 1rem; }
+    .section-label {
+      display: block;
+      font-size: 0.85rem;
+      font-weight: 600;
+      color: var(--ink);
+      margin: 0.25rem 0 0.35rem;
+    }
+    .roster {
+      display: grid;
+      gap: 0.35rem;
+      margin: 0.35rem 0 0.85rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.55);
+      padding: 0.35rem;
+    }
+    .roster:empty { display: none; }
+    .roster-head,
     .roster-row {
       display: grid;
-      grid-template-columns: auto 1fr auto auto;
-      gap: 0.5rem;
+      grid-template-columns: 1.5rem minmax(0, 1fr) 8.5rem auto;
+      gap: 0.55rem;
       align-items: center;
       font-size: 0.92rem;
+      padding: 0.45rem 0.55rem;
     }
+    .roster-head {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      padding-bottom: 0.2rem;
+      border-bottom: 1px solid var(--line);
+    }
+    .roster-row + .roster-row { border-top: 1px solid rgba(197, 208, 203, 0.55); }
     .roster-row select {
       margin: 0;
-      width: auto;
-      min-width: 8rem;
-      padding: 0.35rem 0.5rem;
+      width: 100%;
+      min-width: 0;
+      padding: 0.4rem 0.5rem;
+      border-radius: 8px;
+    }
+    .person-name {
+      font-weight: 500;
+      line-height: 1.25;
+      min-width: 0;
+    }
+    .person-sub {
+      display: block;
+      font-size: 0.78rem;
+      font-weight: 400;
+      color: var(--muted);
+      margin-top: 0.1rem;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .roster-actions {
+      display: flex;
+      gap: 0.35rem;
+      align-items: center;
+      justify-content: flex-end;
+      flex-wrap: wrap;
+    }
+    .roster-actions button {
+      padding: 0.3rem 0.65rem;
+      font-size: 0.78rem;
+    }
+    .workspace-box {
+      margin: 0 0 1.15rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.4);
+      padding: 0.15rem 0.85rem 0.85rem;
+    }
+    .workspace-box > summary {
+      cursor: pointer;
+      color: var(--ink);
+      font-weight: 500;
+      padding: 0.7rem 0;
+      list-style: none;
+    }
+    .workspace-box > summary::-webkit-details-marker { display: none; }
+    .workspace-box > summary::after {
+      content: "▾";
+      float: right;
+      color: var(--muted);
+    }
+    .workspace-box:not([open]) > summary::after { content: "▸"; }
+    .workspace-toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.5rem;
+      align-items: center;
+      margin: 0.35rem 0 0.65rem;
+    }
+    .workspace-toolbar .primary { flex: 0 0 auto; }
+    #workspace-users.roster {
+      grid-template-columns: none;
+      margin-bottom: 0.65rem;
+    }
+    #workspace-users .roster-head,
+    #workspace-users .roster-row {
+      grid-template-columns: 1.5rem minmax(0, 1fr) 8.5rem;
     }
     .pill {
       font-size: 0.72rem;
@@ -232,8 +316,26 @@
       border-radius: 999px;
       background: #e5efe9;
       color: var(--accent-ink);
+      white-space: nowrap;
     }
     .pill.none { background: #f0e8e0; color: var(--warn); }
+    .pill.on-roster { background: #e5efe9; }
+    @media (max-width: 560px) {
+      .roster-head { display: none; }
+      .roster-row,
+      #workspace-users .roster-row {
+        grid-template-columns: 1.5rem minmax(0, 1fr);
+        gap: 0.35rem 0.55rem;
+      }
+      .roster-row select,
+      #workspace-users .roster-row select {
+        grid-column: 2;
+      }
+      .roster-actions {
+        grid-column: 2;
+        justify-content: flex-start;
+      }
+    }
     .mode-row { display: flex; gap: 0.75rem; flex-wrap: wrap; margin-bottom: 0.85rem; }
     .mode-row label {
       display: flex;
@@ -286,12 +388,9 @@
     </section>
 
     <section id="capture-panel" class="panel hidden">
-      <div class="session-head">
-        <h2>Start session</h2>
-        <button id="btn-logout-session" type="button">Sign out</button>
-      </div>
+      <h2>Start session</h2>
       <div id="provider-banner" class="warn hidden"></div>
-      <p class="meta">Choose who’s present, then capture in Clynotion (session surface). Meeting bot is stubbed until BAAs.</p>
+      <p class="meta">Mark who’s present, then capture. Meeting bot stays stubbed until BAAs.</p>
 
       <div class="mode-row">
         <label><input type="radio" name="capture-mode" value="session_surface" checked /> Session surface</label>
@@ -299,22 +398,20 @@
       </div>
       <div id="bot-warn" class="warn hidden"></div>
 
-      <details id="workspace-panel" style="margin-bottom: 1rem;" open>
-        <summary style="cursor:pointer; color: var(--muted);">Practice roster · Google Workspace</summary>
-        <p class="meta" id="workspace-status-line">Import clinicians from your Workspace directory, then choose who to include.</p>
-        <div class="row" style="margin: 0.5rem 0;">
+      <details id="workspace-panel" class="workspace-box">
+        <summary>Manage practice roster</summary>
+        <p class="meta" id="workspace-status-line">Import people from Google Workspace, set each person’s role, then add them to the roster.</p>
+        <div class="workspace-toolbar">
           <button class="primary" id="btn-workspace-import" type="button">Import from Google Workspace</button>
+          <button class="ghost" id="btn-workspace-include" type="button" disabled>Add selected to roster</button>
         </div>
         <div id="workspace-users" class="roster"></div>
-        <div class="row" style="margin-top: 0.5rem;">
-          <button class="primary" id="btn-workspace-include" type="button" disabled>Include selected on roster</button>
-        </div>
         <p class="status" id="workspace-status"></p>
       </details>
 
-      <label>Who’s present</label>
+      <span class="section-label">Who’s present</span>
+      <p class="meta" id="roster-hint">Check attendees and set role for this session. Voice enroll/check-in is optional.</p>
       <div class="roster" id="roster"></div>
-      <p class="meta" id="roster-hint">Select who’s present. Enroll voice (local embedding; sample deleted). Check in to verify before capture.</p>
       <input id="enroll-file" type="file" accept="audio/*,.wav,.webm,.mp3,.m4a" class="hidden" />
 
       <h2 style="margin-top: 1.25rem;">Capture</h2>
@@ -450,16 +547,49 @@
     function setSignedInChrome(me) {
       const bar = $("topbar-user");
       const who = $("signed-in-as");
-      const sessionLogout = $("btn-logout-session");
       if (me) {
         if (who) who.textContent = me.email || me.username || "Signed in";
         if (bar) bar.classList.remove("hidden");
-        if (sessionLogout) sessionLogout.classList.remove("hidden");
       } else {
         if (who) who.textContent = "";
         if (bar) bar.classList.add("hidden");
-        if (sessionLogout) sessionLogout.classList.add("hidden");
       }
+    }
+
+    const ROLE_OPTIONS = [
+      { value: "admin", label: "Admin" },
+      { value: "supervisor", label: "Supervisor" },
+      { value: "supervisee", label: "Supervisee" },
+      { value: "other", label: "Other" },
+    ];
+
+    function fillRoleSelect(select, selected) {
+      select.innerHTML = "";
+      ROLE_OPTIONS.forEach((r) => {
+        const opt = document.createElement("option");
+        opt.value = r.value;
+        opt.textContent = r.label;
+        if (r.value === selected) opt.selected = true;
+        select.appendChild(opt);
+      });
+      if (selected && !ROLE_OPTIONS.some((r) => r.value === selected)) {
+        const opt = document.createElement("option");
+        opt.value = selected;
+        opt.textContent = selected;
+        opt.selected = true;
+        select.appendChild(opt);
+      }
+    }
+
+    function rosterHead(cols) {
+      const head = document.createElement("div");
+      head.className = "roster-head";
+      cols.forEach((text) => {
+        const cell = document.createElement("span");
+        cell.textContent = text;
+        head.appendChild(cell);
+      });
+      return head;
     }
 
     async function doLogout() {
@@ -577,38 +707,42 @@
     function renderRoster() {
       const root = $("roster");
       root.innerHTML = "";
+      if (!state.clinicians.length) {
+        root.innerHTML = "<p class='meta' style='padding:0.55rem'>No clinicians on the roster yet. Open Manage practice roster to import.</p>";
+        return;
+      }
+      root.appendChild(rosterHead(["", "Clinician", "Role", "Voice"]));
       state.clinicians.forEach((c) => {
         const row = document.createElement("div");
         row.className = "roster-row";
         const cb = document.createElement("input");
         cb.type = "checkbox";
         cb.value = c.clinician_id;
-        cb.checked = c.default_role === "supervisor";
-        const name = document.createElement("span");
+        cb.checked = c.default_role === "supervisor" || c.default_role === "admin";
+        cb.title = "Present";
+        const name = document.createElement("div");
+        name.className = "person-name";
         name.textContent = c.display_name;
+        if (c.email) {
+          const sub = document.createElement("span");
+          sub.className = "person-sub";
+          sub.textContent = c.email;
+          name.appendChild(sub);
+        }
         const role = document.createElement("select");
-        ["supervisor", "supervisee", "other"].forEach((r) => {
-          const opt = document.createElement("option");
-          opt.value = r;
-          opt.textContent = r;
-          if (r === c.default_role) opt.selected = true;
-          role.appendChild(opt);
-        });
+        role.setAttribute("aria-label", `Role for ${c.display_name}`);
+        fillRoleSelect(role, c.default_role || "supervisee");
+        const enrolled = c.voice_status === "enrolled" || c.voice_enrolled;
         const voice = document.createElement("button");
         voice.type = "button";
         voice.className = "ghost";
-        voice.style.padding = "0.35rem 0.7rem";
-        voice.style.fontSize = "0.8rem";
-        const enrolled = c.voice_status === "enrolled" || c.voice_enrolled;
-        voice.textContent = enrolled ? "Re-enroll" : "Enroll voice";
+        voice.textContent = enrolled ? "Re-enroll" : "Enroll";
         const pill = document.createElement("span");
         pill.className = "pill" + (enrolled ? "" : " none");
         pill.textContent = enrolled ? "enrolled" : "no voice";
         const checkin = document.createElement("button");
         checkin.type = "button";
         checkin.className = "ghost";
-        checkin.style.padding = "0.35rem 0.7rem";
-        checkin.style.fontSize = "0.8rem";
         checkin.textContent = "Check in";
         checkin.disabled = !enrolled;
         voice.onclick = () => {
@@ -621,16 +755,14 @@
           state.enrollMode = "checkin";
           $("enroll-file").click();
         };
-        row.appendChild(cb);
-        row.appendChild(name);
-        row.appendChild(role);
         const actions = document.createElement("div");
-        actions.style.display = "flex";
-        actions.style.gap = "0.35rem";
-        actions.style.alignItems = "center";
+        actions.className = "roster-actions";
         actions.appendChild(pill);
         actions.appendChild(voice);
         actions.appendChild(checkin);
+        row.appendChild(cb);
+        row.appendChild(name);
+        row.appendChild(role);
         row.appendChild(actions);
         root.appendChild(row);
       });
@@ -639,6 +771,8 @@
     async function loadClinicians() {
       state.clinicians = await api("/clinicians");
       renderRoster();
+      const panel = $("workspace-panel");
+      if (panel && !state.clinicians.length) panel.open = true;
       const bot = await api("/capture/meeting-bot");
       $("bot-warn").textContent = bot.detail || "";
     }
@@ -708,39 +842,47 @@
       root.innerHTML = "";
       state.workspaceUsers = users || [];
       if (!users.length) {
-        root.innerHTML = "<p class='meta'>No directory users returned.</p>";
+        root.innerHTML = "<p class='meta' style='padding:0.55rem'>No directory users returned.</p>";
         $("btn-workspace-include").disabled = true;
         return;
       }
+      root.appendChild(rosterHead(["", "Person", "Role"]));
       users.forEach((u) => {
-        const row = document.createElement("label");
-        row.className = "roster-item";
-        row.style.display = "flex";
-        row.style.gap = "0.5rem";
-        row.style.alignItems = "center";
-        row.style.marginBottom = "0.35rem";
+        const row = document.createElement("div");
+        row.className = "roster-row";
         const cb = document.createElement("input");
         cb.type = "checkbox";
         cb.dataset.googleId = u.google_id;
         cb.dataset.email = u.email;
         cb.dataset.name = u.display_name;
-        cb.checked = !!u.already_included;
+        cb.checked = !u.already_included;
+        cb.title = "Include on roster";
+        const name = document.createElement("div");
+        name.className = "person-name";
+        name.textContent = u.display_name;
+        const sub = document.createElement("span");
+        sub.className = "person-sub";
+        sub.textContent = u.email;
+        name.appendChild(sub);
+        if (u.already_included) {
+          const badge = document.createElement("span");
+          badge.className = "pill on-roster";
+          badge.style.marginLeft = "0.4rem";
+          badge.textContent = "on roster";
+          name.appendChild(badge);
+        }
         const role = document.createElement("select");
         role.dataset.googleId = u.google_id;
-        ["supervisee", "supervisor", "other"].forEach((r) => {
-          const opt = document.createElement("option");
-          opt.value = r;
-          opt.textContent = r;
-          role.appendChild(opt);
-        });
-        const text = document.createElement("span");
-        text.textContent = `${u.display_name} · ${u.email}${u.already_included ? " (on roster)" : ""}`;
+        role.setAttribute("aria-label", `Role for ${u.display_name}`);
+        fillRoleSelect(role, u.default_role || "supervisee");
         row.appendChild(cb);
+        row.appendChild(name);
         row.appendChild(role);
-        row.appendChild(text);
         root.appendChild(row);
       });
       $("btn-workspace-include").disabled = false;
+      const panel = $("workspace-panel");
+      if (panel) panel.open = true;
     }
 
     function renderReview(draft) {
@@ -875,7 +1017,8 @@
             json: { members, clear_seed_roster: true },
           });
           await loadClinicians();
-          setStatus($("workspace-status"), `Included ${members.length} clinician(s) on the practice roster.`, "ok");
+          setStatus($("workspace-status"), `Added ${members.length} clinician(s) to the practice roster.`, "ok");
+          await loadWorkspaceUsers();
         } catch (e) {
           setStatus($("workspace-status"), e.message, "error");
         }
@@ -883,8 +1026,6 @@
     }
 
     $("btn-logout").onclick = () => { doLogout(); };
-    const btnLogoutSession = $("btn-logout-session");
-    if (btnLogoutSession) btnLogoutSession.onclick = () => { doLogout(); };
 
     document.querySelectorAll('input[name="capture-mode"]').forEach((el) => {
       el.addEventListener("change", () => {

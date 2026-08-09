@@ -374,7 +374,7 @@ class ClinicianStore:
                         embedding=[float(x) for x in emb],
                     )
                 role = raw.get("default_role") or "supervisee"
-                if role not in ("supervisor", "supervisee", "other"):
+                if role not in ("admin", "supervisor", "supervisee", "other"):
                     role = "supervisee"
                 clin = Clinician(
                     clinician_id=str(cid),

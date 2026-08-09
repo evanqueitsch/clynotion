@@ -134,8 +134,8 @@ Clynotion can list users from your Workspace domain and let you **choose who to 
 ### In the app
 1. Sign in with Google.
 2. Open **Practice roster · Google Workspace**.
-3. **Connect Workspace directory** (admin consent).
-4. **Load directory users** → check who to include → set supervisor/supervisee → **Include selected on roster**.
+3. **Import from Google Workspace** (first time may ask a Workspace admin to approve Directory access).
+4. Check who to include → set role (Admin / Supervisor / Supervisee / Other) → **Add selected to roster**.
 
 ### Env
 | Var | Default | Meaning |

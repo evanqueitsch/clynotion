@@ -147,7 +147,7 @@ stated. Extract ONLY what is explicitly stated. Return strict JSON.
 Case labels must stay de-identified (e.g. Client A) — never invent real client names.
 duration_minutes MUST be a JSON integer or null (never a string).
 supervision_format must be one of: individual, triadic, group.
-participant role must be one of: supervisor, supervisee, other.
+participant role must be one of: admin, supervisor, supervisee, other.
 Schema keys: session_date, duration_minutes, supervision_format, setting, supervisor,
 participants (list of {speaker_label, name, role}), speaker_map (object label->name),
 agenda_items (string list), cases_discussed (list of {label, presenting_focus, supervisee_owner}),

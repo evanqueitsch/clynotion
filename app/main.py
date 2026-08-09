@@ -75,7 +75,7 @@ validate_startup_secrets()
 
 _STATIC = Path(__file__).resolve().parent / "static"
 
-APP_VERSION = "0.5.5"
+APP_VERSION = "0.5.6"
 
 app = FastAPI(
     title="Attune — Clynotion",
@@ -469,20 +469,23 @@ def workspace_users(user: CurrentUser) -> list[WorkspaceUserOut]:
         for c in clinician_store.list_all_for_practice(user.practice_id)
         if c.google_id
     }
-    return [
-        WorkspaceUserOut(
-            google_id=u.google_id,
-            email=u.email,
-            display_name=u.display_name,
-            suspended=u.suspended,
-            org_unit=u.org_unit,
-            already_included=bool(
-                existing.get(u.google_id) and existing[u.google_id].included
-            ),
+    out: list[WorkspaceUserOut] = []
+    for u in users:
+        if u.suspended:
+            continue
+        hit = existing.get(u.google_id)
+        out.append(
+            WorkspaceUserOut(
+                google_id=u.google_id,
+                email=u.email,
+                display_name=u.display_name,
+                suspended=u.suspended,
+                org_unit=u.org_unit,
+                already_included=bool(hit and hit.included),
+                default_role=(hit.default_role if hit else "supervisee"),
+            )
         )
-        for u in users
-        if not u.suspended
-    ]
+    return out
 
 
 @app.post("/workspace/include", response_model=list[ClinicianOut])

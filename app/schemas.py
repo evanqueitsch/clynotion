@@ -9,7 +9,7 @@ from pydantic import BaseModel, Field, field_validator, model_validator
 
 # --- Phase 1: clinical supervision (Clynotion) ---
 
-ParticipantRole = Literal["supervisor", "supervisee", "other"]
+ParticipantRole = Literal["admin", "supervisor", "supervisee", "other"]
 SupervisionFormat = Literal["individual", "triadic", "group"]
 
 
@@ -117,6 +117,7 @@ class WorkspaceUserOut(BaseModel):
     suspended: bool = False
     org_unit: str = ""
     already_included: bool = False
+    default_role: ParticipantRole = "supervisee"
 
 
 class WorkspaceIncludeMember(BaseModel):

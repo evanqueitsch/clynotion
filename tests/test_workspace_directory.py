@@ -79,6 +79,32 @@ def test_list_and_include_workspace_users(client: TestClient) -> None:
     assert all(c["source"] == "workspace" for c in roster.json())
 
 
+def test_include_admin_role(client: TestClient) -> None:
+    users = client.get("/workspace/users", headers=_auth()).json()
+    member = users[0]
+    included = client.post(
+        "/workspace/include",
+        headers=_auth(),
+        json={
+            "clear_seed_roster": True,
+            "members": [
+                {
+                    "google_id": member["google_id"],
+                    "email": member["email"],
+                    "display_name": member["display_name"],
+                    "default_role": "admin",
+                }
+            ],
+        },
+    )
+    assert included.status_code == 200, included.text
+    assert included.json()[0]["default_role"] == "admin"
+    listed = client.get("/workspace/users", headers=_auth()).json()
+    hit = next(u for u in listed if u["google_id"] == member["google_id"])
+    assert hit["already_included"] is True
+    assert hit["default_role"] == "admin"
+
+
 def test_exclude_workspace_member(client: TestClient) -> None:
     users = client.get("/workspace/users", headers=_auth()).json()
     member = users[0]
