@@ -12,7 +12,7 @@ from fastapi.testclient import TestClient
 
 from app.audit import audit_log
 from app.auth import issue_token, user_store
-from app.clinicians import clinician_store
+from app.clinicians import clinician_store, install_test_fixtures
 from app.main import app
 from app.store import store
 from app.voice_id import cosine_similarity, get_voice_id_provider
@@ -26,6 +26,7 @@ def _clean(monkeypatch: pytest.MonkeyPatch):
     audit_log.clear()
     store.clear()
     clinician_store.reset()
+    install_test_fixtures()
     yield
     audit_log.clear()
     store.clear()

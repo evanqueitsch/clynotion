@@ -91,14 +91,20 @@ def clinician_persist_path() -> Optional[Path]:
 
 
 class ClinicianStore:
+    """Practice clinician roster. Empty at startup — no seed clinicians in production.
+
+    Synthetic fixtures (Dana/Jordan/etc.) are installed only in tests via
+    ``install_test_fixtures()``; production/dev rosters start empty and are
+    populated exclusively through Google Workspace import (``upsert_workspace_user``).
+    """
+
     def __init__(self, *, load_disk: bool = True) -> None:
         self._by_practice: dict[str, dict[str, Clinician]] = {}
-        self._seed()
         if load_disk:
             self._load_from_disk()
 
-    def _seed(self) -> None:
-        """Synthetic practice rosters for MOCK/dev — not real clinicians."""
+    def install_fixtures(self) -> None:
+        """Synthetic practice rosters for TESTS ONLY — never called in production."""
         self._by_practice = {
             "practice-a": {
                 "clin-a-dana": Clinician(
@@ -207,6 +213,16 @@ class ClinicianStore:
         self._save_to_disk()
         return clin
 
+    def set_default_role(
+        self, practice_id: str, clinician_id: str, *, default_role: ParticipantRole
+    ) -> Clinician:
+        clin = self.get(practice_id, clinician_id)
+        if clin is None:
+            raise KeyError(clinician_id)
+        clin.default_role = default_role
+        self._save_to_disk()
+        return clin
+
     def clear_seed_clinicians(self, practice_id: str) -> int:
         """Remove seed-source clinicians for a practice (keep Workspace imports)."""
         rows = self._by_practice.get(practice_id) or {}
@@ -306,24 +322,31 @@ class ClinicianStore:
         return clin
 
     def reset(self) -> None:
-        """Re-seed in-memory roster (tests). Does not delete the on-disk file."""
-        self._seed()
+        """Clear in-memory roster (tests). Does not delete the on-disk file.
+
+        Does NOT re-add synthetic fixtures — call ``install_test_fixtures()``
+        (or ``store.install_fixtures()``) afterward if a test needs them.
+        """
+        self._by_practice = {}
 
     def reset_and_clear_disk(self) -> None:
-        """Tests: re-seed and remove encrypted clinician file if present."""
-        self._seed()
+        """Tests: clear roster and remove encrypted clinician file if present."""
+        self._by_practice = {}
         path = clinician_persist_path()
         if path is not None and path.is_file():
             path.unlink()
 
     def _roster_snapshot(self) -> dict[str, Any]:
-        """Serialize roster + voice (never log this payload)."""
+        """Serialize roster + voice (never log this payload).
+
+        Only ``source=="workspace"`` clinicians are persisted — synthetic/seed
+        fixtures (tests only) never touch disk.
+        """
         practices: dict[str, Any] = {}
         for practice_id, rows in self._by_practice.items():
             bucket: dict[str, Any] = {}
             for cid, clin in rows.items():
-                # Persist Workspace members always; seed only when voice enrolled.
-                if clin.source != "workspace" and not clin.voice.has_embedding():
+                if clin.source != "workspace":
                     continue
                 bucket[cid] = {
                     "display_name": clin.display_name,
@@ -344,24 +367,32 @@ class ClinicianStore:
         return {"version": 2, "practices": practices}
 
     def _apply_roster_snapshot(self, payload: dict[str, Any]) -> None:
+        """Load persisted roster. Legacy seed-source rows are never applied —
+        only ``source=="workspace"`` clinicians survive to memory."""
         version = int(payload.get("version") or 1)
         practices = payload.get("practices") or {}
         if not isinstance(practices, dict):
             return
         if version <= 1:
+            # Legacy voice-only snapshot assumed a pre-seeded roster; with no
+            # seed clinicians in memory there is nothing to attach voice data
+            # to, so this is intentionally a no-op (skips legacy seed rows).
             self._apply_voice_snapshot_v1(practices)
             return
         for practice_id, bucket in practices.items():
             if not isinstance(bucket, dict):
                 continue
             pid = str(practice_id)
-            if pid not in self._by_practice:
-                self._by_practice[pid] = {}
-            rows = self._by_practice[pid]
             for cid, raw in bucket.items():
                 if not isinstance(raw, dict):
                     continue
                 source = raw.get("source") or "seed"
+                if source != "workspace":
+                    # Skip legacy/seed rows from an older on-disk snapshot.
+                    continue
+                if pid not in self._by_practice:
+                    self._by_practice[pid] = {}
+                rows = self._by_practice[pid]
                 voice_raw = raw.get("voice") if isinstance(raw.get("voice"), dict) else {}
                 status = (voice_raw or {}).get("status") or "none"
                 emb = (voice_raw or {}).get("embedding") or []
@@ -432,6 +463,11 @@ class ClinicianStore:
             return
         if isinstance(payload, dict):
             self._apply_roster_snapshot(payload)
+
+
+def install_test_fixtures(store: Optional["ClinicianStore"] = None) -> None:
+    """Install synthetic practice rosters — TESTS ONLY, never call in production."""
+    (store if store is not None else clinician_store).install_fixtures()
 
 
 clinician_store = ClinicianStore()

@@ -62,8 +62,10 @@ def main() -> None:
         sibling = audio.with_suffix(".txt")
         sibling.write_text(sample.read_text(encoding="utf-8"), encoding="utf-8")
 
-        from app.clinicians import clinician_store
+        from app.clinicians import clinician_store, install_test_fixtures
 
+        clinician_store.reset()
+        install_test_fixtures()
         present = clinician_store.resolve_present(
             "practice-a",
             [

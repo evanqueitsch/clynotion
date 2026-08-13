@@ -110,6 +110,12 @@ class ClinicianOut(BaseModel):
     voice_enrolled: bool = False
 
 
+class ClinicianPatch(BaseModel):
+    """Editable clinician fields — role change only; removal uses /workspace/exclude."""
+
+    default_role: Optional[ParticipantRole] = None
+
+
 class WorkspaceUserOut(BaseModel):
     google_id: str
     email: str
@@ -214,6 +220,18 @@ class FinalizeResponse(BaseModel):
     fields: SupervisionFields
     note: str
     audio_deleted: bool
+
+
+class SessionSummaryOut(BaseModel):
+    """Recent-sessions list row — no transcript/note text, just enough to pick a session."""
+
+    session_id: str
+    modality: str = "supervision"
+    capture_mode: str = "session_surface"
+    finalized: bool
+    updated_at: str
+    supervisor: str = ""
+    participant_count: int = 0
 
 
 # --- Parked: EMDR (future phase) ---

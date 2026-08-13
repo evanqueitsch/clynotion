@@ -275,6 +275,7 @@ def finalize_session(
     session.fields = fields
     session.note = note
     session.finalized = True
+    session.transcript = ""  # raw transcript is no longer needed once the note is finalized
     store.save(session)
     finalize_reason = (
         AuditReason.OVERRIDE_APPLIED if applied else AuditReason.FINALIZED

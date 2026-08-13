@@ -4,6 +4,8 @@
 
 **Phase 1–2:** clinical supervision — who’s present → local voice enroll/check-in → session-surface capture (meeting bot stubbed until BAA) → ASR → extract → **local voice match** of diarized speakers to enrolled profiles → roster reconcile → review → finalize (audio deleted). Voice matching is **offline** (no third-party biometrics SaaS).
 
+The practice roster starts **empty** — there are no seed/demo clinicians in a real deployment. Add people via **Google Workspace import** (see below); synthetic fixtures (Dana/Jordan/etc.) exist only in tests, installed with `install_test_fixtures()`.
+
 EMDR / couples modalities are parked for a later phase.
 
 This repo is throwaway-friendly scaffolding under HIPAA-minded invariants (see `.cursor/rules/attune.mdc`).
@@ -48,12 +50,22 @@ ANTHROPIC_API_KEY=...         # https://console.anthropic.com/
 
 Hard-refresh the UI after restart. If draft fails, the red status now shows the vendor status/body (not just `ApiError`). Synthetic audio only until BAAs.
 
-To keep voice enrollments across restarts (encrypted at rest):
+To keep voice enrollments + roster across restarts (encrypted at rest):
 
 ```
 ATTUNE_CLINICIAN_PERSISTENCE=file
 ATTUNE_DATA_ENCRYPTION_KEY=...   # python -c "from app.crypto import generate_key; print(generate_key())"
 ```
+
+To keep sessions/notes across restarts too (encrypted at rest, one file):
+
+```
+ATTUNE_PERSISTENCE=file
+ATTUNE_SESSION_DATA_PATH=.attune_data/sessions.enc
+```
+
+Raw transcripts are cleared from a session as soon as it is finalized — only the validated
+fields + rendered note remain (see `app/pipeline.py:finalize_session`).
 
 ### Curl flow (transcript)
 
@@ -71,14 +83,41 @@ python -c "from pathlib import Path; import httpx, json; t=Path('sample_supervis
 | `ATTUNE_VOICE_MATCH_THRESHOLD` | `0.72` | Cosine similarity cutoff for voice match / check-in |
 | `ATTUNE_SAMPLE_TRANSCRIPT` | `sample_supervision_transcript.txt` | MOCK ASR fallback |
 | `DELETE_AUDIO_ON_FINALIZE` | `true` | Unlink audio on finalize |
-| `ATTUNE_MODE` | `mock` | `mock` or `real` (requires encryption + JWT secrets) |
+| `ATTUNE_MODE` | `mock` | `mock` or `real` — see [Real mode / PHI path](#real-mode--phi-path-v070) below |
 | `ATTUNE_DATA_ENCRYPTION_KEY` | *(ephemeral in mock)* | Fernet key. **Required in real. Never commit.** |
-| `ATTUNE_PERSISTENCE` | `memory` | `memory` or `postgres` (stub — needs BAA) |
-| `ATTUNE_CLINICIAN_PERSISTENCE` | `memory` | `memory` \| `file` — encrypted voice enrollments on disk |
+| `ATTUNE_PERSISTENCE` | `memory` | `memory` \| `file` (encrypted session file, survives restart) \| `postgres` (stub — needs BAA) |
+| `ATTUNE_SESSION_DATA_PATH` | `.attune_data/sessions.enc` | Path when session persistence is `file` |
+| `ATTUNE_CLINICIAN_PERSISTENCE` | `memory` | `memory` \| `file` — encrypted voice enrollments + Workspace roster on disk |
 | `ATTUNE_CLINICIAN_DATA_PATH` | `.attune_data/clinicians.enc` | Path when clinician persistence is `file` |
 | `ATTUNE_JWT_SECRET` | *(ephemeral in mock)* | HS256 secret. **Required in real.** |
 
 Fake users (dev only, `ATTUNE_AUTH=dev`): `alice` / `alice-pass` → `practice-a`; `bob` / `bob-pass` → `practice-b`.
+
+## Real mode / PHI path (v0.7.0)
+
+`ATTUNE_MODE=real` marks a deployment as touching real PHI and **fails closed** at startup
+(`app/config.py:validate_startup_secrets`):
+
+- Refuses to boot if `ATTUNE_ASR=mock` or `ATTUNE_LLM=mock` is set explicitly — real mode
+  never silently runs MOCK against real client audio/transcripts.
+- When ASR/LLM are left unset, real mode **defaults to Deepgram + Anthropic** (not mock).
+- Requires `ATTUNE_DATA_ENCRYPTION_KEY` and `ATTUNE_JWT_SECRET`.
+- Requires the vendor API key for whichever provider is resolved (`DEEPGRAM_API_KEY` for
+  `deepgram`, `ANTHROPIC_API_KEY` for `anthropic`, `OPENAI_API_KEY` for `openai`).
+- `MockAsrProvider` / `MockLlmExtractor` additionally refuse to construct at all under
+  `ATTUNE_MODE=real` — belt-and-suspenders in case a code path ever tried to build one.
+- `GET /health` reports `mode` and `phi_path` (`true` when `ATTUNE_MODE=real`); the UI shows
+  a persistent banner warning when the PHI path is live (real vendors handle audio/transcripts —
+  do not go live until BAAs are signed with those vendors and encryption/JWT secrets are set).
+
+The shipped `Dockerfile` defaults to `ATTUNE_MODE=real`, `ATTUNE_ASR=deepgram`,
+`ATTUNE_LLM=anthropic` — a production image will refuse to start until the secrets above are
+provided (e.g. Fly secrets). Override `ATTUNE_MODE=mock` only for a throwaway synthetic-data
+demo deploy; never point real client audio at a MOCK deployment.
+
+**MOCK stays MOCK for tests/smoke.** `tests/conftest.py` forces `ATTUNE_MODE=mock` and
+`ATTUNE_ASR=ATTUNE_LLM=mock` so the whole suite (and `run_smoke_test.py`) runs fully offline,
+regardless of what's in a developer's `env.local`. See `tests/test_real_mode_gates.py`.
 
 ## Google Workspace SSO (Fly / production)
 
@@ -149,8 +188,10 @@ Clynotion can list users from your Workspace domain and let you **choose who to 
 Deploy mounts Fly volume `attune_data` at `/data`. The GitHub Action creates it in `iad` if missing and scales to **1 machine** (one volume writer).
 
 Paths on Fly:
-- `/data/clinicians.enc` — roster + voice embeddings  
-- `/data/workspace_tokens.enc` — Workspace directory refresh token  
+- `/data/clinicians.enc` — roster + voice embeddings
+- `/data/workspace_tokens.enc` — Workspace directory refresh token
+- `/data/sessions.enc` — sessions/notes (set `ATTUNE_PERSISTENCE=file`; raw transcript is
+  cleared at finalize, only validated fields + rendered note remain)
 
 Also set Fly secret `ATTUNE_DATA_ENCRYPTION_KEY` (stable Fernet key) so encrypted files remain readable across deploys.
 
@@ -164,6 +205,11 @@ python run_smoke_test.py
 ## Compliance notes
 
 - Audit log: actions, session IDs, timestamps only — never transcript/note/audio content.
-- Synthetic vignette data only in this skeleton.
+- Synthetic vignette/fixture data only — the practice roster starts empty, and seed
+  clinicians are installed only in tests via `install_test_fixtures()`.
+- `ATTUNE_MODE=real` fails closed at startup (see [Real mode / PHI path](#real-mode--phi-path-v070)):
+  it refuses MOCK ASR/LLM and requires encryption/JWT/vendor secrets before it will boot.
 - Do not point real supervision audio at this stack until entity + BAAs + encryption are in place.
 - Deepgram/LLM real providers are env-flagged for synthetic eval only until BAAs are signed.
+- Raw transcript is deleted from a session as soon as it's finalized; audio is deleted on
+  finalize too (`DELETE_AUDIO_ON_FINALIZE`).

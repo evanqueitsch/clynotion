@@ -50,7 +50,11 @@ def is_mock_mode() -> bool:
 
 def validate_startup_secrets() -> None:
     """
-    REAL mode requires ATTUNE_DATA_ENCRYPTION_KEY and ATTUNE_JWT_SECRET.
+    REAL mode is the PHI path and fails closed:
+      - refuses ATTUNE_ASR=mock / ATTUNE_LLM=mock outright (never a silent MOCK fallback)
+      - requires ATTUNE_DATA_ENCRYPTION_KEY and ATTUNE_JWT_SECRET
+      - requires the vendor API key for whichever real ASR/LLM provider is selected
+        (deepgram/anthropic/openai — defaults to deepgram+anthropic when unset)
     Google auth requires OAuth client secrets, allowed domains, public URL, JWT secret.
     MOCK + ATTUNE_AUTH=dev may use ephemeral secrets.
     """
@@ -69,11 +73,42 @@ def validate_startup_secrets() -> None:
     )
 
     missing: list[str] = []
+    refused: list[str] = []
+
     if mode == MODE_REAL:
+        asr_explicit = (
+            os.environ.get("ATTUNE_ASR") or os.environ.get("ATTUNE_ASR_PROVIDER") or ""
+        ).strip().lower()
+        llm_explicit = (
+            os.environ.get("ATTUNE_LLM") or os.environ.get("ATTUNE_LLM_PROVIDER") or ""
+        ).strip().lower()
+        if asr_explicit == "mock":
+            refused.append("ATTUNE_ASR=mock")
+        if llm_explicit == "mock":
+            refused.append("ATTUNE_LLM=mock")
+
         if not os.environ.get("ATTUNE_DATA_ENCRYPTION_KEY", "").strip():
             missing.append("ATTUNE_DATA_ENCRYPTION_KEY")
         if not os.environ.get("ATTUNE_JWT_SECRET", "").strip():
             missing.append("ATTUNE_JWT_SECRET")
+
+        if not refused:
+            # Only resolve concrete vendor providers once we know real mode isn't
+            # already refusing to boot on an explicit mock request above.
+            from app.providers import resolve_asr_mode, resolve_llm_mode
+
+            if resolve_asr_mode() == "deepgram" and not os.environ.get(
+                "DEEPGRAM_API_KEY", ""
+            ).strip():
+                missing.append("DEEPGRAM_API_KEY")
+            if resolve_llm_mode() == "anthropic" and not os.environ.get(
+                "ANTHROPIC_API_KEY", ""
+            ).strip():
+                missing.append("ANTHROPIC_API_KEY")
+            if resolve_llm_mode() == "openai" and not os.environ.get(
+                "OPENAI_API_KEY", ""
+            ).strip():
+                missing.append("OPENAI_API_KEY")
 
     if auth_mode() == "google":
         if not google_configured():
@@ -84,6 +119,12 @@ def validate_startup_secrets() -> None:
             missing.append(ENV_PUBLIC_BASE_URL)
         if not os.environ.get("ATTUNE_JWT_SECRET", "").strip():
             missing.append("ATTUNE_JWT_SECRET")
+
+    if refused:
+        raise RuntimeError(
+            "Refusing to start: ATTUNE_MODE=real is a PHI path and must never use "
+            "MOCK providers — " + ", ".join(sorted(set(refused)))
+        )
 
     if missing:
         # de-dupe while preserving order

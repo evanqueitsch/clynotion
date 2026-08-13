@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from typing import Any, Optional
 from uuid import uuid4
 
-from app.persistence import EncryptedMemoryPersistence, SessionPersistence, build_persistence
+from app.persistence import SessionPersistence, build_persistence
 from app.schemas import PresentClinicianOut, SupervisionFields
 
 # PHI that must only exist inside the encrypted persistence blob — never plaintext at rest.
@@ -17,6 +18,10 @@ PHI_PERSISTED_FIELD_KEYS = (
     "risk_ethics_flags",
     "plan_next",
 )
+
+
+def _now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 @dataclass
@@ -31,6 +36,7 @@ class Session:
     modality: str = "supervision"
     capture_mode: str = "session_surface"
     present: list[PresentClinicianOut] = field(default_factory=list)
+    updated_at: str = field(default_factory=_now_iso)
 
 
 def _session_payload(session: Session) -> dict[str, Any]:
@@ -49,6 +55,7 @@ def _session_payload(session: Session) -> dict[str, Any]:
         "fields": fields,
         "audio_path": session.audio_path,
         "finalized": session.finalized,
+        "updated_at": session.updated_at,
     }
 
 
@@ -65,6 +72,7 @@ def _session_from_payload(session_id: str, payload: dict[str, Any]) -> Session:
         modality=str(payload.get("modality", "supervision")),
         capture_mode=str(payload.get("capture_mode", "session_surface")),
         present=[PresentClinicianOut.model_validate(p) for p in present_raw],
+        updated_at=str(payload.get("updated_at") or _now_iso()),
     )
 
 
@@ -114,6 +122,7 @@ class SessionStore:
         return session
 
     def save(self, session: Session) -> None:
+        session.updated_at = _now_iso()
         self._sessions[session.session_id] = session
         self.persistence.put(session.session_id, _session_payload(session))
 
@@ -125,5 +134,16 @@ class SessionStore:
         """At-rest blob for encryption acceptance tests."""
         return self.persistence.raw_ciphertext(session_id)
 
+    def list_for_practice(self, practice_id: str) -> list[Session]:
+        """Recent sessions for a practice, newest first (includes on-disk-only sessions)."""
+        ids = set(self._sessions.keys()) | set(self.persistence.list_ids())
+        sessions: list[Session] = []
+        for sid in ids:
+            session = self.get(sid)
+            if session is not None and session.practice_id == practice_id:
+                sessions.append(session)
+        sessions.sort(key=lambda s: s.updated_at, reverse=True)
+        return sessions
 
-store = SessionStore(persistence=EncryptedMemoryPersistence())
+
+store = SessionStore()

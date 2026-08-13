@@ -170,7 +170,8 @@ Schema keys: pursuer, withdrawer, presenting_issue, cycle_named, intervention, p
 risk_screen, speakers, attributions, evidence."""
 
 
-def _asr_mode() -> str:
+def resolve_asr_mode() -> str:
+    """mock|deepgram|whisper. Explicit env wins; real mode never silently falls back to mock."""
     explicit = (
         os.environ.get("ATTUNE_ASR") or os.environ.get("ATTUNE_ASR_PROVIDER") or ""
     ).strip().lower()
@@ -179,10 +180,13 @@ def _asr_mode() -> str:
     # Keys in env.local alone should enable Deepgram for the API (tests set ATTUNE_ASR=mock).
     if os.environ.get("DEEPGRAM_API_KEY", "").strip():
         return "deepgram"
-    return "mock"
+    from app.config import is_real_mode
+
+    return "deepgram" if is_real_mode() else "mock"
 
 
-def _llm_mode() -> str:
+def resolve_llm_mode() -> str:
+    """mock|anthropic|openai. Explicit env wins; real mode never silently falls back to mock."""
     explicit = (
         os.environ.get("ATTUNE_LLM") or os.environ.get("ATTUNE_LLM_PROVIDER") or ""
     ).strip().lower()
@@ -192,7 +196,14 @@ def _llm_mode() -> str:
         return "anthropic"
     if os.environ.get("OPENAI_API_KEY", "").strip():
         return "openai"
-    return "mock"
+    from app.config import is_real_mode
+
+    return "anthropic" if is_real_mode() else "mock"
+
+
+# Back-compat internal aliases (kept private; prefer resolve_asr_mode/resolve_llm_mode).
+_asr_mode = resolve_asr_mode
+_llm_mode = resolve_llm_mode
 
 
 def _parse_json_object(raw: str) -> dict[str, Any]:
@@ -271,8 +282,19 @@ class LlmExtractor(ABC):
         )
 
 
+def _refuse_mock_in_real_mode(provider_name: str) -> None:
+    from app.config import is_real_mode
+
+    if is_real_mode():
+        raise RuntimeError(
+            f"{provider_name} refuses to run under ATTUNE_MODE=real (PHI path). "
+            "Real mode requires a real vendor (deepgram/anthropic/openai), never mock."
+        )
+
+
 class MockAsrProvider(AsrProvider):
     def __init__(self, fallback_transcript_path: str | None = None) -> None:
+        _refuse_mock_in_real_mode("MockAsrProvider")
         self.fallback_transcript_path = fallback_transcript_path
 
     def transcribe(self, audio_path: str) -> str:
@@ -293,6 +315,9 @@ class MockAsrProvider(AsrProvider):
 
 
 class MockLlmExtractor(LlmExtractor):
+    def __init__(self) -> None:
+        _refuse_mock_in_real_mode("MockLlmExtractor")
+
     def extract_supervision_raw(self, transcript: str) -> dict:
         _ = transcript
         return dict(CANNED_SUPERVISION_RAW)
@@ -452,13 +477,20 @@ class OpenAILlmExtractor(LlmExtractor):
         return self._complete(COUPLES_SYSTEM, f"TRANSCRIPT:\n{transcript}")
 
 
-def provider_modes() -> dict[str, str]:
-    """Current ASR/LLM modes (for health + UI). Never includes secrets."""
-    return {"asr": _asr_mode(), "llm": _llm_mode()}
+def provider_modes() -> dict[str, object]:
+    """Current mode/ASR/LLM (for health + UI). Never includes secrets."""
+    from app.config import get_mode, is_real_mode
+
+    return {
+        "mode": get_mode(),
+        "asr": resolve_asr_mode(),
+        "llm": resolve_llm_mode(),
+        "phi_path": is_real_mode(),
+    }
 
 
 def get_asr_provider() -> AsrProvider:
-    mode = _asr_mode()
+    mode = resolve_asr_mode()
     if mode == "mock":
         sample = os.environ.get(
             "ATTUNE_SAMPLE_TRANSCRIPT", "sample_supervision_transcript.txt"
@@ -472,7 +504,7 @@ def get_asr_provider() -> AsrProvider:
 
 
 def get_llm_extractor() -> LlmExtractor:
-    mode = _llm_mode()
+    mode = resolve_llm_mode()
     if mode == "mock":
         return MockLlmExtractor()
     if mode == "anthropic":

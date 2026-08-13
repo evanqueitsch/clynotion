@@ -47,16 +47,19 @@ from app.pipeline import (
 from app.providers import provider_modes
 from app.schemas import (
     ClinicianOut,
+    ClinicianPatch,
     DraftResponse,
     FinalizeResponse,
     PresentClinicianOut,
     PresentMember,
+    SessionSummaryOut,
     SupervisionOverrides,
     VoiceCheckinResponse,
     WorkspaceIncludeBody,
     WorkspaceUserOut,
 )
 from app.store import Session, store
+from app.version import APP_VERSION
 from app.voice_id import get_voice_id_provider
 from app.voice_match import verify_checkin
 from app.workspace_directory import (
@@ -74,8 +77,6 @@ load_env_local()
 validate_startup_secrets()
 
 _STATIC = Path(__file__).resolve().parent / "static"
-
-APP_VERSION = "0.5.6"
 
 app = FastAPI(
     title="Attune — Clynotion",
@@ -227,7 +228,7 @@ def _parse_present_form(present_json: Optional[str]) -> list[PresentMember]:
 
 
 @app.get("/health")
-def health() -> dict[str, str]:
+def health() -> dict[str, Any]:
     modes = provider_modes()
     data_path = os.environ.get("ATTUNE_CLINICIAN_DATA_PATH", "")
     return {
@@ -237,9 +238,12 @@ def health() -> dict[str, str]:
         "product": "attune",
         "tool": "clynotion",
         "modality": "supervision",
+        "mode": modes["mode"],
+        "phi_path": modes["phi_path"],
         "asr": modes["asr"],
         "llm": modes["llm"],
         "clinician_persistence": os.environ.get("ATTUNE_CLINICIAN_PERSISTENCE", "memory"),
+        "session_persistence": os.environ.get("ATTUNE_PERSISTENCE", "memory"),
         "data_path": data_path,
     }
 
@@ -506,6 +510,25 @@ def workspace_include(user: CurrentUser, body: WorkspaceIncludeBody) -> list[Cli
     return out
 
 
+@app.patch("/clinicians/{clinician_id}", response_model=ClinicianOut)
+def patch_clinician(
+    clinician_id: str, user: CurrentUser, body: ClinicianPatch
+) -> ClinicianOut:
+    """Edit roster fields — currently just default_role. Use /workspace/exclude to remove."""
+    if body.default_role is None:
+        clin = clinician_store.get(user.practice_id, clinician_id)
+        if clin is None:
+            raise HTTPException(status_code=404, detail="clinician not found")
+        return ClinicianOut.model_validate(clin.to_public_dict())
+    try:
+        clin = clinician_store.set_default_role(
+            user.practice_id, clinician_id, default_role=body.default_role
+        )
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail="clinician not found") from e
+    return ClinicianOut.model_validate(clin.to_public_dict())
+
+
 @app.post("/workspace/exclude/{clinician_id}", response_model=ClinicianOut)
 def workspace_exclude(clinician_id: str, user: CurrentUser) -> ClinicianOut:
     try:
@@ -716,6 +739,23 @@ def create_session_draft_json(user: CurrentUser, body: DraftJsonBody) -> DraftRe
         present=body.present,
         capture_mode=body.capture_mode,
     )
+
+
+@app.get("/sessions", response_model=list[SessionSummaryOut])
+def list_sessions(user: CurrentUser) -> list[SessionSummaryOut]:
+    """Recent sessions for this practice, newest first (metadata only — no note/transcript)."""
+    return [
+        SessionSummaryOut(
+            session_id=s.session_id,
+            modality=s.modality,
+            capture_mode=s.capture_mode,
+            finalized=s.finalized,
+            updated_at=s.updated_at,
+            supervisor=s.fields.supervisor,
+            participant_count=len(s.present),
+        )
+        for s in store.list_for_practice(user.practice_id)
+    ]
 
 
 @app.get("/sessions/{session_id}", response_model=SessionReadResponse)

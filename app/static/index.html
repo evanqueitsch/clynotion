@@ -201,6 +201,11 @@
       font-size: 0.9rem;
       margin-bottom: 0.85rem;
     }
+    .warn.danger {
+      background: #fdecea;
+      border-color: #e3a9a9;
+      color: var(--danger);
+    }
     .hidden { display: none !important; }
     .meta { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.75rem; }
     .section-label {
@@ -320,6 +325,11 @@
     }
     .pill.none { background: #f0e8e0; color: var(--warn); }
     .pill.on-roster { background: #e5efe9; }
+    #recent-sessions.roster { grid-template-columns: none; }
+    #recent-sessions .roster-head,
+    #recent-sessions .roster-row {
+      grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr) 5.5rem auto;
+    }
     @media (max-width: 560px) {
       .roster-head { display: none; }
       .roster-row,
@@ -398,6 +408,12 @@
       </div>
       <div id="bot-warn" class="warn hidden"></div>
 
+      <details id="recent-sessions-panel" class="workspace-box">
+        <summary>Recent sessions</summary>
+        <p class="meta">Reopen a recent draft or finalized note for this practice.</p>
+        <div id="recent-sessions" class="roster"></div>
+      </details>
+
       <details id="workspace-panel" class="workspace-box">
         <summary>Manage practice roster</summary>
         <p class="meta" id="workspace-status-line">Import people from Google Workspace, set each person’s role, then add them to the roster.</p>
@@ -438,8 +454,16 @@
       <div class="speakers" id="speakers"></div>
       <label for="guidance">Guidance given (editable)</label>
       <textarea id="guidance"></textarea>
+      <label for="risk-ethics">Risk / ethics flags (editable)</label>
+      <textarea id="risk-ethics"></textarea>
+      <label for="plan-next">Plan for next supervision (editable)</label>
+      <textarea id="plan-next"></textarea>
       <label>Note preview</label>
       <div class="note" id="note-preview"></div>
+      <div class="row" style="margin-top: 0.6rem;">
+        <button class="ghost" id="btn-copy-note" type="button">Copy note</button>
+        <button class="ghost" id="btn-download-note" type="button">Download .txt</button>
+      </div>
       <div class="row" style="margin-top: 1rem;">
         <button class="ghost" id="btn-new" type="button">New capture</button>
         <button class="primary" id="btn-finalize" type="button">Finalize</button>
@@ -458,6 +482,8 @@
       recordMime: "audio/webm",
       chunks: [],
       recording: false,
+      mode: "mock",
+      phiPath: false,
       asr: "mock",
       llm: "mock",
       clinicians: [],
@@ -470,25 +496,41 @@
 
     function refreshProviderBanner() {
       const el = $("provider-banner");
-      const mock = state.asr === "mock" || state.llm === "mock";
+      const mock = state.mode === "mock" || state.asr === "mock" || state.llm === "mock";
+      if (state.mode === "real" || state.phiPath) {
+        el.classList.remove("hidden");
+        el.classList.add("danger");
+        el.textContent =
+          `PHI path is live (ATTUNE_MODE=real, ASR=${state.asr}, LLM=${state.llm}). ` +
+          `Real audio/transcripts leave this process for vendor ASR/LLM — only use this ` +
+          `deployment once signed BAAs are in place with those vendors, and encryption/JWT ` +
+          `secrets are configured. Meeting bot capture stays disabled until its own BAA.`;
+        return;
+      }
       if (!mock) {
         el.classList.add("hidden");
+        el.classList.remove("danger");
         el.textContent = "";
         return;
       }
       el.classList.remove("hidden");
+      el.classList.remove("danger");
       el.textContent =
         `MOCK mode (ASR=${state.asr}, LLM=${state.llm}): your mic/upload is not transcribed. ` +
-        `Drafts use the canned supervision vignette. Set ATTUNE_ASR=deepgram and ATTUNE_LLM=anthropic ` +
-        `(with API keys), then restart the server to hear real speech.`;
+        `Drafts use the canned supervision vignette. Set ATTUNE_MODE=real (with ATTUNE_ASR=deepgram, ` +
+        `ATTUNE_LLM=anthropic and API keys), then restart the server to hear real speech.`;
     }
 
     async function loadProviderModes() {
       try {
         const h = await fetch("/health").then((r) => r.json());
+        state.mode = h.mode || "mock";
+        state.phiPath = !!h.phi_path;
         state.asr = h.asr || "mock";
         state.llm = h.llm || "mock";
       } catch {
+        state.mode = "mock";
+        state.phiPath = false;
         state.asr = "mock";
         state.llm = "mock";
       }
@@ -650,6 +692,7 @@
         await loadProviderModes();
         await loadClinicians();
         await loadWorkspaceStatus();
+        await loadRecentSessions();
         const dirMsg = directoryBannerMessage();
         if (dirMsg) setStatus($("workspace-status"), dirMsg.text, dirMsg.kind);
         show("capture-panel");
@@ -732,6 +775,20 @@
         const role = document.createElement("select");
         role.setAttribute("aria-label", `Role for ${c.display_name}`);
         fillRoleSelect(role, c.default_role || "supervisee");
+        role.onchange = async () => {
+          const next = role.value;
+          try {
+            const updated = await api(`/clinicians/${c.clinician_id}`, {
+              method: "PATCH",
+              json: { default_role: next },
+            });
+            const idx = state.clinicians.findIndex((x) => x.clinician_id === c.clinician_id);
+            if (idx >= 0) state.clinicians[idx] = updated;
+            setStatus($("capture-status"), `Saved role for ${c.display_name}.`, "ok");
+          } catch (e) {
+            setStatus($("capture-status"), `Could not save role: ${e.message}`, "error");
+          }
+        };
         const enrolled = c.voice_status === "enrolled" || c.voice_enrolled;
         const voice = document.createElement("button");
         voice.type = "button";
@@ -755,11 +812,27 @@
           state.enrollMode = "checkin";
           $("enroll-file").click();
         };
+        const remove = document.createElement("button");
+        remove.type = "button";
+        remove.className = "ghost";
+        remove.textContent = "Remove";
+        remove.title = "Remove from practice roster";
+        remove.onclick = async () => {
+          if (!window.confirm(`Remove ${c.display_name} from the practice roster?`)) return;
+          try {
+            await api(`/workspace/exclude/${c.clinician_id}`, { method: "POST" });
+            await loadClinicians();
+            setStatus($("capture-status"), `Removed ${c.display_name} from the roster.`, "ok");
+          } catch (e) {
+            setStatus($("capture-status"), `Could not remove: ${e.message}`, "error");
+          }
+        };
         const actions = document.createElement("div");
         actions.className = "roster-actions";
         actions.appendChild(pill);
         actions.appendChild(voice);
         actions.appendChild(checkin);
+        actions.appendChild(remove);
         row.appendChild(cb);
         row.appendChild(name);
         row.appendChild(role);
@@ -775,6 +848,64 @@
       if (panel && !state.clinicians.length) panel.open = true;
       const bot = await api("/capture/meeting-bot");
       $("bot-warn").textContent = bot.detail || "";
+    }
+
+    function renderRecentSessions(sessions) {
+      const root = $("recent-sessions");
+      if (!root) return;
+      root.innerHTML = "";
+      if (!sessions.length) {
+        root.innerHTML = "<p class='meta' style='padding:0.55rem'>No sessions yet.</p>";
+        return;
+      }
+      root.appendChild(rosterHead(["When", "Supervisor", "Status", ""]));
+      sessions.forEach((s) => {
+        const row = document.createElement("div");
+        row.className = "roster-row";
+        const when = document.createElement("span");
+        const dt = new Date(s.updated_at);
+        when.textContent = isNaN(dt.getTime()) ? s.updated_at : dt.toLocaleString();
+        const who = document.createElement("span");
+        who.className = "person-name";
+        who.textContent = s.supervisor || `${s.participant_count} present`;
+        const status = document.createElement("span");
+        status.className = "pill" + (s.finalized ? "" : " none");
+        status.textContent = s.finalized ? "finalized" : "draft";
+        const open = document.createElement("button");
+        open.type = "button";
+        open.className = "ghost";
+        open.textContent = "Open";
+        open.onclick = () => openSession(s.session_id);
+        row.appendChild(when);
+        row.appendChild(who);
+        row.appendChild(status);
+        row.appendChild(open);
+        root.appendChild(row);
+      });
+    }
+
+    async function loadRecentSessions() {
+      try {
+        const sessions = await api("/sessions");
+        renderRecentSessions(sessions);
+      } catch {
+        /* ignore — recent sessions is a convenience, not required to use the app */
+      }
+    }
+
+    async function openSession(sessionId) {
+      try {
+        const data = await api(`/sessions/${sessionId}`);
+        renderReview(data);
+        $("btn-finalize").disabled = !!data.finalized;
+        setStatus(
+          $("review-status"),
+          data.finalized ? "This session is already finalized." : "",
+          data.finalized ? "ok" : ""
+        );
+      } catch (e) {
+        setStatus($("capture-status"), e.message, "error");
+      }
     }
 
     function workspaceErrorMessage(code) {
@@ -899,6 +1030,8 @@
         `Session ${draft.session_id.slice(0, 8)}… · ${draft.capture_mode || draft.modality} · ASR=${state.asr} · LLM=${state.llm}${vaTxt}`;
       $("note-preview").textContent = draft.note;
       $("guidance").value = draft.fields.guidance_given || "";
+      $("risk-ethics").value = draft.fields.risk_ethics_flags || "";
+      $("plan-next").value = draft.fields.plan_next || "";
 
       const vw = $("vignette-warn");
       if (draft.used_vignette) {
@@ -957,6 +1090,8 @@
       return {
         speaker_map,
         guidance_given: $("guidance").value.trim() || undefined,
+        risk_ethics_flags: $("risk-ethics").value.trim() || undefined,
+        plan_next: $("plan-next").value.trim() || undefined,
       };
     }
 
@@ -981,6 +1116,7 @@
           await loadProviderModes();
           await loadClinicians();
           await loadWorkspaceStatus();
+          await loadRecentSessions();
           show("capture-panel");
         } catch (e) {
           setStatus($("auth-status"), e.message, "error");
@@ -1104,6 +1240,7 @@
       }
       setStatus($("capture-status"), "Draft ready", "ok");
       renderReview(data);
+      loadRecentSessions();
     }
 
     function micErrorMessage(err) {
@@ -1239,9 +1376,33 @@
         });
         setStatus($("capture-status"), "Draft ready", "ok");
         renderReview(data);
+        loadRecentSessions();
       } catch (e) {
         setStatus($("capture-status"), e.message, "error");
       }
+    };
+
+    $("btn-copy-note").onclick = async () => {
+      const text = $("note-preview").textContent || "";
+      try {
+        await navigator.clipboard.writeText(text);
+        setStatus($("review-status"), "Note copied to clipboard.", "ok");
+      } catch (e) {
+        setStatus($("review-status"), "Could not copy: " + e.message, "error");
+      }
+    };
+
+    $("btn-download-note").onclick = () => {
+      const text = $("note-preview").textContent || "";
+      const blob = new Blob([text], { type: "text/plain" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `clynotion_note_${(state.sessionId || "session").slice(0, 8)}.txt`;
+      document.body.appendChild(a);
+      a.click();
+      a.remove();
+      URL.revokeObjectURL(url);
     };
 
     $("btn-finalize").onclick = async () => {
@@ -1259,6 +1420,7 @@
           "ok"
         );
         $("btn-finalize").disabled = true;
+        loadRecentSessions();
       } catch (e) {
         if (e.payload && e.payload.detail && e.payload.detail.unmapped) {
           $("unmap-warn").classList.remove("hidden");

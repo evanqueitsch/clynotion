@@ -9,10 +9,17 @@ COPY requirements.txt ./
 RUN .venv/bin/pip install --no-cache-dir -r requirements.txt
 
 FROM python:3.12-slim
+# Fail-closed real-PHI defaults (v0.7.0): production image refuses MOCK ASR/LLM and
+# requires encryption/JWT/vendor secrets at boot (see app/config.py validate_startup_secrets).
+# Override ATTUNE_MODE=mock only for a throwaway synthetic-data demo deploy.
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PATH="/app/.venv/bin:$PATH" \
-    ATTUNE_MODE=mock \
+    ATTUNE_MODE=real \
+    ATTUNE_ASR=deepgram \
+    ATTUNE_LLM=anthropic \
+    ATTUNE_PERSISTENCE=file \
+    ATTUNE_SESSION_DATA_PATH=/data/sessions.enc \
     ATTUNE_CLINICIAN_PERSISTENCE=file \
     ATTUNE_CLINICIAN_DATA_PATH=/data/clinicians.enc \
     ATTUNE_WORKSPACE_TOKEN_PATH=/data/workspace_tokens.enc

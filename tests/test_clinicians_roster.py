@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.audit import audit_log
 from app.auth import issue_token, user_store
-from app.clinicians import clinician_store
+from app.clinicians import clinician_store, install_test_fixtures
 from app.main import app
 from app.pipeline import draft_from_transcript
 from app.roster import reconcile_with_roster
@@ -24,6 +24,7 @@ def _clean():
     audit_log.clear()
     store.clear()
     clinician_store.reset()
+    install_test_fixtures()
     yield
     audit_log.clear()
     store.clear()
