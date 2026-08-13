@@ -14,6 +14,7 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from app.attune.routes import router as attune_router
 from app.audit import AuditAction, AuditReason, audit_log
 from app.auth import (
     COOKIE_NAME,
@@ -79,10 +80,11 @@ validate_startup_secrets()
 _STATIC = Path(__file__).resolve().parent / "static"
 
 app = FastAPI(
-    title="Attune — Clynotion",
-    description="Clinical supervision capture and notes (Phase 1 / 1b)",
+    title="Attune",
+    description="Practice product — Clynotion supervision capture is the first tool",
     version=APP_VERSION,
 )
+app.include_router(attune_router)
 
 _UPLOAD_ROOT = Path(tempfile.gettempdir()) / "clynotion_uploads"
 _UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
@@ -237,6 +239,7 @@ def health() -> dict[str, Any]:
         "auth": auth_mode(),
         "product": "attune",
         "tool": "clynotion",
+        "shell": "attune",
         "modality": "supervision",
         "mode": modes["mode"],
         "phi_path": modes["phi_path"],

@@ -356,6 +356,13 @@
       font-weight: 500;
       cursor: pointer;
     }
+    .tool-card {
+      border: 1px solid var(--line);
+      border-radius: 14px;
+      background: rgba(255, 255, 255, 0.55);
+      padding: 1rem 1.1rem 1.15rem;
+      margin: 0.75rem 0 0.25rem;
+    }
     footer {
       margin-top: 1.5rem;
       font-size: 0.8rem;
@@ -368,8 +375,8 @@
   <main>
     <div class="topbar">
       <div>
-        <h1 class="brand">Clynotion</h1>
-        <p class="tagline">Capture clinical supervision. Map voices to clinicians. Finalize the note.</p>
+        <h1 class="brand">Attune</h1>
+        <p class="tagline">Practice tools for clinical teams. Clynotion captures supervision notes.</p>
       </div>
       <div class="topbar-user hidden" id="topbar-user">
         <span class="who" id="signed-in-as"></span>
@@ -397,10 +404,24 @@
       <p class="status" id="auth-status"></p>
     </section>
 
+    <section id="home-panel" class="panel hidden">
+      <h2 id="home-practice-name">Your practice</h2>
+      <p class="meta" id="home-blurb">Attune is the practice product. Open a tool to continue.</p>
+      <div class="tool-card" id="tool-clynotion">
+        <h3 style="font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;">Clynotion</h3>
+        <p class="meta" style="margin-bottom:0.85rem;">Clinical supervision capture — who’s present, session surface, review, finalize.</p>
+        <button class="primary" id="btn-open-clynotion" type="button">Open Clynotion</button>
+      </div>
+      <p class="status" id="home-status"></p>
+    </section>
+
     <section id="capture-panel" class="panel hidden">
-      <h2>Start session</h2>
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">Clynotion · Start session</h2>
+        <button class="ghost" id="btn-back-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Attune home</button>
+      </div>
       <div id="provider-banner" class="warn hidden"></div>
-      <p class="meta">Mark who’s present, then capture. Meeting bot stays stubbed until BAAs.</p>
+      <p class="meta">Mark who’s present, then capture on the session surface. Meeting bot is deferred.</p>
 
       <div class="mode-row">
         <label><input type="radio" name="capture-mode" value="session_surface" checked /> Session surface</label>
@@ -471,7 +492,7 @@
       <p class="status" id="review-status"></p>
     </section>
 
-    <footer>Attune · Clynotion Phase 1b · who’s present + voice stub · audio deleted on finalize</footer>
+    <footer>Attune · Clynotion is the first tool · audio deleted on finalize</footer>
   </main>
   <script>
     const state = {
@@ -689,24 +710,25 @@
         state.user = me;
         setSignedInChrome(me);
         setStatus($("auth-status"), `Signed in as ${me.email || me.username}`, "ok");
-        await loadProviderModes();
-        await loadClinicians();
-        await loadWorkspaceStatus();
-        await loadRecentSessions();
-        const dirMsg = directoryBannerMessage();
-        if (dirMsg) setStatus($("workspace-status"), dirMsg.text, dirMsg.kind);
-        show("capture-panel");
         const params = new URLSearchParams(window.location.search);
         const dirOk = params.get("directory") === "connected" || params.get("directory") === "mock_ready";
+        const wantClynotion = window.location.hash === "#clynotion" || dirOk;
         if (window.location.search.includes("auth_error=") || window.location.search.includes("directory")) {
-          window.history.replaceState({}, "", "/");
+          window.history.replaceState({}, "", wantClynotion ? "/#clynotion" : "/");
         }
-        if (dirOk) {
-          try {
-            await loadWorkspaceUsers();
-          } catch (e) {
-            setStatus($("workspace-status"), workspaceErrorMessage(e.message), "error");
+        if (wantClynotion) {
+          await openClynotion();
+          const dirMsg = directoryBannerMessage();
+          if (dirMsg) setStatus($("workspace-status"), dirMsg.text, dirMsg.kind);
+          if (dirOk) {
+            try {
+              await loadWorkspaceUsers();
+            } catch (e) {
+              setStatus($("workspace-status"), workspaceErrorMessage(e.message), "error");
+            }
           }
+        } else {
+          await enterAttuneHome();
         }
         return;
       } catch {
@@ -715,9 +737,37 @@
     }
 
     function show(panel) {
-      ["auth-panel", "capture-panel", "review-panel"].forEach((id) => {
+      ["auth-panel", "home-panel", "capture-panel", "review-panel"].forEach((id) => {
         $(id).classList.toggle("hidden", id !== panel);
       });
+    }
+
+    async function enterAttuneHome() {
+      try {
+        const home = await api("/attune/home");
+        const nameEl = $("home-practice-name");
+        if (nameEl) nameEl.textContent = home.practice.display_name || "Your practice";
+        const blurb = $("home-blurb");
+        if (blurb) {
+          blurb.textContent =
+            home.note ||
+            "Attune is the practice product. Open Clynotion to capture supervision.";
+        }
+        show("home-panel");
+      } catch (e) {
+        setStatus($("home-status") || $("auth-status"), e.message, "error");
+        show("capture-panel");
+      }
+    }
+
+    async function openClynotion() {
+      await loadProviderModes();
+      await loadClinicians();
+      await loadWorkspaceStatus();
+      show("capture-panel");
+      if (window.location.hash !== "#clynotion") {
+        window.history.replaceState({}, "", "/#clynotion");
+      }
     }
 
     function selectedCaptureMode() {
@@ -1113,14 +1163,22 @@
             setSignedInChrome({ username: $("username").value });
           }
           setStatus($("auth-status"), "Signed in", "ok");
-          await loadProviderModes();
-          await loadClinicians();
-          await loadWorkspaceStatus();
-          await loadRecentSessions();
-          show("capture-panel");
+          await enterAttuneHome();
         } catch (e) {
           setStatus($("auth-status"), e.message, "error");
         }
+      };
+    }
+
+    const btnOpenClynotion = $("btn-open-clynotion");
+    if (btnOpenClynotion) {
+      btnOpenClynotion.onclick = () => { openClynotion(); };
+    }
+    const btnBackHome = $("btn-back-home");
+    if (btnBackHome) {
+      btnBackHome.onclick = () => {
+        window.history.replaceState({}, "", "/");
+        enterAttuneHome();
       };
     }
 

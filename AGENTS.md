@@ -1,14 +1,20 @@
 # Attune / Clynotion — agent notes
 
-**Attune** = practice product. **Clynotion** = capture + clinical supervision notes tool inside Attune.
+**Attune** = practice product (multi-tenant shell). **Clynotion** = capture + clinical supervision notes tool inside Attune.
+
+## Layout
+
+- `app/attune/` — practice registry + shell APIs (`/attune/home`, `/attune/practice`)
+- `app/` — Clynotion capture pipeline, roster, providers (moving into `app/clynotion/` later)
+- UI: Attune home → Open Clynotion (`/#clynotion`)
 
 ## Stack
 
 - Python 3.11+ / FastAPI / Pydantic v2
-- MOCK ASR + LLM by default (no API keys required)
-- Opt-in: Deepgram ASR, Anthropic/OpenAI LLM via `env.local`
+- Production Fly image: `ATTUNE_MODE=real` + Deepgram/Anthropic (fail-closed; no vignette)
+- Tests/smoke: `ATTUNE_MODE=mock`
 - Local voice enroll/match (no third-party biometrics network)
-- UI: `app/static/index.html` served at `/`
+- Meeting bot: stubbed / deferred
 
 ## Commands
 
