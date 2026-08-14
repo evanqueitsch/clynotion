@@ -11,7 +11,9 @@ Historical name “Attune” referred to the same product before the domain deci
 - `app/comply/` — OPS-2 seeded compliance clocks → due engine
 - `app/ingest/` — SimplePractice CSV ingest (documentation reports; demographics deferred)
 - `app/` — supervision capture pipeline, roster, providers
-- UI: Home (pulse / attention / overdue / this week / tools) → Supervision, Compliance, Ingest
+- `app/grow/` — OPS-3 intake log (case codes only) → due engine access clocks
+- `app/eligibility/` — OPS-5 eligibility checks (mock/manual; live adapters deferred)
+- UI: Home + Supervision, Compliance, Ingest, Intake, Eligibility
 
 ## Stack
 
