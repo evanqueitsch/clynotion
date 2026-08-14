@@ -19,8 +19,8 @@ def test_due_file_persistence_roundtrip(tmp_path: Path, monkeypatch: pytest.Monk
     engine.upsert(
         practice_id="practice-a",
         domain="comply",
-        source="ops2",
-        title="o1: Exclusion screening",
+        source="compliance_registry",
+        title="Exclusion screening — all staff, contractors, vendors",
         owner_user_id="user-alice",
         due_at="2026-08-20T00:00:00+00:00",
         href="/#comply",

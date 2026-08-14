@@ -1,5 +1,14 @@
-"""COMPLY domain package (OPS-2 credentialing / compliance registry)."""
+"""Clinical · Compliance registry (calendar clocks → due engine)."""
 
-from app.comply.registry import SEEDED_CLOCKS, ensure_seeded_clocks, list_seed_catalog
+from app.comply.registry import ensure_seeded_clocks, list_seed_catalog
+from app.platform.catalog import COMPLIANCE_CLOCKS
 
-__all__ = ["SEEDED_CLOCKS", "ensure_seeded_clocks", "list_seed_catalog"]
+# Back-compat alias
+SEEDED_CLOCKS = COMPLIANCE_CLOCKS
+
+__all__ = [
+    "COMPLIANCE_CLOCKS",
+    "SEEDED_CLOCKS",
+    "ensure_seeded_clocks",
+    "list_seed_catalog",
+]

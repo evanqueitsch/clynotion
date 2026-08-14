@@ -414,6 +414,22 @@
       background: rgba(255,255,255,0.5);
     }
     .pulse-chip strong { color: var(--ink); font-weight: 600; }
+    .unit-block { margin: 1rem 0 1.25rem; }
+    .unit-block h3 {
+      font-family: Fraunces, Georgia, serif;
+      font-weight: 500;
+      font-size: 1.15rem;
+      margin: 0 0 0.25rem;
+    }
+    .unit-block > .meta { margin-bottom: 0.55rem; }
+    .tool-card.planned { opacity: 0.72; }
+    .tool-card .planned-tag {
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--warn);
+      letter-spacing: 0.03em;
+      text-transform: uppercase;
+    }
     footer {
       margin-top: 1.5rem;
       font-size: 0.8rem;
@@ -476,32 +492,8 @@
       </div>
       <p class="meta hidden" id="home-due-empty">Nothing due. Open a tool when you’re ready.</p>
 
-      <span class="section-label" style="margin-top:1rem;">Tools</span>
-      <div class="tool-card" id="tool-supervision">
-        <h3 style="font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;">Supervision notes</h3>
-        <p class="meta" style="margin-bottom:0.85rem;">Clinical supervision capture — who’s present, session surface, review, finalize.</p>
-        <button class="primary" id="btn-open-supervision" type="button">Open Supervision notes</button>
-      </div>
-      <div class="tool-card" id="tool-comply">
-        <h3 style="font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;">Compliance registry</h3>
-        <p class="meta" style="margin-bottom:0.85rem;">OPS-2 recurring clocks — exclusion screening, audits, BAA review, and more.</p>
-        <button class="primary" id="btn-open-comply" type="button">Open Compliance</button>
-      </div>
-      <div class="tool-card" id="tool-ingest">
-        <h3 style="font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;">SimplePractice ingest</h3>
-        <p class="meta" style="margin-bottom:0.85rem;">Upload weekly documentation CSVs. Idempotent; name columns are stripped.</p>
-        <button class="primary" id="btn-open-ingest" type="button">Open Ingest</button>
-      </div>
-      <div class="tool-card" id="tool-intake">
-        <h3 style="font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;">Intake log</h3>
-        <p class="meta" style="margin-bottom:0.85rem;">OPS-3 — stamp first contact with case codes only. Access clocks feed Home.</p>
-        <button class="primary" id="btn-open-intake" type="button">Open Intake</button>
-      </div>
-      <div class="tool-card" id="tool-eligibility">
-        <h3 style="font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;">Eligibility</h3>
-        <p class="meta" style="margin-bottom:0.85rem;">OPS-5 — append-only checks (mock/manual). Live payer adapters need BAAs.</p>
-        <button class="primary" id="btn-open-eligibility" type="button">Open Eligibility</button>
-      </div>
+      <span class="section-label" style="margin-top:1rem;">Business units</span>
+      <div id="home-units"></div>
       <p class="status" id="home-status"></p>
     </section>
 
@@ -510,7 +502,7 @@
         <h2 style="margin:0;">Compliance registry</h2>
         <button class="ghost" id="btn-comply-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
       </div>
-      <p class="meta">Seeded OPS-2 clocks write into the due engine. Mark done from Home or here — one click.</p>
+      <p class="meta">Recurring compliance clocks write into the due engine. Mark done from Home or here — one click. Authorities are listed under each item.</p>
       <div class="due-list" id="comply-catalog"></div>
       <p class="status" id="comply-status"></p>
     </section>
@@ -938,12 +930,69 @@
         renderPulse(home.pulse || {});
         renderAttention(home.attention || []);
         renderHomeBands(home.bands || { overdue: [], this_week: [] });
+        renderHomeUnits(home.units || []);
         show("home-panel");
         window.history.replaceState({}, "", "/");
       } catch (e) {
         setStatus($("home-status") || $("auth-status"), e.message, "error");
         show("capture-panel");
       }
+    }
+
+    function openToolByHref(href) {
+      if (!href) return;
+      if (href.includes("supervision")) return openSupervision();
+      if (href.includes("comply")) return openComply();
+      if (href.includes("ingest")) return openIngest();
+      if (href.includes("intake")) return openIntake();
+      if (href.includes("eligibility")) return openEligibility();
+      window.location.href = href;
+    }
+
+    function renderHomeUnits(units) {
+      const root = $("home-units");
+      if (!root) return;
+      root.innerHTML = "";
+      (units || []).forEach((unit) => {
+        const block = document.createElement("div");
+        block.className = "unit-block";
+        const h = document.createElement("h3");
+        h.textContent = unit.name;
+        const desc = document.createElement("p");
+        desc.className = "meta";
+        desc.textContent = unit.description || "";
+        block.appendChild(h);
+        block.appendChild(desc);
+        (unit.tools || []).forEach((tool) => {
+          const card = document.createElement("div");
+          card.className = "tool-card" + (tool.status === "planned" ? " planned" : "");
+          const title = document.createElement("h3");
+          title.style.cssText = "font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;";
+          title.textContent = tool.name;
+          const meta = document.createElement("p");
+          meta.className = "meta";
+          meta.style.marginBottom = "0.85rem";
+          meta.textContent = tool.description || "";
+          card.appendChild(title);
+          if (tool.status === "planned") {
+            const tag = document.createElement("div");
+            tag.className = "planned-tag";
+            tag.textContent = "Coming soon";
+            card.appendChild(tag);
+          }
+          card.appendChild(meta);
+          if (tool.status === "live" && tool.href) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "primary";
+            btn.textContent = `Open ${tool.name}`;
+            btn.onclick = () => openToolByHref(tool.href);
+            card.appendChild(btn);
+          }
+          block.appendChild(card);
+        });
+        root.appendChild(block);
+      });
     }
 
     function renderPulse(pulse) {
@@ -1095,7 +1144,7 @@
         }
         return;
       }
-      if ((ob.href || "").includes("comply") || ob.source === "ops2") {
+      if ((ob.href || "").includes("comply") || ob.source === "ops2" || ob.source === "compliance_registry") {
         await openComply();
         return;
       }
@@ -1133,16 +1182,19 @@
           const left = document.createElement("div");
           const title = document.createElement("span");
           title.className = "due-title";
-          title.textContent = `${c.code}: ${c.title}`;
+          title.textContent = c.title;
           const meta = document.createElement("span");
           meta.className = "due-meta";
-          meta.textContent = `every ${c.cadence_days}d · ${c.owner_role} · ${c.authority}`;
+          const auth = (c.authorities && c.authorities.length)
+            ? c.authorities.join("; ")
+            : (c.authority || "");
+          meta.textContent = `every ${c.cadence_days}d · ${c.owner_role}` + (auth ? ` · ${auth}` : "");
           left.appendChild(title);
           left.appendChild(meta);
           row.appendChild(left);
           root.appendChild(row);
         });
-        setStatus($("comply-status"), `${catalog.length} seeded clocks`, "ok");
+        setStatus($("comply-status"), `${catalog.length} compliance clocks`, "ok");
       } catch (e) {
         setStatus($("comply-status"), e.message, "error");
       }

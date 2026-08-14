@@ -136,20 +136,24 @@ class DueEngine:
         if existing_id and existing_id in self._by_id:
             ob = self._by_id[existing_id]
             # Don't reopen a completed seeded clock unless caller forces open.
-            if ob.status == "done" and status == "open" and source == "ops2":
+            if ob.status == "done" and status == "open" and source == "compliance_registry":
                 self._flush()
                 return ob
             ob.title = title
             ob.owner_user_id = owner_user_id
             if status == "open" and ob.status == "open":
-                # Keep existing due_at for ops2 seeds so weekly check is stable.
-                if source != "ops2":
+                # Keep existing due_at for compliance seeds so weekly check is stable.
+                if source != "compliance_registry":
                     ob.due_at = due_at
             else:
                 ob.due_at = due_at
             ob.href = href
             ob.domain = domain
-            if not (ob.status == "done" and source == "ops2" and status == "open"):
+            if not (
+                ob.status == "done"
+                and source == "compliance_registry"
+                and status == "open"
+            ):
                 ob.status = status
             ob.updated_at = now
             self._flush()

@@ -1,19 +1,22 @@
 # Clynotion — agent notes
 
 **Clynotion** is the practice product (multi-tenant shell + ops). Domain: clynotion.com.
-**Supervision notes** is the first tool inside it (clinical supervision capture).
+
+Organize work by **business unit** (Clinical Tools, HR, Marketing, Finance, Technology) —
+not by OPS-/CLY- prefixes. Those codes are legacy aliases only; see
+`docs/item-authority-crosswalk.md` and `app/platform/catalog.py`.
 
 Historical name “Attune” referred to the same product before the domain decision; prefer Clynotion everywhere user-facing. Env vars still use the `ATTUNE_*` prefix for deploy compatibility.
 
 ## Layout
 
-- `app/platform/` — practice registry, due engine (+ encrypted persist), shell APIs
-- `app/comply/` — OPS-2 seeded compliance clocks → due engine
+- `app/platform/` — practice registry, due engine, **catalog / crosswalk**, shell APIs
+- `app/comply/` — compliance registry clocks → due engine
 - `app/ingest/` — SimplePractice CSV ingest (documentation reports; demographics deferred)
+- `app/grow/` — intake log (case codes only) → due engine access clocks
+- `app/eligibility/` — eligibility checks (mock/manual; live adapters deferred)
 - `app/` — supervision capture pipeline, roster, providers
-- `app/grow/` — OPS-3 intake log (case codes only) → due engine access clocks
-- `app/eligibility/` — OPS-5 eligibility checks (mock/manual; live adapters deferred)
-- UI: Home + Supervision, Compliance, Ingest, Intake, Eligibility
+- UI: Home by business unit + Supervision, Compliance, Ingest, Intake, Eligibility
 
 ## Stack
 

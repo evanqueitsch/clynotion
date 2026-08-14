@@ -53,12 +53,20 @@ def test_home_returns_tools_pulse_and_seeded_comply(client: TestClient) -> None:
     body = r.json()
     assert body["product"] == "clynotion"
     tool_ids = {t["id"] for t in body["tools"]}
-    assert {"supervision", "comply", "ingest"} <= tool_ids
+    assert {
+        "supervision_notes",
+        "compliance_registry",
+        "intake_log",
+        "eligibility",
+        "sp_ingest",
+    } <= tool_ids
+    unit_names = {u["name"] for u in body["units"]}
+    assert "Clinical Tools" in unit_names
+    assert "Technology" in unit_names
     assert "pulse" in body
     assert body["pulse"]["open_obligations"] >= 1
-    # OPS-2 seeds + stale documentation ingest land on Home
     titles = [o["title"] for o in body["bands"]["overdue"] + body["bands"]["this_week"]]
-    assert any(t.startswith("o5:") for t in titles) or any(
+    assert any("Unsigned note sweep" in t for t in titles) or any(
         "documentation" in t.lower() for t in titles
     )
 
@@ -69,9 +77,9 @@ def test_complete_obligation_one_click(client: TestClient) -> None:
     items = [
         o
         for o in home["bands"]["overdue"] + home["bands"]["this_week"]
-        if o["source"] == "ops2" and o["source_ref"] == "o5"
+        if o["source"] == "compliance_registry" and o["source_ref"] == "o5"
     ]
-    assert items, "expected seeded o5 clock on Home"
+    assert items, "expected seeded unsigned-note sweep clock on Home"
     oid = items[0]["obligation_id"]
     done = client.post(f"/due/{oid}/complete", headers=_auth("alice"))
     assert done.status_code == 200, done.text
@@ -82,9 +90,8 @@ def test_complete_obligation_one_click(client: TestClient) -> None:
         for o in home2["bands"]["overdue"] + home2["bands"]["this_week"]
     }
     assert oid not in open_ids
-    # Completed OPS-2 clocks must not be re-seeded open on the next Home load.
     assert not any(
-        o["source"] == "ops2" and o["source_ref"] == "o5"
+        o["source"] == "compliance_registry" and o["source_ref"] == "o5"
         for o in home2["bands"]["overdue"] + home2["bands"]["this_week"]
     )
 
@@ -208,8 +215,22 @@ def test_due_items_are_practice_scoped(client: TestClient) -> None:
 
 def test_health_version(client: TestClient) -> None:
     body = client.get("/health").json()
-    assert body["version"] == "0.11.0"
-    assert body["product"] == "clynotion"
+    assert body["version"] == "0.12.0"
+
+
+def test_catalog_crosswalk_has_authorities(client: TestClient) -> None:
+    catalog = client.get("/catalog", headers=_auth("alice"))
+    assert catalog.status_code == 200
+    units = catalog.json()
+    assert any(u["name"] == "Clinical Tools" for u in units)
+    xwalk = client.get("/catalog/crosswalk", headers=_auth("alice"))
+    assert xwalk.status_code == 200
+    rows = xwalk.json()
+    exclusion = next(r for r in rows if r["id"] == "exclusion_screening")
+    assert "42 CFR 455.436" in exclusion["authorities"]
+    assert "OPS-2" in exclusion["legacy_ids"]
+    # User-facing names must not be OPS-prefixed
+    assert not any(r["name"].startswith("OPS-") for r in rows)
 
 
 def test_legacy_attune_home_still_works(client: TestClient) -> None:

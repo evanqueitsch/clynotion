@@ -12,6 +12,7 @@ from app.comply.registry import ensure_seeded_clocks, list_seed_catalog
 from app.eligibility.service import eligibility_store
 from app.grow.intake import intake_store
 from app.ingest.sp_csv import ingest_store, reconcile_stale_ingest
+from app.platform.catalog import catalog_by_unit, crosswalk_rows, live_tools
 from app.platform.due import due_engine, reconcile_supervision_drafts
 from app.platform.practices import practice_store
 from app.platform.schemas import (
@@ -145,37 +146,15 @@ def _home_payload(user: CurrentUser) -> HomeOut:
         overdue=[_obligation_out(o) for o in bands_raw["overdue"]],
         this_week=[_obligation_out(o) for o in bands_raw["this_week"]],
     )
+    units = catalog_by_unit(include_planned=True)
     tools = [
         {
-            "id": "supervision",
-            "name": "Supervision notes",
-            "href": "/#supervision",
-            "description": "Clinical supervision capture and notes",
-        },
-        {
-            "id": "comply",
-            "name": "Compliance registry",
-            "href": "/#comply",
-            "description": "OPS-2 recurring clocks and credentialing calendar",
-        },
-        {
-            "id": "ingest",
-            "name": "SimplePractice ingest",
-            "href": "/#ingest",
-            "description": "Upload weekly/monthly SP CSV reports",
-        },
-        {
-            "id": "intake",
-            "name": "Intake log",
-            "href": "/#intake",
-            "description": "OPS-3 access-standard timestamps (case codes only)",
-        },
-        {
-            "id": "eligibility",
-            "name": "Eligibility",
-            "href": "/#eligibility",
-            "description": "OPS-5 eligibility checks (mock/manual; live adapters deferred)",
-        },
+            "id": t["id"],
+            "name": t["name"],
+            "href": t["href"],
+            "description": t["description"],
+        }
+        for t in live_tools()
     ]
     return HomeOut(
         user_id=user.user_id,
@@ -183,12 +162,13 @@ def _home_payload(user: CurrentUser) -> HomeOut:
         email=user.email,
         practice=PracticeOut.model_validate(practice.to_public_dict()),
         tools=tools,
+        units=units,
         bands=bands,
         attention=_build_attention(user.practice_id),
         pulse=_build_pulse(user.practice_id),
         note=(
-            "Clynotion home — due items from every domain land here. "
-            "Two-minute week: clear what's due, act on exceptions, close."
+            "Clynotion home — organized by business unit. "
+            "Due items from every unit land above. Two-minute week: clear, act, close."
         ),
     )
 
@@ -233,6 +213,20 @@ def complete_obligation(obligation_id: str, user: CurrentUser) -> ObligationOut:
 def comply_catalog(user: CurrentUser) -> list[ComplyCatalogItemOut]:
     _ = user
     return [ComplyCatalogItemOut.model_validate(row) for row in list_seed_catalog()]
+
+
+@router.get("/catalog")
+def product_catalog(user: CurrentUser) -> list[dict]:
+    """Business units → tools (planned + live). Plain names; legacy ids in payload."""
+    _ = user
+    return catalog_by_unit(include_planned=True)
+
+
+@router.get("/catalog/crosswalk")
+def product_crosswalk(user: CurrentUser) -> list[dict]:
+    """Flat master list: item → authorities (+ legacy aliases)."""
+    _ = user
+    return crosswalk_rows()
 
 
 @router.post("/comply/seed", response_model=dict)

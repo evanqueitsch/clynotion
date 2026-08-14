@@ -61,6 +61,7 @@ class HomeOut(BaseModel):
     email: str = ""
     practice: PracticeOut
     tools: list[dict[str, str]] = Field(default_factory=list)
+    units: list[dict[str, Any]] = Field(default_factory=list)
     bands: HomeBandsOut = Field(default_factory=HomeBandsOut)
     attention: list[AttentionItemOut] = Field(default_factory=list)
     pulse: PulseOut = Field(default_factory=PulseOut)
@@ -87,11 +88,13 @@ class IngestUploadBody(BaseModel):
 
 
 class ComplyCatalogItemOut(BaseModel):
-    code: str
+    id: str = ""
+    code: str = ""
     title: str
     cadence_days: int
     owner_role: str
-    authority: str
+    authority: str = ""
+    authorities: list[str] = Field(default_factory=list)
 
 
 class IntakeCreateBody(BaseModel):
