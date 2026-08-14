@@ -23,6 +23,8 @@ class ObligationOut(BaseModel):
     obligation_id: str
     practice_id: str
     domain: str
+    unit_id: str = "clinical"
+    unit_name: str = "Clinical Tools"
     source: str
     title: str
     owner_user_id: str
@@ -79,6 +81,7 @@ class IngestUploadOut(BaseModel):
     status: str
     error_code: str = ""
     unsigned_aging_count: int = 0
+    metrics: dict[str, Any] = Field(default_factory=dict)
 
 
 class IngestUploadBody(BaseModel):

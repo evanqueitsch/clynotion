@@ -12,11 +12,11 @@ Historical name “Attune” referred to the same product before the domain deci
 
 - `app/platform/` — practice registry, due engine, **catalog / crosswalk**, shell APIs
 - `app/comply/` — compliance registry clocks + **per-clinician credential clocks** → due engine
-- `app/ingest/` — SimplePractice CSV ingest (documentation reports; demographics deferred)
+- `app/ingest/` — SimplePractice CSV ingest (documentation, attendance, billing; demographics deferred)
 - `app/grow/` — intake log (case codes only) → due engine access clocks
 - `app/eligibility/` — eligibility checks (mock/manual; live adapters deferred)
 - `app/` — supervision capture pipeline, roster, providers
-- UI: Home by business unit + Supervision, Compliance, Ingest, Intake, Eligibility
+- UI: Home due bands grouped by business unit + Supervision, Compliance, Ingest, Intake, Eligibility
 
 ## Stack
 

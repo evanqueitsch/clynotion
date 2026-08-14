@@ -1,0 +1,5 @@
+claim_id,Payer,Charged,Paid,service_date
+cl-1,PerformCare,150.00,120.00,2026-08-01
+cl-2,PerformCare,150.00,0.00,2026-08-02
+cl-3,Highmark,200.00,180.00,2026-08-02
+cl-4,Self-Pay,100.00,100.00,2026-08-03

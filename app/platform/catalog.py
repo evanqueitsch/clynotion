@@ -124,7 +124,7 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
         "kind": "tool",
         "status": "live",
         "href": "/#ingest",
-        "description": "Batched SP CSV uploads (documentation reports). No scrape, no SP API.",
+        "description": "Batched SP CSV uploads (documentation, attendance, billing). No scrape, no SP API.",
         "legacy_ids": ["Platform · Ingest"],
         "authorities": _auth(
             "55 Pa. Code 1101.51(e)(1)(iii) — unsigned note aging (via documentation report)",
@@ -530,3 +530,17 @@ def clock_by_code(code: str) -> Optional[dict[str, Any]]:
         if c["code"] == code:
             return c
     return None
+
+
+# Due-engine domain → business unit (Home grouping)
+DOMAIN_TO_UNIT: dict[str, tuple[str, str]] = {
+    "comply": ("clinical", "Clinical Tools"),
+    "people": ("clinical", "Clinical Tools"),
+    "grow": ("clinical", "Clinical Tools"),
+    "platform": ("technology", "Technology"),
+    "books": ("finance", "Finance"),
+}
+
+
+def unit_for_domain(domain: str) -> tuple[str, str]:
+    return DOMAIN_TO_UNIT.get(domain, ("technology", "Technology"))
