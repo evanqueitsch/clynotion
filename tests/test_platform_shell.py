@@ -19,6 +19,8 @@ from app.platform.practices import practice_store
 from app.store import store
 
 FIXTURE_DOC = Path(__file__).resolve().parents[1] / "docs/fixtures/sp_documentation_sample.csv"
+FIXTURE_ATTENDANCE = Path(__file__).resolve().parents[1] / "docs/fixtures/sp_attendance_sample.csv"
+FIXTURE_BILLING = Path(__file__).resolve().parents[1] / "docs/fixtures/sp_billing_sample.csv"
 
 
 @pytest.fixture(autouse=True)
@@ -218,7 +220,62 @@ def test_due_items_are_practice_scoped(client: TestClient) -> None:
 
 def test_health_version(client: TestClient) -> None:
     body = client.get("/health").json()
-    assert body["version"] == "0.13.0"
+    assert body["version"] == "0.14.0"
+
+
+def test_home_obligations_include_unit_labels(client: TestClient) -> None:
+    home = client.get("/home", headers=_auth("alice")).json()
+    items = home["bands"]["overdue"] + home["bands"]["this_week"]
+    assert items
+    for ob in items:
+        assert ob.get("unit_id")
+        assert ob.get("unit_name")
+
+
+def test_attendance_ingest_metrics(client: TestClient) -> None:
+    csv_text = FIXTURE_ATTENDANCE.read_text(encoding="utf-8")
+    r = client.post(
+        "/ingest/upload",
+        headers=_auth("alice"),
+        json={"report_type": "attendance", "csv_text": csv_text},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["row_count"] == 5
+    assert body["metrics"]["sessions_total"] == 5
+    assert body["metrics"]["clinician_count"] == 3
+    assert body["metrics"]["by_clinician"]["Alex Rivera"] == 2
+    assert "Client" not in str(body["metrics"])
+
+
+def test_billing_ingest_metrics(client: TestClient) -> None:
+    csv_text = FIXTURE_BILLING.read_text(encoding="utf-8")
+    r = client.post(
+        "/ingest/upload",
+        headers=_auth("alice"),
+        json={"report_type": "billing", "csv_text": csv_text},
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["status"] == "ok"
+    assert body["row_count"] == 4
+    assert body["metrics"]["claims_total"] == 4
+    assert body["metrics"]["charged_total"] == 600.0
+    assert body["metrics"]["paid_total"] == 400.0
+    assert body["metrics"]["balance_total"] == 200.0
+    assert body["metrics"]["by_payer"]["PerformCare"] == 2
+
+
+def test_documentation_ingest_exposes_metrics(client: TestClient) -> None:
+    csv_text = FIXTURE_DOC.read_text(encoding="utf-8")
+    r = client.post(
+        "/ingest/upload",
+        headers=_auth("alice"),
+        json={"report_type": "documentation", "csv_text": csv_text},
+    )
+    assert r.status_code == 200, r.text
+    assert r.json()["metrics"]["unsigned_aging"] == 2
 
 
 def test_catalog_crosswalk_has_authorities(client: TestClient) -> None:

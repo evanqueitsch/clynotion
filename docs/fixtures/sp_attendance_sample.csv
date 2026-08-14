@@ -1,0 +1,6 @@
+appointment_id,Clinician,Status,service_date
+apt-a1,Alex Rivera,Show,2026-08-01
+apt-a2,Alex Rivera,No-Show,2026-08-02
+apt-a3,Blake Chen,Show,2026-08-02
+apt-a4,Blake Chen,Show,2026-08-03
+apt-a5,Casey Ng,Cancelled,2026-08-03

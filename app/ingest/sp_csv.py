@@ -75,6 +75,7 @@ class IngestUpload:
     error_code: str = ""
     unsigned_aging_count: int = 0
     column_map: dict[str, str] = field(default_factory=dict)
+    metrics: dict[str, Any] = field(default_factory=dict)
 
     def to_public_dict(self) -> dict[str, Any]:
         return {
@@ -88,6 +89,7 @@ class IngestUpload:
             "status": self.status,
             "error_code": self.error_code,
             "unsigned_aging_count": self.unsigned_aging_count,
+            "metrics": dict(self.metrics),
         }
 
 
@@ -146,6 +148,7 @@ class IngestStore:
                     error_code=str(item.get("error_code") or ""),
                     unsigned_aging_count=int(item.get("unsigned_aging_count") or 0),
                     column_map=dict(item.get("column_map") or {}),
+                    metrics=dict(item.get("metrics") or {}),
                 )
             except (KeyError, TypeError, ValueError):
                 continue
@@ -160,6 +163,7 @@ class IngestStore:
             {
                 **u.to_public_dict(),
                 "column_map": u.column_map,
+                "metrics": u.metrics,
             }
             for u in self._uploads.values()
         ]
@@ -218,12 +222,15 @@ class IngestStore:
                 error_code="",
                 unsigned_aging_count=dup.unsigned_aging_count,
                 column_map=dict(dup.column_map),
+                metrics=dict(dup.metrics),
             )
 
         try:
-            row_count, unsigned_aging, resolved_map = _parse_documentation_csv(
-                csv_text, column_map=column_map or {}
-            ) if report_type == "documentation" else _parse_generic_csv(csv_text)
+            row_count, unsigned_aging, resolved_map, metrics = _parse_report_csv(
+                csv_text,
+                report_type=report_type,
+                column_map=column_map or {},
+            )
         except ValueError as e:
             up = IngestUpload(
                 upload_id=str(uuid4()),
@@ -252,6 +259,7 @@ class IngestStore:
             status="ok",
             unsigned_aging_count=unsigned_aging,
             column_map=resolved_map,
+            metrics=metrics,
         )
         self._uploads[up.upload_id] = up
         self._hash_index[(practice_id, report_type, digest)] = up.upload_id
@@ -276,23 +284,141 @@ def _normalize_header(h: str) -> str:
     return re.sub(r"[^a-z0-9]+", "_", h.strip().lower()).strip("_")
 
 
-def _parse_generic_csv(csv_text: str) -> tuple[int, int, dict[str, str]]:
+def _col(row: dict[str, str], headers: dict[str, str], *logical_names: str) -> str:
+    """Pick first matching header value (case-normalized). Never used for blocked cols."""
+    for name in logical_names:
+        key = _normalize_header(name)
+        raw_header = headers.get(key)
+        if raw_header and raw_header in row:
+            return str(row.get(raw_header) or "").strip()
+    return ""
+
+
+def _parse_money(raw: str) -> float:
+    cleaned = (raw or "").replace("$", "").replace(",", "").strip()
+    if not cleaned:
+        return 0.0
+    try:
+        return float(cleaned)
+    except ValueError:
+        return 0.0
+
+
+def _read_rows(csv_text: str) -> tuple[list[dict[str, str]], dict[str, str], list[str]]:
     reader = csv.DictReader(io.StringIO(csv_text))
     if not reader.fieldnames:
         raise ValueError("CSV has no header row")
-    for name in reader.fieldnames:
+    fieldnames = [h for h in reader.fieldnames if h]
+    headers = {_normalize_header(h): h for h in fieldnames}
+    rows = [{k: (v or "").strip() for k, v in row.items() if k} for row in reader]
+    return rows, headers, fieldnames
+
+
+def _parse_report_csv(
+    csv_text: str,
+    *,
+    report_type: str,
+    column_map: dict[str, str],
+) -> tuple[int, int, dict[str, str], dict[str, Any]]:
+    if report_type == "documentation":
+        return _parse_documentation_csv(csv_text, column_map=column_map)
+    if report_type == "attendance":
+        return _parse_attendance_csv(csv_text)
+    if report_type == "billing":
+        return _parse_billing_csv(csv_text)
+    return _parse_generic_csv(csv_text)
+
+
+def _parse_generic_csv(
+    csv_text: str,
+) -> tuple[int, int, dict[str, str], dict[str, Any]]:
+    rows, _headers, fieldnames = _read_rows(csv_text)
+    for name in fieldnames:
         if _BLOCKED_COLUMN_RE.search(name or ""):
-            # Count rows but do not keep blocked values — still allow attendance/billing counts.
+            # Count rows but never retain blocked column values.
             pass
-    rows = list(reader)
-    return len(rows), 0, {}
+    return len(rows), 0, {}, {"rows_total": len(rows)}
+
+
+def _parse_attendance_csv(
+    csv_text: str,
+) -> tuple[int, int, dict[str, str], dict[str, Any]]:
+    """Session counts by clinician/status — no client identifiers retained."""
+    rows, headers, fieldnames = _read_rows(csv_text)
+    for name in fieldnames:
+        if _BLOCKED_COLUMN_RE.search(name or "") and not re.search(
+            r"clinician|provider|therapist|staff", name or "", re.I
+        ):
+            # Client/patient name columns ignored entirely.
+            continue
+    by_clinician: dict[str, int] = {}
+    by_status: dict[str, int] = {}
+    for row in rows:
+        clinician = (
+            _col(row, headers, "Clinician", "Provider", "Therapist", "Staff")
+            or "Unassigned"
+        )
+        status = (
+            _col(row, headers, "Status", "Attendance", "Appt Status", "Appointment Status")
+            or "Unknown"
+        )
+        by_clinician[clinician] = by_clinician.get(clinician, 0) + 1
+        by_status[status] = by_status.get(status, 0) + 1
+    metrics: dict[str, Any] = {
+        "sessions_total": len(rows),
+        "clinician_count": len(by_clinician),
+        "by_clinician": dict(sorted(by_clinician.items(), key=lambda kv: (-kv[1], kv[0]))),
+        "by_status": dict(sorted(by_status.items(), key=lambda kv: (-kv[1], kv[0]))),
+    }
+    return len(rows), 0, {}, metrics
+
+
+def _parse_billing_csv(
+    csv_text: str,
+) -> tuple[int, int, dict[str, str], dict[str, Any]]:
+    """Claim/payment aggregates — payer labels only, no client identifiers."""
+    rows, headers, fieldnames = _read_rows(csv_text)
+    for name in fieldnames:
+        if _BLOCKED_COLUMN_RE.search(name or ""):
+            continue
+    by_payer: dict[str, int] = {}
+    charged = 0.0
+    paid = 0.0
+    for row in rows:
+        payer = (
+            _col(
+                row,
+                headers,
+                "Payer",
+                "Insurance",
+                "Primary Insurance",
+                "Payer Name",
+            )
+            or "Unknown"
+        )
+        by_payer[payer] = by_payer.get(payer, 0) + 1
+        charged += _parse_money(
+            _col(row, headers, "Amount", "Charged", "Fee", "Billed", "Charge")
+        )
+        paid += _parse_money(
+            _col(row, headers, "Paid", "Payment", "Amount Paid", "Received")
+        )
+    metrics: dict[str, Any] = {
+        "claims_total": len(rows),
+        "payer_count": len(by_payer),
+        "charged_total": round(charged, 2),
+        "paid_total": round(paid, 2),
+        "balance_total": round(charged - paid, 2),
+        "by_payer": dict(sorted(by_payer.items(), key=lambda kv: (-kv[1], kv[0]))),
+    }
+    return len(rows), 0, {}, metrics
 
 
 def _parse_documentation_csv(
     csv_text: str,
     *,
     column_map: dict[str, str],
-) -> tuple[int, int, dict[str, str]]:
+) -> tuple[int, int, dict[str, str], dict[str, Any]]:
     reader = csv.DictReader(io.StringIO(csv_text))
     if not reader.fieldnames:
         raise ValueError("CSV has no header row")
@@ -343,7 +469,11 @@ def _parse_documentation_csv(
             unsigned += 1
         elif is_unsigned and "age_hours" not in resolved:
             unsigned += 1
-    return count, unsigned, resolved
+    metrics: dict[str, Any] = {
+        "rows_total": count,
+        "unsigned_aging": unsigned,
+    }
+    return count, unsigned, resolved, metrics
 
 
 def _surface_ingest_failure(

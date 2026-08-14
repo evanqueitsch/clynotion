@@ -13,7 +13,7 @@ from app.comply.registry import ensure_seeded_clocks, list_seed_catalog
 from app.eligibility.service import eligibility_store
 from app.grow.intake import intake_store
 from app.ingest.sp_csv import ingest_store, reconcile_stale_ingest
-from app.platform.catalog import catalog_by_unit, crosswalk_rows, live_tools
+from app.platform.catalog import catalog_by_unit, crosswalk_rows, live_tools, unit_for_domain
 from app.platform.due import due_engine, reconcile_supervision_drafts
 from app.platform.practices import practice_store
 from app.platform.schemas import (
@@ -39,9 +39,13 @@ legacy = APIRouter(prefix="/attune", tags=["legacy"])
 
 
 def _obligation_out(ob) -> ObligationOut:
-    return ObligationOut.model_validate(
-        {k: v for k, v in ob.to_public_dict().items() if k in ObligationOut.model_fields}
-    )
+    unit_id, unit_name = unit_for_domain(str(ob.domain))
+    payload = {
+        k: v for k, v in ob.to_public_dict().items() if k in ObligationOut.model_fields
+    }
+    payload["unit_id"] = unit_id
+    payload["unit_name"] = unit_name
+    return ObligationOut.model_validate(payload)
 
 
 def _build_attention(practice_id: str) -> list[AttentionItemOut]:

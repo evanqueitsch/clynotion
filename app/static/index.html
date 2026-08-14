@@ -364,6 +364,15 @@
       margin: 0.75rem 0 0.25rem;
     }
     .home-band { margin: 0.85rem 0 0.35rem; }
+    .band-unit-label {
+      font-size: 0.72rem;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 0.55rem 0 0.15rem;
+    }
+    .band-unit-label:first-child { margin-top: 0.1rem; }
     .due-list {
       display: grid;
       gap: 0.35rem;
@@ -538,11 +547,17 @@
         <h2 style="margin:0;">SimplePractice ingest</h2>
         <button class="ghost" id="btn-ingest-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
       </div>
-      <p class="meta">Paste a documentation report CSV (headers: appointment_id, documentation_status or signed, age_hours). Client name columns are never stored.</p>
+      <p class="meta">Paste a SimplePractice CSV. Client/patient name columns are never stored — only aggregates and allowed IDs.</p>
+      <label for="ingest-report-type">Report type</label>
+      <select id="ingest-report-type">
+        <option value="documentation">Documentation (unsigned aging)</option>
+        <option value="attendance">Attendance (sessions by clinician)</option>
+        <option value="billing">Billing (claims / payments)</option>
+      </select>
       <label for="ingest-csv">CSV</label>
       <textarea id="ingest-csv" placeholder="appointment_id,documentation_status,signed,age_hours&#10;apt-1,unsigned,false,96"></textarea>
       <div class="row">
-        <button class="primary" id="btn-ingest-upload" type="button">Upload documentation report</button>
+        <button class="primary" id="btn-ingest-upload" type="button">Upload report</button>
       </div>
       <p class="status" id="ingest-status"></p>
       <span class="section-label">Recent uploads</span>
@@ -1106,9 +1121,8 @@
       const meta = document.createElement("span");
       meta.className = "due-meta";
       const dueLabel = formatDue(ob.due_at);
-      meta.textContent = dueLabel
-        ? `${ob.domain || "people"} · due ${dueLabel}`
-        : (ob.domain || "people");
+      const unit = ob.unit_name || ob.domain || "Practice";
+      meta.textContent = dueLabel ? `${unit} · due ${dueLabel}` : unit;
       left.appendChild(title);
       left.appendChild(meta);
       const actions = document.createElement("div");
@@ -1137,6 +1151,29 @@
       return row;
     }
 
+    function groupObligationsByUnit(items) {
+      const groups = new Map();
+      (items || []).forEach((ob) => {
+        const key = ob.unit_name || "Other";
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(ob);
+      });
+      return groups;
+    }
+
+    function renderGroupedDueList(el, items, overdue) {
+      if (!el) return;
+      el.innerHTML = "";
+      const groups = groupObligationsByUnit(items);
+      groups.forEach((list, unitName) => {
+        const label = document.createElement("div");
+        label.className = "band-unit-label";
+        label.textContent = unitName;
+        el.appendChild(label);
+        list.forEach((ob) => el.appendChild(renderDueRow(ob, overdue)));
+      });
+    }
+
     function renderHomeBands(bands) {
       const overdue = bands.overdue || [];
       const week = bands.this_week || [];
@@ -1145,14 +1182,8 @@
       const overdueWrap = $("home-overdue-wrap");
       const weekWrap = $("home-week-wrap");
       const emptyEl = $("home-due-empty");
-      if (overdueEl) {
-        overdueEl.innerHTML = "";
-        overdue.forEach((ob) => overdueEl.appendChild(renderDueRow(ob, true)));
-      }
-      if (weekEl) {
-        weekEl.innerHTML = "";
-        week.forEach((ob) => weekEl.appendChild(renderDueRow(ob, false)));
-      }
+      renderGroupedDueList(overdueEl, overdue, true);
+      renderGroupedDueList(weekEl, week, false);
       if (overdueWrap) overdueWrap.classList.toggle("hidden", !overdue.length);
       if (weekWrap) weekWrap.classList.toggle("hidden", !week.length);
       if (emptyEl) emptyEl.classList.toggle("hidden", overdue.length + week.length > 0);
@@ -1199,12 +1230,22 @@
       show("comply-panel");
       window.history.replaceState({}, "", "/#comply");
       try {
-        const catalog = await api("/comply/catalog");
+        const [catalog, bands] = await Promise.all([
+          api("/comply/catalog"),
+          api("/due"),
+        ]);
+        const openByRef = new Map();
+        [...(bands.overdue || []), ...(bands.this_week || [])].forEach((ob) => {
+          if (ob.source === "compliance_registry" && ob.source_ref) {
+            openByRef.set(ob.source_ref, ob);
+          }
+        });
         const root = $("comply-catalog");
         root.innerHTML = "";
         catalog.forEach((c) => {
           const row = document.createElement("div");
-          row.className = "due-row";
+          const openOb = openByRef.get(c.code);
+          row.className = "due-row" + (openOb && (bands.overdue || []).some((o) => o.obligation_id === openOb.obligation_id) ? " overdue" : "");
           const left = document.createElement("div");
           const title = document.createElement("span");
           title.className = "due-title";
@@ -1214,10 +1255,27 @@
           const auth = (c.authorities && c.authorities.length)
             ? c.authorities.join("; ")
             : (c.authority || "");
-          meta.textContent = `every ${c.cadence_days}d · ${c.owner_role}` + (auth ? ` · ${auth}` : "");
+          const dueBit = openOb && openOb.due_at ? ` · due ${formatDue(openOb.due_at)}` : " · done";
+          meta.textContent = `every ${c.cadence_days}d · ${c.owner_role}` + dueBit + (auth ? ` · ${auth}` : "");
           left.appendChild(title);
           left.appendChild(meta);
           row.appendChild(left);
+          if (openOb) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = row.classList.contains("overdue") ? "primary" : "ghost";
+            btn.textContent = "Done";
+            btn.onclick = async () => {
+              try {
+                await api(`/due/${openOb.obligation_id}/complete`, { method: "POST", json: {} });
+                await openComply();
+                setStatus($("comply-status"), `Marked done: ${c.title}`, "ok");
+              } catch (e) {
+                setStatus($("comply-status"), e.message, "error");
+              }
+            };
+            row.appendChild(btn);
+          }
           root.appendChild(row);
         });
         await refreshCredentialMatrix();
@@ -1301,7 +1359,16 @@
           title.textContent = `${u.report_type} · ${u.status}`;
           const meta = document.createElement("span");
           meta.className = "due-meta";
-          meta.textContent = `${u.row_count} rows · unsigned aging ${u.unsigned_aging_count} · ${formatDue(u.uploaded_at)}`;
+          const bits = [`${u.row_count} rows`];
+          if (u.report_type === "documentation") {
+            bits.push(`unsigned aging ${u.unsigned_aging_count}`);
+          } else if (u.metrics && u.metrics.sessions_total != null) {
+            bits.push(`${u.metrics.clinician_count || 0} clinicians`);
+          } else if (u.metrics && u.metrics.claims_total != null) {
+            bits.push(`charged $${Number(u.metrics.charged_total || 0).toFixed(2)}`);
+          }
+          bits.push(formatDue(u.uploaded_at) || "");
+          meta.textContent = bits.filter(Boolean).join(" · ");
           left.appendChild(title);
           left.appendChild(meta);
           row.appendChild(left);
@@ -1844,19 +1911,24 @@
       btnIngestUpload.onclick = async () => {
         setStatus($("ingest-status"), "Uploading…");
         try {
+          const reportType = ($("ingest-report-type") && $("ingest-report-type").value) || "documentation";
           const data = await api("/ingest/upload", {
             method: "POST",
             json: {
-              report_type: "documentation",
+              report_type: reportType,
               csv_text: $("ingest-csv").value,
               column_map: {},
             },
           });
-          setStatus(
-            $("ingest-status"),
-            `${data.status}: ${data.row_count} rows, unsigned aging ${data.unsigned_aging_count}`,
-            "ok",
-          );
+          let detail = `${data.status}: ${data.row_count} rows`;
+          if (reportType === "documentation") {
+            detail += `, unsigned aging ${data.unsigned_aging_count}`;
+          } else if (data.metrics && data.metrics.sessions_total != null) {
+            detail += `, ${data.metrics.clinician_count || 0} clinicians`;
+          } else if (data.metrics && data.metrics.claims_total != null) {
+            detail += `, charged $${Number(data.metrics.charged_total || 0).toFixed(2)}`;
+          }
+          setStatus($("ingest-status"), detail, "ok");
           await refreshIngestUploads();
         } catch (e) {
           setStatus($("ingest-status"), e.message, "error");
