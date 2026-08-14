@@ -9,6 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.auth import issue_token, user_store
+from app.comply.credentials import credential_store
 from app.eligibility.service import eligibility_store
 from app.grow.intake import intake_store
 from app.ingest.sp_csv import ingest_store
@@ -27,6 +28,7 @@ def _reset_platform():
     ingest_store.reset()
     intake_store.reset()
     eligibility_store.reset()
+    credential_store.reset()
     store.clear()
     yield
     practice_store.reset()
@@ -34,6 +36,7 @@ def _reset_platform():
     ingest_store.reset()
     intake_store.reset()
     eligibility_store.reset()
+    credential_store.reset()
     store.clear()
 
 
@@ -215,7 +218,7 @@ def test_due_items_are_practice_scoped(client: TestClient) -> None:
 
 def test_health_version(client: TestClient) -> None:
     body = client.get("/health").json()
-    assert body["version"] == "0.12.0"
+    assert body["version"] == "0.13.0"
 
 
 def test_catalog_crosswalk_has_authorities(client: TestClient) -> None:

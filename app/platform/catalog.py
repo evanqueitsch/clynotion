@@ -359,6 +359,64 @@ COMPLIANCE_CLOCKS: tuple[dict[str, Any], ...] = (
     },
 )
 
+# Six credential clocks per clinician (Compliance registry tracker)
+CREDENTIAL_CLOCKS: tuple[dict[str, Any], ...] = (
+    {
+        "id": "license_renewal",
+        "name": "License renewal",
+        "parent": "compliance_registry",
+        "unit": "clinical",
+        "kind": "credential_clock",
+        "cadence_days": 730,
+        "authorities": _auth("PA licensing board"),
+    },
+    {
+        "id": "caqh_reattestation",
+        "name": "CAQH re-attestation",
+        "parent": "compliance_registry",
+        "unit": "clinical",
+        "kind": "credential_clock",
+        "cadence_days": 120,
+        "authorities": _auth("CVO pulls from CAQH"),
+    },
+    {
+        "id": "malpractice_rider",
+        "name": "Malpractice rider",
+        "parent": "compliance_registry",
+        "unit": "clinical",
+        "kind": "credential_clock",
+        "cadence_days": 365,
+        "authorities": _auth("Credentialing packet"),
+    },
+    {
+        "id": "recredentialing",
+        "name": "Recredentialing",
+        "parent": "compliance_registry",
+        "unit": "clinical",
+        "kind": "credential_clock",
+        "cadence_days": 1095,
+        "authorities": _auth("PerformCare Provider Manual Ch. VI"),
+    },
+    {
+        "id": "ma_revalidation",
+        "name": "MA revalidation",
+        "parent": "compliance_registry",
+        "unit": "clinical",
+        "kind": "credential_clock",
+        "cadence_days": 1825,
+        "authorities": _auth("ACA — 5-year MA revalidation"),
+    },
+    {
+        "id": "clinician_exclusion_screening",
+        "name": "Exclusion screening",
+        "parent": "compliance_registry",
+        "unit": "clinical",
+        "kind": "credential_clock",
+        "cadence_days": 30,
+        "authorities": _auth("42 CFR 455.436"),
+    },
+)
+
 
 def live_tools() -> list[dict[str, Any]]:
     return [i for i in CATALOG_ITEMS if i.get("status") == "live" and i.get("href")]
@@ -400,6 +458,15 @@ def catalog_by_unit(*, include_planned: bool = True) -> list[dict[str, Any]]:
                     for c in COMPLIANCE_CLOCKS
                     if c.get("cadence_days", 0) > 0
                 ]
+                row["credential_clocks"] = [
+                    {
+                        "id": c["id"],
+                        "name": c["name"],
+                        "cadence_days": c["cadence_days"],
+                        "authorities": list(c["authorities"]),
+                    }
+                    for c in CREDENTIAL_CLOCKS
+                ]
             tools.append(row)
         out.append(
             {
@@ -439,6 +506,20 @@ def crosswalk_rows() -> list[dict[str, Any]]:
                 "legacy_ids": [clock["code"], "OPS-2"],
                 "authorities": list(clock["authorities"]),
                 "parent": clock.get("parent"),
+            }
+        )
+    for clock in CREDENTIAL_CLOCKS:
+        rows.append(
+            {
+                "id": clock["id"],
+                "name": clock["name"],
+                "unit": unit_names.get(clock["unit"], clock["unit"]),
+                "kind": "credential_clock",
+                "status": "live",
+                "legacy_ids": ["OPS-2", "credential_tracker"],
+                "authorities": list(clock["authorities"]),
+                "parent": clock.get("parent"),
+                "cadence_days": clock["cadence_days"],
             }
         )
     return rows

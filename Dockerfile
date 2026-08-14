@@ -30,7 +30,9 @@ ENV PYTHONUNBUFFERED=1 \
     ATTUNE_INTAKE_PERSISTENCE=file \
     ATTUNE_INTAKE_DATA_PATH=/data/intake.enc \
     ATTUNE_ELIGIBILITY_PERSISTENCE=file \
-    ATTUNE_ELIGIBILITY_DATA_PATH=/data/eligibility.enc
+    ATTUNE_ELIGIBILITY_DATA_PATH=/data/eligibility.enc \
+    ATTUNE_CREDENTIAL_PERSISTENCE=file \
+    ATTUNE_CREDENTIAL_DATA_PATH=/data/credentials.enc
 WORKDIR /app
 
 COPY --from=builder /app/.venv .venv/

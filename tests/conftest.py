@@ -16,6 +16,7 @@ os.environ["ATTUNE_DUE_PERSISTENCE"] = "memory"
 os.environ["ATTUNE_INGEST_PERSISTENCE"] = "memory"
 os.environ["ATTUNE_INTAKE_PERSISTENCE"] = "memory"
 os.environ["ATTUNE_ELIGIBILITY_PERSISTENCE"] = "memory"
+os.environ["ATTUNE_CREDENTIAL_PERSISTENCE"] = "memory"
 os.environ["ATTUNE_AUTH"] = "dev"
 # Prevent a developer env.local Google config from flipping tests to SSO mode.
 os.environ.pop("GOOGLE_CLIENT_ID", None)

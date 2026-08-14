@@ -63,3 +63,18 @@ These are calendar clocks inside **Compliance registry**. Seeded cadence clocks
 | Claims aging review — 365-day filing bar | 30d | Billing | o12 | PerformCare Ch. VI; Admin Appeals |
 | Adjunct re-screen at each treatment plan review | Per plan | Clinician | o13 | PerformCare CM-MS-003 |
 | Retention clock per closed case | Per episode | Admin | o14 | 4-year minimum retention — encounter forms |
+
+---
+
+## Credential clocks (per clinician)
+
+Six clocks on each roster clinician. Unknown baselines surface as overdue on Home until a completion date is set.
+
+| Clock | Cadence | Authorities |
+|---|---|---|
+| License renewal | 730d | PA licensing board |
+| CAQH re-attestation | 120d | CVO pulls from CAQH |
+| Malpractice rider | 365d | Credentialing packet |
+| Recredentialing | 1095d (3yr) | PerformCare Ch. VI |
+| MA revalidation | 1825d (5yr) | ACA |
+| Exclusion screening | 30d | 42 CFR 455.436 |

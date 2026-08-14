@@ -430,6 +430,28 @@
       letter-spacing: 0.03em;
       text-transform: uppercase;
     }
+    .cred-clinician {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 0.75rem 0.85rem;
+      margin: 0.45rem 0;
+      background: rgba(255,255,255,0.55);
+    }
+    .cred-clinician h4 {
+      margin: 0 0 0.5rem;
+      font-size: 0.95rem;
+      font-weight: 600;
+    }
+    .cred-clock {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.5rem;
+      padding: 0.35rem 0;
+      border-top: 1px solid rgba(197, 208, 203, 0.55);
+      font-size: 0.88rem;
+    }
+    .cred-clock.overdue .cred-name { color: var(--danger); font-weight: 600; }
     footer {
       margin-top: 1.5rem;
       font-size: 0.8rem;
@@ -502,8 +524,12 @@
         <h2 style="margin:0;">Compliance registry</h2>
         <button class="ghost" id="btn-comply-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
       </div>
-      <p class="meta">Recurring compliance clocks write into the due engine. Mark done from Home or here — one click. Authorities are listed under each item.</p>
+      <p class="meta">Recurring practice clocks and per-clinician credential clocks. Mark done from Home or here — one click.</p>
+      <span class="section-label">Practice calendar</span>
       <div class="due-list" id="comply-catalog"></div>
+      <span class="section-label" style="margin-top:1rem;">Credential clocks</span>
+      <p class="meta">Six clocks per roster clinician. Unknown dates show as overdue until you set a completion.</p>
+      <div id="credential-matrix"></div>
       <p class="status" id="comply-status"></p>
     </section>
 
@@ -1144,7 +1170,7 @@
         }
         return;
       }
-      if ((ob.href || "").includes("comply") || ob.source === "ops2" || ob.source === "compliance_registry") {
+      if ((ob.href || "").includes("comply") || ob.source === "ops2" || ob.source === "compliance_registry" || ob.source === "credential_clocks") {
         await openComply();
         return;
       }
@@ -1194,10 +1220,64 @@
           row.appendChild(left);
           root.appendChild(row);
         });
-        setStatus($("comply-status"), `${catalog.length} compliance clocks`, "ok");
+        await refreshCredentialMatrix();
+        setStatus($("comply-status"), `${catalog.length} practice clocks`, "ok");
       } catch (e) {
         setStatus($("comply-status"), e.message, "error");
       }
+    }
+
+    async function refreshCredentialMatrix() {
+      const root = $("credential-matrix");
+      if (!root) return;
+      const rows = await api("/comply/credentials");
+      root.innerHTML = "";
+      if (!rows.length) {
+        root.innerHTML = `<p class="meta">No clinicians on the roster yet — import from Workspace, then clocks appear here.</p>`;
+        return;
+      }
+      rows.forEach((clin) => {
+        const box = document.createElement("div");
+        box.className = "cred-clinician";
+        const h = document.createElement("h4");
+        h.textContent = clin.display_name;
+        box.appendChild(h);
+        (clin.clocks || []).forEach((clock) => {
+          const row = document.createElement("div");
+          row.className = "cred-clock" + (clock.overdue ? " overdue" : "");
+          const left = document.createElement("div");
+          const name = document.createElement("div");
+          name.className = "cred-name";
+          name.textContent = clock.name;
+          const meta = document.createElement("div");
+          meta.className = "due-meta";
+          meta.textContent = clock.last_completed
+            ? `last ${formatDue(clock.last_completed)} · due ${formatDue(clock.due_at)}`
+            : `no date set · due ${formatDue(clock.due_at)}`;
+          left.appendChild(name);
+          left.appendChild(meta);
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = clock.overdue ? "primary" : "ghost";
+          btn.textContent = "Done";
+          btn.onclick = async () => {
+            try {
+              await api(
+                `/comply/credentials/${clin.clinician_id}/${clock.clock_id}/complete`,
+                { method: "POST", json: {} },
+              );
+              await refreshCredentialMatrix();
+              setStatus($("comply-status"), `Recorded ${clock.name} for ${clin.display_name}`, "ok");
+            } catch (e) {
+              setStatus($("comply-status"), e.message, "error");
+            }
+          };
+          row.appendChild(left);
+          row.appendChild(btn);
+          box.appendChild(row);
+        });
+        root.appendChild(box);
+      });
     }
 
     async function openIngest() {

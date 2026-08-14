@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 
 from app.auth import CurrentUser
 from app.clinicians import clinician_store
+from app.comply.credentials import credential_store
 from app.comply.registry import ensure_seeded_clocks, list_seed_catalog
 from app.eligibility.service import eligibility_store
 from app.grow.intake import intake_store
@@ -135,6 +136,9 @@ def _home_payload(user: CurrentUser) -> HomeOut:
     )
     # Tier-0 / Tier-1 feeds into due engine
     ensure_seeded_clocks(practice_id=user.practice_id, owner_user_id=user.user_id)
+    credential_store.reconcile(
+        practice_id=user.practice_id, owner_user_id=user.user_id
+    )
     reconcile_stale_ingest(practice_id=user.practice_id, owner_user_id=user.user_id)
     reconcile_supervision_drafts(
         practice_id=user.practice_id,
@@ -187,6 +191,9 @@ def current_practice(user: CurrentUser) -> PracticeOut:
 @router.get("/due", response_model=HomeBandsOut)
 def due_bands(user: CurrentUser) -> HomeBandsOut:
     ensure_seeded_clocks(practice_id=user.practice_id, owner_user_id=user.user_id)
+    credential_store.reconcile(
+        practice_id=user.practice_id, owner_user_id=user.user_id
+    )
     reconcile_stale_ingest(practice_id=user.practice_id, owner_user_id=user.user_id)
     reconcile_supervision_drafts(
         practice_id=user.practice_id,
@@ -234,7 +241,35 @@ def comply_seed(user: CurrentUser) -> dict:
     codes = ensure_seeded_clocks(
         practice_id=user.practice_id, owner_user_id=user.user_id
     )
-    return {"seeded": codes, "count": len(codes)}
+    n = credential_store.reconcile(
+        practice_id=user.practice_id, owner_user_id=user.user_id
+    )
+    return {"seeded": codes, "count": len(codes), "credential_clocks": n}
+
+
+@router.get("/comply/credentials")
+def list_credential_clocks(user: CurrentUser) -> list[dict]:
+    credential_store.reconcile(
+        practice_id=user.practice_id, owner_user_id=user.user_id
+    )
+    return credential_store.matrix(user.practice_id)
+
+
+@router.post("/comply/credentials/{clinician_id}/{clock_id}/complete")
+def complete_credential_clock(
+    clinician_id: str, clock_id: str, user: CurrentUser
+) -> dict:
+    try:
+        return credential_store.set_completed(
+            practice_id=user.practice_id,
+            clinician_id=clinician_id,
+            clock_id=clock_id,
+            owner_user_id=user.user_id,
+        )
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail="clinician not found") from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @router.get("/ingest/uploads", response_model=list[IngestUploadOut])
