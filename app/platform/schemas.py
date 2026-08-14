@@ -50,6 +50,8 @@ class PulseOut(BaseModel):
     unsigned_aging_rows: int = 0
     open_headcount: int = 0
     documentation_ingest_age_days: Optional[int] = None
+    access_pct_met: Optional[float] = None
+    eligibility_checks_30d: int = 0
 
 
 class HomeOut(BaseModel):
@@ -90,6 +92,62 @@ class ComplyCatalogItemOut(BaseModel):
     cadence_days: int
     owner_role: str
     authority: str
+
+
+class IntakeCreateBody(BaseModel):
+    case_code: str
+    channel: str = "phone"
+    triage: str = "routine"
+    request_at: Optional[str] = None
+
+
+class IntakePatchBody(BaseModel):
+    date_offered: Optional[str] = None
+    date_scheduled: Optional[str] = None
+    outcome: Optional[str] = None
+
+
+class IntakeEventOut(BaseModel):
+    intake_id: str
+    practice_id: str
+    case_code: str
+    channel: str
+    triage: str
+    request_at: str
+    date_offered: str = ""
+    date_scheduled: str = ""
+    outcome: str
+    created_by: str = ""
+    created_at: str = ""
+    updated_at: str = ""
+    standard_days: int = 7
+    within_standard: Optional[bool] = None
+
+
+class EligibilityCheckBody(BaseModel):
+    case_code: str
+    payer: str = "PerformCare"
+    plan: str = ""
+    service_date: str
+    method: str = "mock"
+    outcome: Optional[str] = None
+    coverage_detail: str = ""
+    evidence_ref: str = ""
+
+
+class EligibilityCheckOut(BaseModel):
+    check_id: str
+    practice_id: str
+    case_code: str
+    payer: str
+    plan: str
+    service_date: str
+    checked_at: str
+    checked_by: str
+    method: str
+    outcome: str
+    coverage_detail: str = ""
+    evidence_ref: str = ""
 
 
 # Back-compat alias

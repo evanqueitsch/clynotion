@@ -9,6 +9,8 @@ import pytest
 from fastapi.testclient import TestClient
 
 from app.auth import issue_token, user_store
+from app.eligibility.service import eligibility_store
+from app.grow.intake import intake_store
 from app.ingest.sp_csv import ingest_store
 from app.main import app
 from app.platform.due import due_engine
@@ -23,11 +25,15 @@ def _reset_platform():
     practice_store.reset()
     due_engine.reset()
     ingest_store.reset()
+    intake_store.reset()
+    eligibility_store.reset()
     store.clear()
     yield
     practice_store.reset()
     due_engine.reset()
     ingest_store.reset()
+    intake_store.reset()
+    eligibility_store.reset()
     store.clear()
 
 
@@ -202,7 +208,7 @@ def test_due_items_are_practice_scoped(client: TestClient) -> None:
 
 def test_health_version(client: TestClient) -> None:
     body = client.get("/health").json()
-    assert body["version"] == "0.10.0"
+    assert body["version"] == "0.11.0"
     assert body["product"] == "clynotion"
 
 

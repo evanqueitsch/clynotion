@@ -26,7 +26,11 @@ ENV PYTHONUNBUFFERED=1 \
     ATTUNE_DUE_PERSISTENCE=file \
     ATTUNE_DUE_DATA_PATH=/data/due.enc \
     ATTUNE_INGEST_PERSISTENCE=file \
-    ATTUNE_INGEST_DATA_PATH=/data/ingest.enc
+    ATTUNE_INGEST_DATA_PATH=/data/ingest.enc \
+    ATTUNE_INTAKE_PERSISTENCE=file \
+    ATTUNE_INTAKE_DATA_PATH=/data/intake.enc \
+    ATTUNE_ELIGIBILITY_PERSISTENCE=file \
+    ATTUNE_ELIGIBILITY_DATA_PATH=/data/eligibility.enc
 WORKDIR /app
 
 COPY --from=builder /app/.venv .venv/

@@ -9,16 +9,23 @@ from fastapi import APIRouter, HTTPException
 from app.auth import CurrentUser
 from app.clinicians import clinician_store
 from app.comply.registry import ensure_seeded_clocks, list_seed_catalog
+from app.eligibility.service import eligibility_store
+from app.grow.intake import intake_store
 from app.ingest.sp_csv import ingest_store, reconcile_stale_ingest
 from app.platform.due import due_engine, reconcile_supervision_drafts
 from app.platform.practices import practice_store
 from app.platform.schemas import (
     AttentionItemOut,
     ComplyCatalogItemOut,
+    EligibilityCheckBody,
+    EligibilityCheckOut,
     HomeBandsOut,
     HomeOut,
     IngestUploadBody,
     IngestUploadOut,
+    IntakeCreateBody,
+    IntakeEventOut,
+    IntakePatchBody,
     ObligationOut,
     PracticeOut,
     PulseOut,
@@ -70,6 +77,15 @@ def _build_attention(practice_id: str) -> list[AttentionItemOut]:
                 href="/#comply",
             )
         )
+    if any(o.source == "ops3" for o in due_engine.list_open(practice_id)):
+        items.append(
+            AttentionItemOut(
+                code="access_clock",
+                title="Intake access-standard clock needs attention",
+                domain="grow",
+                href="/#intake",
+            )
+        )
     return items
 
 
@@ -89,12 +105,25 @@ def _build_pulse(practice_id: str) -> PulseOut:
         except ValueError:
             age_days = None
     headcount = len(clinician_store.list_for_practice(practice_id))
+    access = intake_store.access_performance(practice_id)
+    elig = eligibility_store.list_for_practice(practice_id)
+    elig_30 = 0
+    cutoff = datetime.now(timezone.utc).timestamp() - 30 * 86400
+    for row in elig:
+        try:
+            ts = datetime.fromisoformat(row.checked_at.replace("Z", "+00:00")).timestamp()
+            if ts >= cutoff:
+                elig_30 += 1
+        except ValueError:
+            continue
     return PulseOut(
         open_obligations=open_count,
         overdue_count=len(bands["overdue"]),
         unsigned_aging_rows=unsigned_rows,
         open_headcount=headcount,
         documentation_ingest_age_days=age_days,
+        access_pct_met=access.get("pct_met"),
+        eligibility_checks_30d=elig_30,
     )
 
 
@@ -134,6 +163,18 @@ def _home_payload(user: CurrentUser) -> HomeOut:
             "name": "SimplePractice ingest",
             "href": "/#ingest",
             "description": "Upload weekly/monthly SP CSV reports",
+        },
+        {
+            "id": "intake",
+            "name": "Intake log",
+            "href": "/#intake",
+            "description": "OPS-3 access-standard timestamps (case codes only)",
+        },
+        {
+            "id": "eligibility",
+            "name": "Eligibility",
+            "href": "/#eligibility",
+            "description": "OPS-5 eligibility checks (mock/manual; live adapters deferred)",
         },
     ]
     return HomeOut(
@@ -223,6 +264,85 @@ def upload_ingest_csv(user: CurrentUser, body: IngestUploadBody) -> IngestUpload
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     return IngestUploadOut.model_validate(up.to_public_dict())
+
+
+@router.get("/intake", response_model=list[IntakeEventOut])
+def list_intake(user: CurrentUser) -> list[IntakeEventOut]:
+    return [
+        IntakeEventOut.model_validate(e.to_public_dict())
+        for e in intake_store.list_for_practice(user.practice_id)
+    ]
+
+
+@router.post("/intake", response_model=IntakeEventOut)
+def create_intake(user: CurrentUser, body: IntakeCreateBody) -> IntakeEventOut:
+    try:
+        ev = intake_store.create(
+            practice_id=user.practice_id,
+            case_code=body.case_code,
+            channel=body.channel,  # type: ignore[arg-type]
+            triage=body.triage,  # type: ignore[arg-type]
+            created_by=user.user_id,
+            request_at=body.request_at,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return IntakeEventOut.model_validate(ev.to_public_dict())
+
+
+@router.patch("/intake/{intake_id}", response_model=IntakeEventOut)
+def patch_intake(
+    intake_id: str, user: CurrentUser, body: IntakePatchBody
+) -> IntakeEventOut:
+    try:
+        ev = intake_store.update(
+            practice_id=user.practice_id,
+            intake_id=intake_id,
+            date_offered=body.date_offered,
+            date_scheduled=body.date_scheduled,
+            outcome=body.outcome,  # type: ignore[arg-type]
+            owner_user_id=user.user_id,
+        )
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail="intake not found") from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return IntakeEventOut.model_validate(ev.to_public_dict())
+
+
+@router.get("/intake/performance")
+def intake_performance(user: CurrentUser) -> dict:
+    return intake_store.access_performance(user.practice_id)
+
+
+@router.get("/eligibility", response_model=list[EligibilityCheckOut])
+def list_eligibility(user: CurrentUser) -> list[EligibilityCheckOut]:
+    return [
+        EligibilityCheckOut.model_validate(r.to_public_dict())
+        for r in eligibility_store.list_for_practice(user.practice_id)
+    ]
+
+
+@router.post("/eligibility/check", response_model=EligibilityCheckOut)
+def create_eligibility_check(
+    user: CurrentUser, body: EligibilityCheckBody
+) -> EligibilityCheckOut:
+    try:
+        row = eligibility_store.record_check(
+            practice_id=user.practice_id,
+            case_code=body.case_code,
+            payer=body.payer,
+            plan=body.plan,
+            service_date=body.service_date,
+            checked_by=user.user_id,
+            method=body.method,  # type: ignore[arg-type]
+            outcome=body.outcome,  # type: ignore[arg-type]
+            coverage_detail=body.coverage_detail,
+            evidence_ref=body.evidence_ref,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return EligibilityCheckOut.model_validate(row.to_public_dict())
 
 
 @legacy.get("/home", response_model=HomeOut)

@@ -492,6 +492,16 @@
         <p class="meta" style="margin-bottom:0.85rem;">Upload weekly documentation CSVs. Idempotent; name columns are stripped.</p>
         <button class="primary" id="btn-open-ingest" type="button">Open Ingest</button>
       </div>
+      <div class="tool-card" id="tool-intake">
+        <h3 style="font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;">Intake log</h3>
+        <p class="meta" style="margin-bottom:0.85rem;">OPS-3 — stamp first contact with case codes only. Access clocks feed Home.</p>
+        <button class="primary" id="btn-open-intake" type="button">Open Intake</button>
+      </div>
+      <div class="tool-card" id="tool-eligibility">
+        <h3 style="font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;">Eligibility</h3>
+        <p class="meta" style="margin-bottom:0.85rem;">OPS-5 — append-only checks (mock/manual). Live payer adapters need BAAs.</p>
+        <button class="primary" id="btn-open-eligibility" type="button">Open Eligibility</button>
+      </div>
       <p class="status" id="home-status"></p>
     </section>
 
@@ -519,6 +529,58 @@
       <p class="status" id="ingest-status"></p>
       <span class="section-label">Recent uploads</span>
       <div class="due-list" id="ingest-uploads"></div>
+    </section>
+
+    <section id="intake-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">Intake log</h2>
+        <button class="ghost" id="btn-intake-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <p class="meta">Case codes only — no client names. Clynotion issues IN-0001… before SimplePractice.</p>
+      <label for="intake-case">Case code</label>
+      <input id="intake-case" type="text" placeholder="HFC-1042" />
+      <div class="row">
+        <div>
+          <label for="intake-channel">Channel</label>
+          <select id="intake-channel">
+            <option value="phone">Phone</option>
+            <option value="performcare">PerformCare</option>
+            <option value="care_manager">Care manager</option>
+            <option value="pcp">PCP</option>
+            <option value="website">Website</option>
+            <option value="walk_in">Walk-in</option>
+          </select>
+        </div>
+        <div>
+          <label for="intake-triage">Triage</label>
+          <select id="intake-triage">
+            <option value="routine">Routine (7d)</option>
+            <option value="urgent">Urgent (1d placeholder)</option>
+            <option value="emergent">Emergent (same day placeholder)</option>
+          </select>
+        </div>
+      </div>
+      <button class="primary" id="btn-intake-create" type="button">Log intake</button>
+      <p class="status" id="intake-status"></p>
+      <p class="meta" id="intake-perf"></p>
+      <div class="due-list" id="intake-list"></div>
+    </section>
+
+    <section id="eligibility-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">Eligibility</h2>
+        <button class="ghost" id="btn-eligibility-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <p class="meta">Append-only checks. Mock backend is offline; Availity/EVS need BAAs (B-21–23).</p>
+      <label for="elig-case">Case code</label>
+      <input id="elig-case" type="text" placeholder="HFC-1042" />
+      <label for="elig-date">Service date (YYYY-MM-DD)</label>
+      <input id="elig-date" type="text" placeholder="2026-08-14" />
+      <div class="row">
+        <button class="primary" id="btn-elig-check" type="button">Run mock check</button>
+      </div>
+      <p class="status" id="elig-status"></p>
+      <div class="due-list" id="elig-list"></div>
     </section>
 
     <section id="capture-panel" class="panel hidden">
@@ -823,6 +885,8 @@
           hash === "#supervision" || hash === "#clynotion" || dirOk;
         const wantComply = hash === "#comply";
         const wantIngest = hash === "#ingest";
+        const wantIntake = hash === "#intake";
+        const wantElig = hash === "#eligibility";
         if (window.location.search.includes("auth_error=") || window.location.search.includes("directory")) {
           window.history.replaceState({}, "", wantSupervision ? "/#supervision" : "/");
         }
@@ -841,6 +905,10 @@
           await openComply();
         } else if (wantIngest) {
           await openIngest();
+        } else if (wantIntake) {
+          await openIntake();
+        } else if (wantElig) {
+          await openEligibility();
         } else {
           await enterHome();
         }
@@ -851,7 +919,7 @@
     }
 
     function show(panel) {
-      ["auth-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel"].forEach((id) => {
+      ["auth-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel"].forEach((id) => {
         $(id).classList.toggle("hidden", id !== panel);
       });
     }
@@ -886,6 +954,8 @@
         ["Overdue", pulse.overdue_count],
         ["Unsigned aging", pulse.unsigned_aging_rows],
         ["Roster", pulse.open_headcount],
+        ["Access %", pulse.access_pct_met == null ? "—" : pulse.access_pct_met],
+        ["Elig 30d", pulse.eligibility_checks_30d],
       ];
       if (pulse.documentation_ingest_age_days != null) {
         chips.push(["Doc ingest age (d)", pulse.documentation_ingest_age_days]);
@@ -924,6 +994,8 @@
         btn.onclick = () => {
           if ((item.href || "").includes("ingest")) openIngest();
           else if ((item.href || "").includes("comply")) openComply();
+          else if ((item.href || "").includes("intake")) openIntake();
+          else if ((item.href || "").includes("eligibility")) openEligibility();
           else enterHome();
         };
         row.appendChild(left);
@@ -1031,6 +1103,10 @@
         await openIngest();
         return;
       }
+      if ((ob.href || "").includes("intake") || ob.source === "ops3") {
+        await openIntake();
+        return;
+      }
       if (ob.href) window.location.href = ob.href;
     }
 
@@ -1104,6 +1180,95 @@
         }
       } catch (e) {
         setStatus($("ingest-status"), e.message, "error");
+      }
+    }
+
+    async function openIntake() {
+      show("intake-panel");
+      window.history.replaceState({}, "", "/#intake");
+      await refreshIntake();
+    }
+
+    async function refreshIntake() {
+      try {
+        const perf = await api("/intake/performance");
+        const perfEl = $("intake-perf");
+        if (perfEl) {
+          perfEl.textContent = perf.pct_met == null
+            ? `Last 30d: ${perf.requests} requests (none scored yet)`
+            : `Last 30d: ${perf.met}/${perf.scored} within standard (${perf.pct_met}%)`;
+        }
+        const rows = await api("/intake");
+        const root = $("intake-list");
+        root.innerHTML = "";
+        rows.forEach((e) => {
+          const row = document.createElement("div");
+          row.className = "due-row";
+          const left = document.createElement("div");
+          const title = document.createElement("span");
+          title.className = "due-title";
+          title.textContent = `${e.intake_id} · ${e.case_code} · ${e.triage}`;
+          const meta = document.createElement("span");
+          meta.className = "due-meta";
+          meta.textContent = `${e.channel} · ${e.outcome} · offered ${e.date_offered || "—"}`;
+          left.appendChild(title);
+          left.appendChild(meta);
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "ghost";
+          btn.textContent = "Mark scheduled";
+          btn.onclick = async () => {
+            try {
+              await api(`/intake/${e.intake_id}`, {
+                method: "PATCH",
+                json: {
+                  date_offered: new Date().toISOString(),
+                  date_scheduled: new Date().toISOString(),
+                  outcome: "scheduled",
+                },
+              });
+              await refreshIntake();
+            } catch (err) {
+              setStatus($("intake-status"), err.message, "error");
+            }
+          };
+          row.appendChild(left);
+          row.appendChild(btn);
+          root.appendChild(row);
+        });
+      } catch (e) {
+        setStatus($("intake-status"), e.message, "error");
+      }
+    }
+
+    async function openEligibility() {
+      show("eligibility-panel");
+      window.history.replaceState({}, "", "/#eligibility");
+      await refreshEligibility();
+    }
+
+    async function refreshEligibility() {
+      try {
+        const rows = await api("/eligibility");
+        const root = $("elig-list");
+        root.innerHTML = "";
+        rows.forEach((r) => {
+          const row = document.createElement("div");
+          row.className = "due-row";
+          const left = document.createElement("div");
+          const title = document.createElement("span");
+          title.className = "due-title";
+          title.textContent = `${r.case_code} · ${r.outcome}`;
+          const meta = document.createElement("span");
+          meta.className = "due-meta";
+          meta.textContent = `${r.payer} · ${r.service_date} · ${r.method}`;
+          left.appendChild(title);
+          left.appendChild(meta);
+          row.appendChild(left);
+          root.appendChild(row);
+        });
+      } catch (e) {
+        setStatus($("elig-status"), e.message, "error");
       }
     }
 
@@ -1519,6 +1684,14 @@
     if (btnOpenIngest) {
       btnOpenIngest.onclick = () => { openIngest(); };
     }
+    const btnOpenIntake = $("btn-open-intake");
+    if (btnOpenIntake) {
+      btnOpenIntake.onclick = () => { openIntake(); };
+    }
+    const btnOpenEligibility = $("btn-open-eligibility");
+    if (btnOpenEligibility) {
+      btnOpenEligibility.onclick = () => { openEligibility(); };
+    }
     const btnBackHome = $("btn-back-home");
     if (btnBackHome) {
       btnBackHome.onclick = () => {
@@ -1555,6 +1728,48 @@
           await refreshIngestUploads();
         } catch (e) {
           setStatus($("ingest-status"), e.message, "error");
+        }
+      };
+    }
+    const btnIntakeHome = $("btn-intake-home");
+    if (btnIntakeHome) btnIntakeHome.onclick = () => enterHome();
+    const btnEligHome = $("btn-eligibility-home");
+    if (btnEligHome) btnEligHome.onclick = () => enterHome();
+    const btnIntakeCreate = $("btn-intake-create");
+    if (btnIntakeCreate) {
+      btnIntakeCreate.onclick = async () => {
+        try {
+          const data = await api("/intake", {
+            method: "POST",
+            json: {
+              case_code: $("intake-case").value,
+              channel: $("intake-channel").value,
+              triage: $("intake-triage").value,
+            },
+          });
+          setStatus($("intake-status"), `Logged ${data.intake_id}`, "ok");
+          await refreshIntake();
+        } catch (e) {
+          setStatus($("intake-status"), e.message, "error");
+        }
+      };
+    }
+    const btnEligCheck = $("btn-elig-check");
+    if (btnEligCheck) {
+      btnEligCheck.onclick = async () => {
+        try {
+          const data = await api("/eligibility/check", {
+            method: "POST",
+            json: {
+              case_code: $("elig-case").value,
+              service_date: $("elig-date").value,
+              method: "mock",
+            },
+          });
+          setStatus($("elig-status"), `${data.outcome} · ${data.check_id.slice(0, 8)}`, "ok");
+          await refreshEligibility();
+        } catch (e) {
+          setStatus($("elig-status"), e.message, "error");
         }
       };
     }
