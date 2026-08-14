@@ -398,6 +398,22 @@
       padding: 0.4rem 0.85rem;
       font-size: 0.82rem;
     }
+    .due-actions { display: flex; gap: 0.35rem; flex: 0 0 auto; }
+    .pulse-row {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 0.65rem;
+      margin: 0.5rem 0 0.85rem;
+    }
+    .pulse-chip {
+      font-size: 0.82rem;
+      color: var(--muted);
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 0.4rem 0.65rem;
+      background: rgba(255,255,255,0.5);
+    }
+    .pulse-chip strong { color: var(--ink); font-weight: 600; }
     footer {
       margin-top: 1.5rem;
       font-size: 0.8rem;
@@ -443,6 +459,13 @@
       <h2 id="home-practice-name">Your practice</h2>
       <p class="meta" id="home-blurb">Clynotion is the practice product. Open a tool to continue.</p>
 
+      <div id="home-pulse" class="pulse-row hidden"></div>
+
+      <div id="home-attention-wrap" class="home-band hidden">
+        <span class="section-label">Attention</span>
+        <div class="due-list" id="home-attention"></div>
+      </div>
+
       <div id="home-overdue-wrap" class="home-band hidden">
         <span class="section-label">Overdue</span>
         <div class="due-list" id="home-overdue"></div>
@@ -459,7 +482,43 @@
         <p class="meta" style="margin-bottom:0.85rem;">Clinical supervision capture — who’s present, session surface, review, finalize.</p>
         <button class="primary" id="btn-open-supervision" type="button">Open Supervision notes</button>
       </div>
+      <div class="tool-card" id="tool-comply">
+        <h3 style="font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;">Compliance registry</h3>
+        <p class="meta" style="margin-bottom:0.85rem;">OPS-2 recurring clocks — exclusion screening, audits, BAA review, and more.</p>
+        <button class="primary" id="btn-open-comply" type="button">Open Compliance</button>
+      </div>
+      <div class="tool-card" id="tool-ingest">
+        <h3 style="font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;">SimplePractice ingest</h3>
+        <p class="meta" style="margin-bottom:0.85rem;">Upload weekly documentation CSVs. Idempotent; name columns are stripped.</p>
+        <button class="primary" id="btn-open-ingest" type="button">Open Ingest</button>
+      </div>
       <p class="status" id="home-status"></p>
+    </section>
+
+    <section id="comply-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">Compliance registry</h2>
+        <button class="ghost" id="btn-comply-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <p class="meta">Seeded OPS-2 clocks write into the due engine. Mark done from Home or here — one click.</p>
+      <div class="due-list" id="comply-catalog"></div>
+      <p class="status" id="comply-status"></p>
+    </section>
+
+    <section id="ingest-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">SimplePractice ingest</h2>
+        <button class="ghost" id="btn-ingest-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <p class="meta">Paste a documentation report CSV (headers: appointment_id, documentation_status or signed, age_hours). Client name columns are never stored.</p>
+      <label for="ingest-csv">CSV</label>
+      <textarea id="ingest-csv" placeholder="appointment_id,documentation_status,signed,age_hours&#10;apt-1,unsigned,false,96"></textarea>
+      <div class="row">
+        <button class="primary" id="btn-ingest-upload" type="button">Upload documentation report</button>
+      </div>
+      <p class="status" id="ingest-status"></p>
+      <span class="section-label">Recent uploads</span>
+      <div class="due-list" id="ingest-uploads"></div>
     </section>
 
     <section id="capture-panel" class="panel hidden">
@@ -762,6 +821,8 @@
         const hash = window.location.hash;
         const wantSupervision =
           hash === "#supervision" || hash === "#clynotion" || dirOk;
+        const wantComply = hash === "#comply";
+        const wantIngest = hash === "#ingest";
         if (window.location.search.includes("auth_error=") || window.location.search.includes("directory")) {
           window.history.replaceState({}, "", wantSupervision ? "/#supervision" : "/");
         }
@@ -776,6 +837,10 @@
               setStatus($("workspace-status"), workspaceErrorMessage(e.message), "error");
             }
           }
+        } else if (wantComply) {
+          await openComply();
+        } else if (wantIngest) {
+          await openIngest();
         } else {
           await enterHome();
         }
@@ -786,7 +851,7 @@
     }
 
     function show(panel) {
-      ["auth-panel", "home-panel", "capture-panel", "review-panel"].forEach((id) => {
+      ["auth-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel"].forEach((id) => {
         $(id).classList.toggle("hidden", id !== panel);
       });
     }
@@ -802,12 +867,70 @@
             home.note ||
             "Clynotion is the practice product. Due items from every domain land here.";
         }
+        renderPulse(home.pulse || {});
+        renderAttention(home.attention || []);
         renderHomeBands(home.bands || { overdue: [], this_week: [] });
         show("home-panel");
+        window.history.replaceState({}, "", "/");
       } catch (e) {
         setStatus($("home-status") || $("auth-status"), e.message, "error");
         show("capture-panel");
       }
+    }
+
+    function renderPulse(pulse) {
+      const el = $("home-pulse");
+      if (!el) return;
+      const chips = [
+        ["Open", pulse.open_obligations],
+        ["Overdue", pulse.overdue_count],
+        ["Unsigned aging", pulse.unsigned_aging_rows],
+        ["Roster", pulse.open_headcount],
+      ];
+      if (pulse.documentation_ingest_age_days != null) {
+        chips.push(["Doc ingest age (d)", pulse.documentation_ingest_age_days]);
+      }
+      el.innerHTML = "";
+      chips.forEach(([label, val]) => {
+        const chip = document.createElement("div");
+        chip.className = "pulse-chip";
+        chip.innerHTML = `${label}: <strong>${val ?? "—"}</strong>`;
+        el.appendChild(chip);
+      });
+      el.classList.remove("hidden");
+    }
+
+    function renderAttention(items) {
+      const wrap = $("home-attention-wrap");
+      const root = $("home-attention");
+      if (!wrap || !root) return;
+      root.innerHTML = "";
+      (items || []).forEach((item) => {
+        const row = document.createElement("div");
+        row.className = "due-row overdue";
+        const left = document.createElement("div");
+        const title = document.createElement("span");
+        title.className = "due-title";
+        title.textContent = item.title;
+        const meta = document.createElement("span");
+        meta.className = "due-meta";
+        meta.textContent = item.domain || "platform";
+        left.appendChild(title);
+        left.appendChild(meta);
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "primary";
+        btn.textContent = "Open";
+        btn.onclick = () => {
+          if ((item.href || "").includes("ingest")) openIngest();
+          else if ((item.href || "").includes("comply")) openComply();
+          else enterHome();
+        };
+        row.appendChild(left);
+        row.appendChild(btn);
+        root.appendChild(row);
+      });
+      wrap.classList.toggle("hidden", !(items && items.length));
     }
 
     function formatDue(iso) {
@@ -841,13 +964,29 @@
         : (ob.domain || "people");
       left.appendChild(title);
       left.appendChild(meta);
-      const btn = document.createElement("button");
-      btn.type = "button";
-      btn.className = overdue ? "primary" : "ghost";
-      btn.textContent = "Open";
-      btn.onclick = () => openObligation(ob);
+      const actions = document.createElement("div");
+      actions.className = "due-actions";
+      const openBtn = document.createElement("button");
+      openBtn.type = "button";
+      openBtn.className = overdue ? "primary" : "ghost";
+      openBtn.textContent = "Open";
+      openBtn.onclick = () => openObligation(ob);
+      const doneBtn = document.createElement("button");
+      doneBtn.type = "button";
+      doneBtn.className = "ghost";
+      doneBtn.textContent = "Done";
+      doneBtn.onclick = async () => {
+        try {
+          await api(`/due/${ob.obligation_id}/complete`, { method: "POST", json: {} });
+          await enterHome();
+        } catch (e) {
+          setStatus($("home-status"), e.message, "error");
+        }
+      };
+      actions.appendChild(openBtn);
+      actions.appendChild(doneBtn);
       row.appendChild(left);
-      row.appendChild(btn);
+      row.appendChild(actions);
       return row;
     }
 
@@ -884,6 +1023,14 @@
         }
         return;
       }
+      if ((ob.href || "").includes("comply") || ob.source === "ops2") {
+        await openComply();
+        return;
+      }
+      if ((ob.href || "").includes("ingest") || ob.source === "ingest") {
+        await openIngest();
+        return;
+      }
       if (ob.href) window.location.href = ob.href;
     }
 
@@ -894,6 +1041,69 @@
       show("capture-panel");
       if (window.location.hash !== "#supervision") {
         window.history.replaceState({}, "", "/#supervision");
+      }
+    }
+
+    async function openComply() {
+      show("comply-panel");
+      window.history.replaceState({}, "", "/#comply");
+      try {
+        const catalog = await api("/comply/catalog");
+        const root = $("comply-catalog");
+        root.innerHTML = "";
+        catalog.forEach((c) => {
+          const row = document.createElement("div");
+          row.className = "due-row";
+          const left = document.createElement("div");
+          const title = document.createElement("span");
+          title.className = "due-title";
+          title.textContent = `${c.code}: ${c.title}`;
+          const meta = document.createElement("span");
+          meta.className = "due-meta";
+          meta.textContent = `every ${c.cadence_days}d · ${c.owner_role} · ${c.authority}`;
+          left.appendChild(title);
+          left.appendChild(meta);
+          row.appendChild(left);
+          root.appendChild(row);
+        });
+        setStatus($("comply-status"), `${catalog.length} seeded clocks`, "ok");
+      } catch (e) {
+        setStatus($("comply-status"), e.message, "error");
+      }
+    }
+
+    async function openIngest() {
+      show("ingest-panel");
+      window.history.replaceState({}, "", "/#ingest");
+      await refreshIngestUploads();
+    }
+
+    async function refreshIngestUploads() {
+      const root = $("ingest-uploads");
+      if (!root) return;
+      try {
+        const rows = await api("/ingest/uploads");
+        root.innerHTML = "";
+        rows.forEach((u) => {
+          const row = document.createElement("div");
+          row.className = "due-row";
+          const left = document.createElement("div");
+          const title = document.createElement("span");
+          title.className = "due-title";
+          title.textContent = `${u.report_type} · ${u.status}`;
+          const meta = document.createElement("span");
+          meta.className = "due-meta";
+          meta.textContent = `${u.row_count} rows · unsigned aging ${u.unsigned_aging_count} · ${formatDue(u.uploaded_at)}`;
+          left.appendChild(title);
+          left.appendChild(meta);
+          row.appendChild(left);
+          root.appendChild(row);
+        });
+        if (!rows.length) {
+          root.innerHTML = `<p class="meta">No uploads yet.</p>`;
+        }
+      } catch (e) {
+        setStatus($("ingest-status"), e.message, "error");
       }
     }
 
@@ -1301,11 +1511,51 @@
     if (btnOpenSupervision) {
       btnOpenSupervision.onclick = () => { openSupervision(); };
     }
+    const btnOpenComply = $("btn-open-comply");
+    if (btnOpenComply) {
+      btnOpenComply.onclick = () => { openComply(); };
+    }
+    const btnOpenIngest = $("btn-open-ingest");
+    if (btnOpenIngest) {
+      btnOpenIngest.onclick = () => { openIngest(); };
+    }
     const btnBackHome = $("btn-back-home");
     if (btnBackHome) {
       btnBackHome.onclick = () => {
         window.history.replaceState({}, "", "/");
         enterHome();
+      };
+    }
+    const btnComplyHome = $("btn-comply-home");
+    if (btnComplyHome) {
+      btnComplyHome.onclick = () => enterHome();
+    }
+    const btnIngestHome = $("btn-ingest-home");
+    if (btnIngestHome) {
+      btnIngestHome.onclick = () => enterHome();
+    }
+    const btnIngestUpload = $("btn-ingest-upload");
+    if (btnIngestUpload) {
+      btnIngestUpload.onclick = async () => {
+        setStatus($("ingest-status"), "Uploading…");
+        try {
+          const data = await api("/ingest/upload", {
+            method: "POST",
+            json: {
+              report_type: "documentation",
+              csv_text: $("ingest-csv").value,
+              column_map: {},
+            },
+          });
+          setStatus(
+            $("ingest-status"),
+            `${data.status}: ${data.row_count} rows, unsigned aging ${data.unsigned_aging_count}`,
+            "ok",
+          );
+          await refreshIngestUploads();
+        } catch (e) {
+          setStatus($("ingest-status"), e.message, "error");
+        }
       };
     }
 

@@ -7,9 +7,11 @@ Historical name “Attune” referred to the same product before the domain deci
 
 ## Layout
 
-- `app/platform/` — practice registry, due engine, shell APIs (`/home`, `/due`, `/practice`; legacy `/attune/*`)
+- `app/platform/` — practice registry, due engine (+ encrypted persist), shell APIs
+- `app/comply/` — OPS-2 seeded compliance clocks → due engine
+- `app/ingest/` — SimplePractice CSV ingest (documentation reports; demographics deferred)
 - `app/` — supervision capture pipeline, roster, providers
-- UI: Clynotion home (Overdue / This week / Tools) → Open Supervision notes (`/#supervision`)
+- UI: Home (pulse / attention / overdue / this week / tools) → Supervision, Compliance, Ingest
 
 ## Stack
 

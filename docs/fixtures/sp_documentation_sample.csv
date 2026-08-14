@@ -1,0 +1,5 @@
+appointment_id,clinician_id,documentation_status,signed,age_hours,service_date
+apt-1001,clin-a,signed,true,0,2026-08-01
+apt-1002,clin-a,unsigned,false,96,2026-08-02
+apt-1003,clin-b,unsigned,false,80,2026-08-03
+apt-1004,clin-b,signed,true,0,2026-08-04

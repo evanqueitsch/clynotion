@@ -20,7 +20,7 @@ class Practice:
     display_name: str
     slug: str = ""
     allowed_domain: str = ""
-    tools: tuple[str, ...] = ("supervision",)
+    tools: tuple[str, ...] = ("supervision", "comply", "ingest")
 
     def to_public_dict(self) -> dict:
         return {

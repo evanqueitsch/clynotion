@@ -22,7 +22,11 @@ ENV PYTHONUNBUFFERED=1 \
     ATTUNE_SESSION_DATA_PATH=/data/sessions.enc \
     ATTUNE_CLINICIAN_PERSISTENCE=file \
     ATTUNE_CLINICIAN_DATA_PATH=/data/clinicians.enc \
-    ATTUNE_WORKSPACE_TOKEN_PATH=/data/workspace_tokens.enc
+    ATTUNE_WORKSPACE_TOKEN_PATH=/data/workspace_tokens.enc \
+    ATTUNE_DUE_PERSISTENCE=file \
+    ATTUNE_DUE_DATA_PATH=/data/due.enc \
+    ATTUNE_INGEST_PERSISTENCE=file \
+    ATTUNE_INGEST_DATA_PATH=/data/ingest.enc
 WORKDIR /app
 
 COPY --from=builder /app/.venv .venv/

@@ -1,7 +1,7 @@
 """Due engine — platform obligations for Home bands.
 
 Every module writes obligations here (owner + due date required). Titles and
-metadata are IDs/actions only — never note text, transcripts, or client names.
+metadata are IDs/actions only — never note text, transcripts, or client identifiers.
 """
 
 from __future__ import annotations
@@ -10,6 +10,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timedelta, timezone
 from typing import Literal, Optional
 from uuid import uuid4
+
+from app.platform.due_persist import DuePersistence, build_due_persistence
 
 Domain = Literal["comply", "people", "grow", "books", "platform"]
 ObligationStatus = Literal["open", "done", "cancelled"]
@@ -56,20 +58,55 @@ class Obligation:
             "status": self.status,
             "href": self.href,
             "source_ref": self.source_ref,
+            "created_at": self.created_at,
+            "updated_at": self.updated_at,
         }
 
 
 class DueEngine:
-    """In-memory due register (stub). Postgres/RLS comes with Platform Core persistence."""
+    """Practice-scoped due register. Optional encrypted file persistence."""
 
-    def __init__(self) -> None:
+    def __init__(self, persistence: Optional[DuePersistence] = None) -> None:
+        self._persistence = persistence or build_due_persistence()
         self._by_id: dict[str, Obligation] = {}
-        # (practice_id, source, source_ref) → obligation_id
         self._by_source: dict[tuple[str, str, str], str] = {}
+        self._load()
+
+    def _load(self) -> None:
+        rows = self._persistence.load()
+        for item in rows:
+            try:
+                ob = Obligation(
+                    obligation_id=str(item["obligation_id"]),
+                    practice_id=str(item["practice_id"]),
+                    domain=item.get("domain") or "platform",  # type: ignore[arg-type]
+                    source=str(item["source"]),
+                    title=str(item["title"]),
+                    owner_user_id=str(item["owner_user_id"]),
+                    due_at=str(item["due_at"]),
+                    status=item.get("status") or "open",  # type: ignore[arg-type]
+                    href=str(item.get("href") or "/"),
+                    source_ref=str(item.get("source_ref") or ""),
+                    created_at=str(item.get("created_at") or _now().isoformat()),
+                    updated_at=str(item.get("updated_at") or _now().isoformat()),
+                )
+            except (KeyError, TypeError, ValueError):
+                continue
+            self._by_id[ob.obligation_id] = ob
+            if ob.source_ref:
+                self._by_source[(ob.practice_id, ob.source, ob.source_ref)] = ob.obligation_id
+
+    def _flush(self) -> None:
+        rows = [ob.to_public_dict() for ob in self._by_id.values()]
+        self._persistence.save(rows)
 
     def reset(self) -> None:
         self._by_id.clear()
         self._by_source.clear()
+        self._persistence.clear()
+
+    def get(self, obligation_id: str) -> Optional[Obligation]:
+        return self._by_id.get(obligation_id)
 
     def upsert(
         self,
@@ -98,13 +135,24 @@ class DueEngine:
         now = _now().isoformat()
         if existing_id and existing_id in self._by_id:
             ob = self._by_id[existing_id]
+            # Don't reopen a completed seeded clock unless caller forces open.
+            if ob.status == "done" and status == "open" and source == "ops2":
+                self._flush()
+                return ob
             ob.title = title
             ob.owner_user_id = owner_user_id
-            ob.due_at = due_at
+            if status == "open" and ob.status == "open":
+                # Keep existing due_at for ops2 seeds so weekly check is stable.
+                if source != "ops2":
+                    ob.due_at = due_at
+            else:
+                ob.due_at = due_at
             ob.href = href
             ob.domain = domain
-            ob.status = status
+            if not (ob.status == "done" and source == "ops2" and status == "open"):
+                ob.status = status
             ob.updated_at = now
+            self._flush()
             return ob
 
         oid = str(uuid4())
@@ -125,6 +173,7 @@ class DueEngine:
         self._by_id[oid] = ob
         if key:
             self._by_source[key] = oid
+        self._flush()
         return ob
 
     def complete(
@@ -138,11 +187,17 @@ class DueEngine:
         oid = self._by_source.get(key)
         if not oid:
             return None
-        ob = self._by_id.get(oid)
-        if ob is None:
+        return self.complete_by_id(oid, practice_id=practice_id)
+
+    def complete_by_id(
+        self, obligation_id: str, *, practice_id: str
+    ) -> Optional[Obligation]:
+        ob = self._by_id.get(obligation_id)
+        if ob is None or ob.practice_id != practice_id:
             return None
         ob.status = "done"
         ob.updated_at = _now().isoformat()
+        self._flush()
         return ob
 
     def list_open(self, practice_id: str) -> list[Obligation]:
@@ -161,7 +216,6 @@ class DueEngine:
         now: Optional[datetime] = None,
         week_days: int = 7,
     ) -> dict[str, list[Obligation]]:
-        """Split open obligations into overdue / this_week (Home)."""
         now = now or _now()
         week_end = now + timedelta(days=week_days)
         overdue: list[Obligation] = []
@@ -187,7 +241,6 @@ def upsert_supervision_draft_obligation(
     session_id: str,
     due_at: Optional[str] = None,
 ) -> Obligation:
-    """Register an open finalize obligation for an unfinalized supervision draft."""
     return due_engine.upsert(
         practice_id=practice_id,
         domain="people",
@@ -219,7 +272,6 @@ def reconcile_supervision_drafts(
     owner_user_id: str,
     sessions: list,
 ) -> None:
-    """Ensure unfinalized supervision sessions appear on Home; mark finalized done."""
     for session in sessions:
         if getattr(session, "modality", "supervision") != "supervision":
             continue
