@@ -1,4 +1,4 @@
-"""Attune shell API schemas."""
+"""Clynotion platform shell API schemas."""
 
 from __future__ import annotations
 
@@ -12,14 +12,18 @@ class PracticeOut(BaseModel):
     display_name: str
     slug: str = ""
     allowed_domain: str = ""
-    tools: list[str] = Field(default_factory=lambda: ["clynotion"])
+    tools: list[str] = Field(default_factory=lambda: ["supervision"])
 
 
-class AttuneHomeOut(BaseModel):
-    product: str = "attune"
+class HomeOut(BaseModel):
+    product: str = "clynotion"
     user_id: str
     username: str
     email: str = ""
     practice: PracticeOut
     tools: list[dict[str, str]] = Field(default_factory=list)
     note: Optional[str] = None
+
+
+# Back-compat alias for older imports/tests during rename.
+AttuneHomeOut = HomeOut

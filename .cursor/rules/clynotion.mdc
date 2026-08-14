@@ -1,11 +1,12 @@
 ---
-description: Attune — non-negotiable invariants for a HIPAA behavioral-health scribe
+description: Clynotion — non-negotiable invariants for a HIPAA behavioral-health scribe
 alwaysApply: true
 ---
 
-You are working on Attune (practice product) with Clynotion (capture/notes tool inside Attune).
-It handles PHI. Phase 1 modality is clinical supervision; EMDR is parked for a later phase.
-These rules override convenience. If a requested change would violate one, STOP and say so.
+You are working on Clynotion (practice product). Supervision notes capture is the first tool
+inside it. It handles PHI. Phase 1 modality is clinical supervision; EMDR is parked for a
+later phase. These rules override convenience. If a requested change would violate one, STOP
+and say so.
 
 ## Compliance invariants (never violate)
 - NEVER log PHI. The audit log and any logging records ACTIONS, IDs, and timestamps ONLY —

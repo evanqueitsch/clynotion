@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-Attune / Clynotion Phase 1 smoke test — MOCK mode, no API keys.
+Clynotion Phase 1 smoke test — MOCK mode, no API keys.
 
 Checks:
   1) Typed-schema guard (bad duration type rejected)
@@ -35,7 +35,7 @@ def _fail(label: str, detail: str) -> None:
 
 
 def main() -> None:
-    print("Attune / Clynotion Phase 1 smoke test (MOCK)\n")
+    print("Clynotion Phase 1 smoke test (MOCK)\n")
     audit_log.clear()
     store.clear()
 

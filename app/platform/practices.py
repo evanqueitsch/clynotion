@@ -1,7 +1,7 @@
-"""Practice (tenant) registry for Attune.
+"""Practice (tenant) registry for Clynotion.
 
 Every clinician, session, and Workspace token is scoped by practice_id.
-This store is the Attune-side source of truth for practice metadata; Clynotion
+This store is the platform source of truth for practice metadata; capture
 routes keep using practice_id from the auth User.
 """
 
@@ -20,7 +20,7 @@ class Practice:
     display_name: str
     slug: str = ""
     allowed_domain: str = ""
-    tools: tuple[str, ...] = ("clynotion",)
+    tools: tuple[str, ...] = ("supervision",)
 
     def to_public_dict(self) -> dict:
         return {

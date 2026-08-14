@@ -1,4 +1,4 @@
-# fly.toml app configuration file for Attune / Clynotion
+# fly.toml app configuration file for Clynotion
 # https://fly.io/docs/reference/configuration/
 
 app = 'clynotion'

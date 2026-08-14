@@ -1,12 +1,15 @@
-# Attune / Clynotion — agent notes
+# Clynotion — agent notes
 
-**Attune** = practice product (multi-tenant shell). **Clynotion** = capture + clinical supervision notes tool inside Attune.
+**Clynotion** is the practice product (multi-tenant shell + ops). Domain: clynotion.com.
+**Supervision notes** is the first tool inside it (clinical supervision capture).
+
+Historical name “Attune” referred to the same product before the domain decision; prefer Clynotion everywhere user-facing. Env vars still use the `ATTUNE_*` prefix for deploy compatibility.
 
 ## Layout
 
-- `app/attune/` — practice registry + shell APIs (`/attune/home`, `/attune/practice`)
-- `app/` — Clynotion capture pipeline, roster, providers (moving into `app/clynotion/` later)
-- UI: Attune home → Open Clynotion (`/#clynotion`)
+- `app/platform/` — practice registry + shell APIs (`/home`, `/practice`; legacy `/attune/*`)
+- `app/` — supervision capture pipeline, roster, providers
+- UI: Clynotion home → Open Supervision notes (`/#supervision`; `#clynotion` still accepted)
 
 ## Stack
 
@@ -32,7 +35,7 @@ Dev login: `alice` / `alice-pass` (practice-a).
 - Scaffold a Vite/React notes demo — this repo is already a FastAPI app
 - Commit secrets (`env.local`, API keys)
 - Put real client/supervisee PHI in fixtures
-- Add PHI-path network vendors without a signed BAA (see `.cursor/rules/attune.mdc`)
+- Add PHI-path network vendors without a signed BAA (see `.cursor/rules/clynotion.mdc`)
 
 ## Cloud setup
 

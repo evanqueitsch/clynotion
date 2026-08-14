@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>Clynotion — Attune</title>
+  <title>Clynotion</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,500;9..144,700&family=IBM+Plex+Sans:wght@400;500;600&display=swap" rel="stylesheet" />
@@ -375,8 +375,8 @@
   <main>
     <div class="topbar">
       <div>
-        <h1 class="brand">Attune</h1>
-        <p class="tagline">Practice tools for clinical teams. Clynotion captures supervision notes.</p>
+        <h1 class="brand">Clynotion</h1>
+        <p class="tagline">Practice tools for clinical teams. Start with supervision notes.</p>
       </div>
       <div class="topbar-user hidden" id="topbar-user">
         <span class="who" id="signed-in-as"></span>
@@ -406,19 +406,19 @@
 
     <section id="home-panel" class="panel hidden">
       <h2 id="home-practice-name">Your practice</h2>
-      <p class="meta" id="home-blurb">Attune is the practice product. Open a tool to continue.</p>
-      <div class="tool-card" id="tool-clynotion">
-        <h3 style="font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;">Clynotion</h3>
+      <p class="meta" id="home-blurb">Clynotion is the practice product. Open a tool to continue.</p>
+      <div class="tool-card" id="tool-supervision">
+        <h3 style="font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;">Supervision notes</h3>
         <p class="meta" style="margin-bottom:0.85rem;">Clinical supervision capture — who’s present, session surface, review, finalize.</p>
-        <button class="primary" id="btn-open-clynotion" type="button">Open Clynotion</button>
+        <button class="primary" id="btn-open-supervision" type="button">Open Supervision notes</button>
       </div>
       <p class="status" id="home-status"></p>
     </section>
 
     <section id="capture-panel" class="panel hidden">
       <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
-        <h2 style="margin:0;">Clynotion · Start session</h2>
-        <button class="ghost" id="btn-back-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Attune home</button>
+        <h2 style="margin:0;">Supervision notes · Start session</h2>
+        <button class="ghost" id="btn-back-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
       </div>
       <div id="provider-banner" class="warn hidden"></div>
       <p class="meta">Mark who’s present, then capture on the session surface. Meeting bot is deferred.</p>
@@ -492,7 +492,7 @@
       <p class="status" id="review-status"></p>
     </section>
 
-    <footer>Attune · Clynotion is the first tool · audio deleted on finalize</footer>
+    <footer>Clynotion · Supervision notes · audio deleted on finalize</footer>
   </main>
   <script>
     const state = {
@@ -712,12 +712,14 @@
         setStatus($("auth-status"), `Signed in as ${me.email || me.username}`, "ok");
         const params = new URLSearchParams(window.location.search);
         const dirOk = params.get("directory") === "connected" || params.get("directory") === "mock_ready";
-        const wantClynotion = window.location.hash === "#clynotion" || dirOk;
+        const hash = window.location.hash;
+        const wantSupervision =
+          hash === "#supervision" || hash === "#clynotion" || dirOk;
         if (window.location.search.includes("auth_error=") || window.location.search.includes("directory")) {
-          window.history.replaceState({}, "", wantClynotion ? "/#clynotion" : "/");
+          window.history.replaceState({}, "", wantSupervision ? "/#supervision" : "/");
         }
-        if (wantClynotion) {
-          await openClynotion();
+        if (wantSupervision) {
+          await openSupervision();
           const dirMsg = directoryBannerMessage();
           if (dirMsg) setStatus($("workspace-status"), dirMsg.text, dirMsg.kind);
           if (dirOk) {
@@ -728,7 +730,7 @@
             }
           }
         } else {
-          await enterAttuneHome();
+          await enterHome();
         }
         return;
       } catch {
@@ -742,16 +744,16 @@
       });
     }
 
-    async function enterAttuneHome() {
+    async function enterHome() {
       try {
-        const home = await api("/attune/home");
+        const home = await api("/home");
         const nameEl = $("home-practice-name");
         if (nameEl) nameEl.textContent = home.practice.display_name || "Your practice";
         const blurb = $("home-blurb");
         if (blurb) {
           blurb.textContent =
             home.note ||
-            "Attune is the practice product. Open Clynotion to capture supervision.";
+            "Clynotion is the practice product. Open Supervision notes to capture.";
         }
         show("home-panel");
       } catch (e) {
@@ -760,13 +762,13 @@
       }
     }
 
-    async function openClynotion() {
+    async function openSupervision() {
       await loadProviderModes();
       await loadClinicians();
       await loadWorkspaceStatus();
       show("capture-panel");
-      if (window.location.hash !== "#clynotion") {
-        window.history.replaceState({}, "", "/#clynotion");
+      if (window.location.hash !== "#supervision") {
+        window.history.replaceState({}, "", "/#supervision");
       }
     }
 
@@ -1163,22 +1165,22 @@
             setSignedInChrome({ username: $("username").value });
           }
           setStatus($("auth-status"), "Signed in", "ok");
-          await enterAttuneHome();
+          await enterHome();
         } catch (e) {
           setStatus($("auth-status"), e.message, "error");
         }
       };
     }
 
-    const btnOpenClynotion = $("btn-open-clynotion");
-    if (btnOpenClynotion) {
-      btnOpenClynotion.onclick = () => { openClynotion(); };
+    const btnOpenSupervision = $("btn-open-supervision");
+    if (btnOpenSupervision) {
+      btnOpenSupervision.onclick = () => { openSupervision(); };
     }
     const btnBackHome = $("btn-back-home");
     if (btnBackHome) {
       btnBackHome.onclick = () => {
         window.history.replaceState({}, "", "/");
-        enterAttuneHome();
+        enterHome();
       };
     }
 

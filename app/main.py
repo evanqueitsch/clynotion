@@ -1,4 +1,4 @@
-"""FastAPI entrypoint — Attune shell + Clynotion capture; MOCK providers by default."""
+"""FastAPI entrypoint — Clynotion practice product; MOCK providers by default."""
 
 from __future__ import annotations
 
@@ -14,7 +14,8 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
-from app.attune.routes import router as attune_router
+from app.platform.routes import legacy as attune_legacy_router
+from app.platform.routes import router as platform_router
 from app.audit import AuditAction, AuditReason, audit_log
 from app.auth import (
     COOKIE_NAME,
@@ -80,11 +81,12 @@ validate_startup_secrets()
 _STATIC = Path(__file__).resolve().parent / "static"
 
 app = FastAPI(
-    title="Attune",
-    description="Practice product — Clynotion supervision capture is the first tool",
+    title="Clynotion",
+    description="Practice product — supervision notes capture is the first tool",
     version=APP_VERSION,
 )
-app.include_router(attune_router)
+app.include_router(platform_router)
+app.include_router(attune_legacy_router)
 
 _UPLOAD_ROOT = Path(tempfile.gettempdir()) / "clynotion_uploads"
 _UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
@@ -237,9 +239,9 @@ def health() -> dict[str, Any]:
         "status": "ok",
         "version": APP_VERSION,
         "auth": auth_mode(),
-        "product": "attune",
-        "tool": "clynotion",
-        "shell": "attune",
+        "product": "clynotion",
+        "tool": "supervision",
+        "shell": "clynotion",
         "modality": "supervision",
         "mode": modes["mode"],
         "phi_path": modes["phi_path"],

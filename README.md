@@ -1,6 +1,8 @@
-# Attune — Clynotion (Phase 1)
+# Clynotion (Phase 1)
 
-**Attune** is the practice product. **Clynotion** is the capture + note-taking tool inside it.
+**Clynotion** is the practice product (clynotion.com). **Supervision notes** is the first tool inside it (clinical supervision capture).
+
+Env vars still use the historical `ATTUNE_*` prefix so existing Fly secrets keep working.
 
 **Phase 1–2:** clinical supervision — who’s present → local voice enroll/check-in → session-surface capture (meeting bot stubbed until BAA) → ASR → extract → **local voice match** of diarized speakers to enrolled profiles → roster reconcile → review → finalize (audio deleted). Voice matching is **offline** (no third-party biometrics SaaS).
 
@@ -8,7 +10,7 @@ The practice roster starts **empty** — there are no seed/demo clinicians in a 
 
 EMDR / couples modalities are parked for a later phase.
 
-This repo is throwaway-friendly scaffolding under HIPAA-minded invariants (see `.cursor/rules/attune.mdc`).
+This repo is throwaway-friendly scaffolding under HIPAA-minded invariants (see `.cursor/rules/clynotion.mdc`).
 
 ## Architecture
 
@@ -123,7 +125,7 @@ regardless of what's in a developer's `env.local`. See `tests/test_real_mode_gat
 
 Production gates the app behind Google OAuth. Password login is disabled when `ATTUNE_AUTH=google`.
 
-Google sees **identity only** (email/profile) on the login path — not session audio, transcripts, or notes. Still use your org’s Workspace policies; do not put real PHI through Attune until vendor BAAs are in place.
+Google sees **identity only** (email/profile) on the login path — not session audio, transcripts, or notes. Still use your org’s Workspace policies; do not put real PHI through Clynotion until vendor BAAs are in place.
 
 ### 1) Google Cloud OAuth client
 
@@ -162,7 +164,7 @@ Sign-in URL: `https://clynotion.fly.dev/` → **Sign in with Google**.
 Clynotion can list users from your Workspace domain and let you **choose who to include** on the practice clinician roster (identity only — not session PHI).
 
 ### Google Cloud setup (one-time)
-1. Enable **Admin SDK API** on the `attune-clynotion` project.
+1. Enable **Admin SDK API** on the Google Cloud project used for Clynotion OAuth.
 2. OAuth consent → add scope  
    `https://www.googleapis.com/auth/admin.directory.user.readonly`
 3. OAuth client → Authorized redirect URIs, add:  

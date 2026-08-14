@@ -1,12 +1,12 @@
-# Attune — kickoff prompts (paste into chat; not auto-injected)
+# Clynotion — kickoff prompts (paste into chat; not auto-injected)
 
-Persistent rules live in `.cursor/rules/attune.mdc` (`alwaysApply: true`).
+Persistent rules live in `.cursor/rules/clynotion.mdc` (`alwaysApply: true`).
 Use the prompts below when starting work.
 
 ## Kickoff prompt (after the M1 skeleton is in the repo)
 
 > I've added an M1 skeleton to this repo (a FastAPI service under `app/`, plus `run_smoke_test.py`,
-> `sample_emdr_transcript.txt`, `requirements.txt`, and `README.md`). Follow `.cursor/rules/attune.mdc`.
+> `sample_emdr_transcript.txt`, `requirements.txt`, and `README.md`). Follow `.cursor/rules/clynotion.mdc`.
 >
 > Do this, in order, and stop after each step to show me the result:
 > 1. Read `README.md`, `app/schemas.py`, `app/pipeline.py`, and `run_smoke_test.py` so you understand
@@ -26,7 +26,7 @@ Use the prompts below when starting work.
 
 > Task: \<one specific increment\>.
 >
-> Follow `.cursor/rules/attune.mdc`. Requirements:
+> Follow `.cursor/rules/clynotion.mdc`. Requirements:
 > - Keep MOCK mode working with no keys; the new path is opt-in via env.
 > - `run_smoke_test.py` and all pytest tests must still pass; add tests for the new behavior.
 > - No PHI in logs; audio stays transient; no new PHI-path vendor without me explicitly approving a BAA.
