@@ -16,6 +16,10 @@ from pydantic import BaseModel, Field
 
 from app.platform.routes import legacy as attune_legacy_router
 from app.platform.routes import router as platform_router
+from app.platform.due import (
+    complete_supervision_draft_obligation,
+    upsert_supervision_draft_obligation,
+)
 from app.audit import AuditAction, AuditReason, audit_log
 from app.auth import (
     COOKIE_NAME,
@@ -718,6 +722,12 @@ def _create_draft(
         raise HTTPException(status_code=400, detail=str(e)) from e
     except Exception as e:
         raise HTTPException(status_code=422, detail=_safe_error_detail(e)) from e
+    upsert_supervision_draft_obligation(
+        practice_id=user.practice_id,
+        owner_user_id=user.user_id,
+        session_id=session.session_id,
+        due_at=session.updated_at,
+    )
     return _draft_response(session)
 
 
@@ -814,6 +824,10 @@ def finalize_owned_session(
         ) from e
     except Exception as e:
         raise HTTPException(status_code=422, detail=_safe_error_detail(e)) from e
+    complete_supervision_draft_obligation(
+        practice_id=user.practice_id,
+        session_id=session.session_id,
+    )
     return FinalizeResponse(
         session_id=session.session_id,
         modality=session.modality,

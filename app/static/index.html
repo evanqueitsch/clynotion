@@ -363,6 +363,41 @@
       padding: 1rem 1.1rem 1.15rem;
       margin: 0.75rem 0 0.25rem;
     }
+    .home-band { margin: 0.85rem 0 0.35rem; }
+    .due-list {
+      display: grid;
+      gap: 0.35rem;
+      margin: 0.35rem 0 0.5rem;
+    }
+    .due-row {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 0.75rem;
+      padding: 0.65rem 0.75rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.55);
+    }
+    .due-row.overdue {
+      border-color: #e3a9a9;
+      background: #fdecea;
+    }
+    .due-row .due-title {
+      font-weight: 500;
+      font-size: 0.95rem;
+    }
+    .due-row .due-meta {
+      display: block;
+      font-size: 0.78rem;
+      color: var(--muted);
+      margin-top: 0.15rem;
+    }
+    .due-row button {
+      flex: 0 0 auto;
+      padding: 0.4rem 0.85rem;
+      font-size: 0.82rem;
+    }
     footer {
       margin-top: 1.5rem;
       font-size: 0.8rem;
@@ -407,6 +442,18 @@
     <section id="home-panel" class="panel hidden">
       <h2 id="home-practice-name">Your practice</h2>
       <p class="meta" id="home-blurb">Clynotion is the practice product. Open a tool to continue.</p>
+
+      <div id="home-overdue-wrap" class="home-band hidden">
+        <span class="section-label">Overdue</span>
+        <div class="due-list" id="home-overdue"></div>
+      </div>
+      <div id="home-week-wrap" class="home-band hidden">
+        <span class="section-label">This week</span>
+        <div class="due-list" id="home-week"></div>
+      </div>
+      <p class="meta hidden" id="home-due-empty">Nothing due. Open a tool when you’re ready.</p>
+
+      <span class="section-label" style="margin-top:1rem;">Tools</span>
       <div class="tool-card" id="tool-supervision">
         <h3 style="font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;">Supervision notes</h3>
         <p class="meta" style="margin-bottom:0.85rem;">Clinical supervision capture — who’s present, session surface, review, finalize.</p>
@@ -753,13 +800,91 @@
         if (blurb) {
           blurb.textContent =
             home.note ||
-            "Clynotion is the practice product. Open Supervision notes to capture.";
+            "Clynotion is the practice product. Due items from every domain land here.";
         }
+        renderHomeBands(home.bands || { overdue: [], this_week: [] });
         show("home-panel");
       } catch (e) {
         setStatus($("home-status") || $("auth-status"), e.message, "error");
         show("capture-panel");
       }
+    }
+
+    function formatDue(iso) {
+      if (!iso) return "";
+      try {
+        const d = new Date(iso);
+        if (Number.isNaN(d.getTime())) return "";
+        return d.toLocaleString(undefined, {
+          month: "short",
+          day: "numeric",
+          hour: "numeric",
+          minute: "2-digit",
+        });
+      } catch {
+        return "";
+      }
+    }
+
+    function renderDueRow(ob, overdue) {
+      const row = document.createElement("div");
+      row.className = "due-row" + (overdue ? " overdue" : "");
+      const left = document.createElement("div");
+      const title = document.createElement("span");
+      title.className = "due-title";
+      title.textContent = ob.title || "Open item";
+      const meta = document.createElement("span");
+      meta.className = "due-meta";
+      const dueLabel = formatDue(ob.due_at);
+      meta.textContent = dueLabel
+        ? `${ob.domain || "people"} · due ${dueLabel}`
+        : (ob.domain || "people");
+      left.appendChild(title);
+      left.appendChild(meta);
+      const btn = document.createElement("button");
+      btn.type = "button";
+      btn.className = overdue ? "primary" : "ghost";
+      btn.textContent = "Open";
+      btn.onclick = () => openObligation(ob);
+      row.appendChild(left);
+      row.appendChild(btn);
+      return row;
+    }
+
+    function renderHomeBands(bands) {
+      const overdue = bands.overdue || [];
+      const week = bands.this_week || [];
+      const overdueEl = $("home-overdue");
+      const weekEl = $("home-week");
+      const overdueWrap = $("home-overdue-wrap");
+      const weekWrap = $("home-week-wrap");
+      const emptyEl = $("home-due-empty");
+      if (overdueEl) {
+        overdueEl.innerHTML = "";
+        overdue.forEach((ob) => overdueEl.appendChild(renderDueRow(ob, true)));
+      }
+      if (weekEl) {
+        weekEl.innerHTML = "";
+        week.forEach((ob) => weekEl.appendChild(renderDueRow(ob, false)));
+      }
+      if (overdueWrap) overdueWrap.classList.toggle("hidden", !overdue.length);
+      if (weekWrap) weekWrap.classList.toggle("hidden", !week.length);
+      if (emptyEl) emptyEl.classList.toggle("hidden", overdue.length + week.length > 0);
+    }
+
+    async function openObligation(ob) {
+      if (ob.source === "supervision" || (ob.href || "").includes("supervision")) {
+        await openSupervision();
+        if (ob.source_ref) {
+          try {
+            await openSession(ob.source_ref);
+          } catch (e) {
+            setStatus($("capture-status") || $("home-status"), e.message, "error");
+          }
+        }
+        return;
+      }
+      if (ob.href) window.location.href = ob.href;
     }
 
     async function openSupervision() {

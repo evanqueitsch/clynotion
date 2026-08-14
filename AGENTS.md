@@ -7,9 +7,9 @@ Historical name “Attune” referred to the same product before the domain deci
 
 ## Layout
 
-- `app/platform/` — practice registry + shell APIs (`/home`, `/practice`; legacy `/attune/*`)
+- `app/platform/` — practice registry, due engine, shell APIs (`/home`, `/due`, `/practice`; legacy `/attune/*`)
 - `app/` — supervision capture pipeline, roster, providers
-- UI: Clynotion home → Open Supervision notes (`/#supervision`; `#clynotion` still accepted)
+- UI: Clynotion home (Overdue / This week / Tools) → Open Supervision notes (`/#supervision`)
 
 ## Stack
 
