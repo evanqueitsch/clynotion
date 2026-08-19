@@ -143,11 +143,13 @@ CANNED_COUPLES_RAW: dict = {
 
 SUPERVISION_SYSTEM = """You are a clinical documentation extractor for clinical supervision sessions.
 Speakers may be labeled Speaker 0, Speaker 1, etc. Map each speaker to a clinician name when
-stated. Extract ONLY what is explicitly stated. Return strict JSON.
+stated. Extract ONLY what is explicitly stated. Return ONE JSON object only — no markdown fences,
+no commentary.
 Case labels must stay de-identified (e.g. Client A) — never invent real client names.
 duration_minutes MUST be a JSON integer or null (never a string).
 supervision_format must be one of: individual, triadic, group.
 participant role must be one of: admin, supervisor, supervisee, other.
+Evidence values must be short verbatim quotes (≤20 words), single-line, with JSON-escaped quotes.
 Schema keys: session_date, duration_minutes, supervision_format, setting, supervisor,
 participants (list of {speaker_label, name, role}), speaker_map (object label->name),
 agenda_items (string list), cases_discussed (list of {label, presenting_focus, supervisee_owner}),
@@ -206,11 +208,61 @@ _asr_mode = resolve_asr_mode
 _llm_mode = resolve_llm_mode
 
 
-def _parse_json_object(raw: str) -> dict[str, Any]:
-    m = re.search(r"\{.*\}", raw, re.DOTALL)
-    if not m:
+def _extract_json_object_text(raw: str) -> str:
+    """Pull the first top-level JSON object from model text (fences / prose OK)."""
+    text = (raw or "").strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
+        text = re.sub(r"\s*```\s*$", "", text)
+    start = text.find("{")
+    if start < 0:
         raise ValueError("model did not return a JSON object")
-    return json.loads(m.group(0))
+    depth = 0
+    in_str = False
+    escape = False
+    for i in range(start, len(text)):
+        ch = text[i]
+        if in_str:
+            if escape:
+                escape = False
+            elif ch == "\\":
+                escape = True
+            elif ch == '"':
+                in_str = False
+            continue
+        if ch == '"':
+            in_str = True
+        elif ch == "{":
+            depth += 1
+        elif ch == "}":
+            depth -= 1
+            if depth == 0:
+                return text[start : i + 1]
+    raise ValueError("model returned truncated JSON object")
+
+
+def _parse_json_object(raw: str) -> dict[str, Any]:
+    """Parse a JSON object from LLM output; tolerate fences and trailing commas."""
+    candidate = _extract_json_object_text(raw)
+    try:
+        obj: Any = json.loads(candidate)
+    except json.JSONDecodeError:
+        # Common model slip: trailing commas before } or ]
+        fixed = re.sub(r",(\s*[}\]])", r"\1", candidate)
+        obj = json.loads(fixed)
+    if not isinstance(obj, dict):
+        raise ValueError("model JSON root must be an object")
+    return obj
+
+
+def _json_repair_suffix(exc: BaseException) -> str:
+    """User-message suffix for one JSON repair — error type only, never prior body."""
+    return (
+        "\n\nYour previous reply was not valid JSON "
+        f"({type(exc).__name__}). "
+        "Return ONLY one complete JSON object. "
+        "Escape quotes inside strings. Keep evidence quotes ≤20 words, single-line."
+    )
 
 
 @dataclass
@@ -427,15 +479,32 @@ class AnthropicLlmExtractor(LlmExtractor):
         self._client = anthropic.Anthropic()
         self._model = os.environ.get("ATTUNE_LLM_MODEL", "claude-sonnet-4-5")
 
-    def _complete(self, system: str, user: str) -> dict:
+    def _ask(self, system: str, user: str, *, max_tokens: int) -> str:
         msg = self._client.messages.create(
             model=self._model,
-            max_tokens=2000,
+            max_tokens=max_tokens,
             system=system,
             messages=[{"role": "user", "content": user + "\n\nReturn ONLY valid JSON."}],
         )
-        text = msg.content[0].text
-        return _parse_json_object(text)
+        block = msg.content[0]
+        text = getattr(block, "text", None) or ""
+        stop = getattr(msg, "stop_reason", None) or ""
+        if stop == "max_tokens":
+            raise ValueError("model output truncated (max_tokens) before JSON completed")
+        return text
+
+    def _complete(self, system: str, user: str) -> dict:
+        max_tokens = int(os.environ.get("ATTUNE_LLM_MAX_TOKENS", "4096"))
+        try:
+            return _parse_json_object(self._ask(system, user, max_tokens=max_tokens))
+        except (json.JSONDecodeError, ValueError) as first_err:
+            # One repair attempt — do not echo prior model body (may include quotes).
+            repaired = self._ask(
+                system,
+                user + _json_repair_suffix(first_err),
+                max_tokens=max(max_tokens, 8192),
+            )
+            return _parse_json_object(repaired)
 
     def extract_supervision_raw(self, transcript: str) -> dict:
         return self._complete(SUPERVISION_SYSTEM, f"TRANSCRIPT:\n{transcript}")
@@ -456,16 +525,32 @@ class OpenAILlmExtractor(LlmExtractor):
         self._client = OpenAI()
         self._model = os.environ.get("ATTUNE_LLM_MODEL", "gpt-4o-mini")
 
-    def _complete(self, system: str, user: str) -> dict:
+    def _ask(self, system: str, user: str, *, max_tokens: int) -> str:
         r = self._client.chat.completions.create(
             model=self._model,
             temperature=0,
+            max_tokens=max_tokens,
             messages=[
                 {"role": "system", "content": system},
                 {"role": "user", "content": user + "\n\nReturn ONLY valid JSON."},
             ],
         )
-        return _parse_json_object(r.choices[0].message.content or "")
+        choice = r.choices[0]
+        if getattr(choice, "finish_reason", None) == "length":
+            raise ValueError("model output truncated (max_tokens) before JSON completed")
+        return choice.message.content or ""
+
+    def _complete(self, system: str, user: str) -> dict:
+        max_tokens = int(os.environ.get("ATTUNE_LLM_MAX_TOKENS", "4096"))
+        try:
+            return _parse_json_object(self._ask(system, user, max_tokens=max_tokens))
+        except (json.JSONDecodeError, ValueError) as first_err:
+            repaired = self._ask(
+                system,
+                user + _json_repair_suffix(first_err),
+                max_tokens=max(max_tokens, 8192),
+            )
+            return _parse_json_object(repaired)
 
     def extract_supervision_raw(self, transcript: str) -> dict:
         return self._complete(SUPERVISION_SYSTEM, f"TRANSCRIPT:\n{transcript}")

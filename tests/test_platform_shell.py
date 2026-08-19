@@ -218,7 +218,7 @@ def test_due_items_are_practice_scoped(client: TestClient) -> None:
 
 def test_health_version(client: TestClient) -> None:
     body = client.get("/health").json()
-    assert body["version"] == "0.13.0"
+    assert body["version"] == "0.13.1"
 
 
 def test_catalog_crosswalk_has_authorities(client: TestClient) -> None:

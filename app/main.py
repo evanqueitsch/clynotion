@@ -662,6 +662,11 @@ def _safe_error_detail(exc: BaseException) -> str:
         if needle in lowered:
             text = "(redacted vendor error — check API key / account)"
             break
+    # JSON parse failures: keep short — never surface model body / transcript snippets.
+    if isinstance(exc, json.JSONDecodeError) or "json" in type(exc).__name__.lower():
+        text = "model returned invalid JSON (retry capture, or paste a shorter transcript)"
+    elif "truncated JSON" in text or "max_tokens" in text.lower():
+        text = "model output truncated before JSON completed — retry capture"
     text = " ".join(text.split())
     if len(text) > 280:
         text = text[:277] + "..."
