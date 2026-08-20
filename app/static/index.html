@@ -601,6 +601,40 @@
       <div class="due-list" id="elig-list"></div>
     </section>
 
+    <section id="onboarding-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">Onboarding &amp; compliance</h2>
+        <button class="ghost" id="btn-onboarding-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <p class="meta">Owner / back-office only. Status, dates, and Drive links — never SSN, bank, or DOB.</p>
+      <span class="section-label">Compliance alerts</span>
+      <div id="onboarding-dashboard" class="due-list"></div>
+      <span class="section-label" style="margin-top:1rem;">Roster</span>
+      <div id="onboarding-roster" class="due-list"></div>
+      <details class="workspace-box" style="margin-top:1rem;">
+        <summary>Add hire</summary>
+        <label for="ob-name">Name</label>
+        <input id="ob-name" type="text" placeholder="Alex Mistovich" />
+        <label for="ob-title">Title</label>
+        <input id="ob-title" type="text" placeholder="Clinician" />
+        <label for="ob-license">License type</label>
+        <select id="ob-license">
+          <option value="LCSW">LCSW</option>
+          <option value="LSW">LSW</option>
+          <option value="LPC">LPC</option>
+          <option value="admin">admin</option>
+          <option value="other">other</option>
+        </select>
+        <label for="ob-start">Start date</label>
+        <input id="ob-start" type="text" placeholder="2026-08-18" />
+        <div class="row">
+          <button class="primary" id="btn-ob-create" type="button">Create hire</button>
+        </div>
+      </details>
+      <div id="onboarding-detail" class="hidden" style="margin-top:1rem;"></div>
+      <p class="status" id="onboarding-status"></p>
+    </section>
+
     <section id="capture-panel" class="panel hidden">
       <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
         <h2 style="margin:0;">Supervision notes · Start session</h2>
@@ -905,6 +939,7 @@
         const wantIngest = hash === "#ingest";
         const wantIntake = hash === "#intake";
         const wantElig = hash === "#eligibility";
+        const wantOnboarding = hash === "#onboarding";
         if (window.location.search.includes("auth_error=") || window.location.search.includes("directory")) {
           window.history.replaceState({}, "", wantSupervision ? "/#supervision" : "/");
         }
@@ -927,6 +962,8 @@
           await openIntake();
         } else if (wantElig) {
           await openEligibility();
+        } else if (wantOnboarding) {
+          await openOnboarding();
         } else {
           await enterHome();
         }
@@ -937,7 +974,7 @@
     }
 
     function show(panel) {
-      ["auth-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel"].forEach((id) => {
+      ["auth-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel"].forEach((id) => {
         $(id).classList.toggle("hidden", id !== panel);
       });
     }
@@ -972,6 +1009,7 @@
       if (href.includes("ingest")) return openIngest();
       if (href.includes("intake")) return openIntake();
       if (href.includes("eligibility")) return openEligibility();
+      if (href.includes("onboarding")) return openOnboarding();
       window.location.href = href;
     }
 
@@ -1071,6 +1109,7 @@
           else if ((item.href || "").includes("comply")) openComply();
           else if ((item.href || "").includes("intake")) openIntake();
           else if ((item.href || "").includes("eligibility")) openEligibility();
+          else if ((item.href || "").includes("onboarding")) openOnboarding();
           else enterHome();
         };
         row.appendChild(left);
@@ -1180,6 +1219,10 @@
       }
       if ((ob.href || "").includes("intake") || ob.source === "ops3") {
         await openIntake();
+        return;
+      }
+      if ((ob.href || "").includes("onboarding") || ob.source === "hr_onboarding") {
+        await openOnboarding();
         return;
       }
       if (ob.href) window.location.href = ob.href;
@@ -1401,6 +1444,195 @@
         });
       } catch (e) {
         setStatus($("elig-status"), e.message, "error");
+      }
+    }
+
+    async function openOnboarding() {
+      show("onboarding-panel");
+      window.history.replaceState({}, "", "/#onboarding");
+      await refreshOnboarding();
+    }
+
+    async function refreshOnboarding() {
+      try {
+        const [roster, dash] = await Promise.all([
+          api("/hr/roster"),
+          api("/hr/dashboard"),
+        ]);
+        const dashEl = $("onboarding-dashboard");
+        dashEl.innerHTML = "";
+        (dash.i9_section2_overdue || []).forEach((r) => {
+          const row = document.createElement("div");
+          row.className = "due-row overdue";
+          row.innerHTML = `<div><span class="due-title">I-9 §2 overdue — ${r.display_name}</span><span class="due-meta">start ${r.start_date}</span></div>`;
+          dashEl.appendChild(row);
+        });
+        (dash.expiring_soon || []).forEach((r) => {
+          const row = document.createElement("div");
+          row.className = "due-row";
+          row.innerHTML = `<div><span class="due-title">Expiring — ${r.display_name} · ${r.label}</span><span class="due-meta">${r.expiry_date}</span></div>`;
+          dashEl.appendChild(row);
+        });
+        if (!dashEl.children.length) {
+          dashEl.innerHTML = `<p class="meta">No I-9 overdue or expirations in the next ${dash.within_days || 60} days.</p>`;
+        }
+        const root = $("onboarding-roster");
+        root.innerHTML = "";
+        roster.forEach((e) => {
+          const row = document.createElement("div");
+          row.className = "due-row" + (e.i9_section2_overdue ? " overdue" : "");
+          const left = document.createElement("div");
+          const title = document.createElement("span");
+          title.className = "due-title";
+          title.textContent = `${e.display_name} · ${e.license_type}`;
+          const meta = document.createElement("span");
+          meta.className = "due-meta";
+          const badges = [];
+          if (e.i9_section2_overdue) badges.push("I-9 overdue");
+          if (e.expiring_soon_count) badges.push(`${e.expiring_soon_count} expiring`);
+          meta.textContent = `${e.percent_complete}% · ${e.overall_status} · start ${e.start_date}` +
+            (badges.length ? ` · ${badges.join(", ")}` : "");
+          left.appendChild(title);
+          left.appendChild(meta);
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "primary";
+          btn.textContent = "Open";
+          btn.onclick = () => openHireDetail(e.employee_id);
+          row.appendChild(left);
+          row.appendChild(btn);
+          root.appendChild(row);
+        });
+        setStatus($("onboarding-status"), `${roster.length} hire(s)`, "ok");
+      } catch (e) {
+        setStatus($("onboarding-status"), e.message, "error");
+      }
+    }
+
+    async function openHireDetail(employeeId) {
+      try {
+        const data = await api(`/hr/employees/${employeeId}`);
+        const wrap = $("onboarding-detail");
+        wrap.classList.remove("hidden");
+        const emp = data.employee;
+        const ob = data.onboarding;
+        const steps = ob.steps || {};
+        const labels = ob.step_labels || {};
+        const stepKeys = Object.keys(labels).filter((k) => {
+          if (k === "supervisionAgreement" && emp.license_type !== "LSW") return false;
+          return true;
+        });
+        let stepsHtml = stepKeys.map((k) => {
+          const val = steps[k] || "NotStarted";
+          const opts = ["NotStarted", "InProgress", "Complete", "NA"]
+            .map((o) => `<option value="${o}" ${o === val ? "selected" : ""}>${o}</option>`)
+            .join("");
+          return `<label>${labels[k] || k}</label><select data-step="${k}">${opts}</select>`;
+        }).join("");
+        const showSup = emp.license_type === "LSW";
+        const sup = data.supervision || {};
+        wrap.innerHTML = `
+          <span class="section-label">${emp.display_name}</span>
+          <p class="meta">${emp.license_type} · ${ob.percent_complete}% · ${ob.overall_status}${ob.i9_section2_overdue ? " · I-9 overdue" : ""}</p>
+          <label>Drive folder URL</label>
+          <input id="ob-drive" type="text" value="${emp.drive_folder_url || ""}" placeholder="https://drive.google.com/..." />
+          <label>Notes</label>
+          <textarea id="ob-notes" rows="2">${ob.notes || ""}</textarea>
+          ${stepsHtml}
+          <div class="row" style="margin-top:0.75rem;">
+            <button class="primary" id="btn-ob-save" type="button">Save onboarding</button>
+          </div>
+          <span class="section-label" style="margin-top:1rem;">Clearances / license items</span>
+          <div id="ob-compliance-list" class="due-list"></div>
+          <label>Add clearance type</label>
+          <select id="ob-comp-type">
+            <option>Act151</option><option>Act34</option><option>Act114</option><option>License</option><option>Other</option>
+          </select>
+          <label>Issue date</label>
+          <input id="ob-comp-issue" type="text" placeholder="2026-01-15" />
+          <button class="ghost" id="btn-ob-comp" type="button">Add compliance item</button>
+          <div id="ob-supervision" class="${showSup ? "" : "hidden"}">
+            <span class="section-label" style="margin-top:1rem;">Supervision log (LSW)</span>
+            <p class="meta">${sup.hours_to_date || 0} / ${sup.target_hours || 3000} hours (${sup.progress_pct || 0}%)</p>
+            <label>Duration (minutes)</label>
+            <input id="ob-sup-mins" type="text" placeholder="60" />
+            <label>Date</label>
+            <input id="ob-sup-date" type="text" placeholder="2026-08-18" />
+            <button class="ghost" id="btn-ob-sup" type="button">Log hours</button>
+            <div id="ob-sup-list" class="due-list"></div>
+          </div>
+        `;
+        const clist = $("ob-compliance-list");
+        (data.compliance_items || []).forEach((c) => {
+          const row = document.createElement("div");
+          row.className = "due-row";
+          row.innerHTML = `<div><span class="due-title">${c.type}</span><span class="due-meta">issue ${c.issue_date || "—"} · expiry ${c.expiry_date || "—"}</span></div>`;
+          clist.appendChild(row);
+        });
+        if (showSup) {
+          const slist = $("ob-sup-list");
+          (sup.entries || []).forEach((s) => {
+            const row = document.createElement("div");
+            row.className = "due-row";
+            row.innerHTML = `<div><span class="due-title">${s.date} · ${s.duration_minutes} min</span><span class="due-meta">${s.format}</span></div>`;
+            slist.appendChild(row);
+          });
+        }
+        $("btn-ob-save").onclick = async () => {
+          const stepPatch = {};
+          wrap.querySelectorAll("select[data-step]").forEach((sel) => {
+            stepPatch[sel.getAttribute("data-step")] = sel.value;
+          });
+          try {
+            await api(`/hr/employees/${employeeId}`, {
+              method: "PATCH",
+              json: { drive_folder_url: $("ob-drive").value },
+            });
+            await api(`/hr/employees/${employeeId}/onboarding`, {
+              method: "PATCH",
+              json: { steps: stepPatch, notes: $("ob-notes").value },
+            });
+            setStatus($("onboarding-status"), "Saved", "ok");
+            await refreshOnboarding();
+            await openHireDetail(employeeId);
+          } catch (e) {
+            setStatus($("onboarding-status"), e.message, "error");
+          }
+        };
+        $("btn-ob-comp").onclick = async () => {
+          try {
+            await api(`/hr/employees/${employeeId}/compliance`, {
+              method: "POST",
+              json: {
+                type: $("ob-comp-type").value,
+                issue_date: $("ob-comp-issue").value,
+              },
+            });
+            await openHireDetail(employeeId);
+            await refreshOnboarding();
+          } catch (e) {
+            setStatus($("onboarding-status"), e.message, "error");
+          }
+        };
+        if (showSup) {
+          $("btn-ob-sup").onclick = async () => {
+            try {
+              await api(`/hr/employees/${employeeId}/supervision`, {
+                method: "POST",
+                json: {
+                  duration_minutes: Number($("ob-sup-mins").value || 0),
+                  date: $("ob-sup-date").value,
+                  format: "Telehealth",
+                },
+              });
+              await openHireDetail(employeeId);
+            } catch (e) {
+              setStatus($("onboarding-status"), e.message, "error");
+            }
+          };
+        }
+      } catch (e) {
+        setStatus($("onboarding-status"), e.message, "error");
       }
     }
 
@@ -1867,6 +2099,29 @@
     if (btnIntakeHome) btnIntakeHome.onclick = () => enterHome();
     const btnEligHome = $("btn-eligibility-home");
     if (btnEligHome) btnEligHome.onclick = () => enterHome();
+    const btnOnboardingHome = $("btn-onboarding-home");
+    if (btnOnboardingHome) btnOnboardingHome.onclick = () => enterHome();
+    const btnObCreate = $("btn-ob-create");
+    if (btnObCreate) {
+      btnObCreate.onclick = async () => {
+        try {
+          const data = await api("/hr/employees", {
+            method: "POST",
+            json: {
+              display_name: $("ob-name").value,
+              title: $("ob-title").value,
+              license_type: $("ob-license").value,
+              start_date: $("ob-start").value,
+            },
+          });
+          setStatus($("onboarding-status"), `Created ${data.employee.display_name}`, "ok");
+          await refreshOnboarding();
+          await openHireDetail(data.employee.employee_id);
+        } catch (e) {
+          setStatus($("onboarding-status"), e.message, "error");
+        }
+      };
+    }
     const btnIntakeCreate = $("btn-intake-create");
     if (btnIntakeCreate) {
       btnIntakeCreate.onclick = async () => {

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class PracticeOut(BaseModel):
@@ -151,6 +151,61 @@ class EligibilityCheckOut(BaseModel):
     outcome: str
     coverage_detail: str = ""
     evidence_ref: str = ""
+
+
+class EmployeeCreateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: str
+    title: str = ""
+    license_type: str = "other"
+    license_number: str = ""
+    license_expiry: str = ""
+    supervisor_id: str = ""
+    start_date: str = ""
+    drive_folder_url: str = ""
+
+
+class EmployeePatchBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    display_name: Optional[str] = None
+    title: Optional[str] = None
+    license_type: Optional[str] = None
+    license_number: Optional[str] = None
+    license_expiry: Optional[str] = None
+    supervisor_id: Optional[str] = None
+    start_date: Optional[str] = None
+    drive_folder_url: Optional[str] = None
+    active: Optional[bool] = None
+
+
+class OnboardingPatchBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    steps: dict[str, str] = Field(default_factory=dict)
+    notes: Optional[str] = None
+
+
+class ComplianceItemCreateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    type: str
+    issue_date: str = ""
+    expiry_date: str = ""
+    renewal_interval_months: int = 60
+    document_drive_url: str = ""
+
+
+class SupervisionEntryCreateBody(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    supervisor_id: str = ""
+    date: str = ""
+    duration_minutes: int
+    format: str = "Telehealth"
+    notes: str = ""
+    signed_by_both: bool = False
 
 
 # Back-compat alias

@@ -154,6 +154,24 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
         "authorities": _auth("FLSA — accurate hours worked for non-exempt employees"),
     },
     {
+        "id": "onboarding_compliance",
+        "name": "Onboarding & compliance",
+        "unit": "hr",
+        "kind": "tool",
+        "status": "live",
+        "href": "/#onboarding",
+        "description": (
+            "New-hire checklist, PA clearances, license expiry, LSW supervision hours. "
+            "Status/dates/links only — no SSN, bank, or DOB."
+        ),
+        "legacy_ids": ["OPS-2-onboarding", "OPS-7"],
+        "authorities": _auth(
+            "IRCA I-9 §2 within 3 business days",
+            "23 Pa.C.S. §6344 / Acts 34·151·114 clearances",
+            "PA Board supervised experience (LSW→LCSW)",
+        ),
+    },
+    {
         "id": "hiring_onboarding",
         "name": "Hiring & onboarding",
         "unit": "hr",

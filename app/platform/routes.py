@@ -6,12 +6,13 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 
-from app.auth import CurrentUser
+from app.auth import CurrentUser, HrAdminUser
 from app.clinicians import clinician_store
 from app.comply.credentials import credential_store
 from app.comply.registry import ensure_seeded_clocks, list_seed_catalog
 from app.eligibility.service import eligibility_store
 from app.grow.intake import intake_store
+from app.hr.onboarding import onboarding_store
 from app.ingest.sp_csv import ingest_store, reconcile_stale_ingest
 from app.platform.catalog import catalog_by_unit, crosswalk_rows, live_tools
 from app.platform.due import due_engine, reconcile_supervision_drafts
@@ -19,8 +20,11 @@ from app.platform.practices import practice_store
 from app.platform.schemas import (
     AttentionItemOut,
     ComplyCatalogItemOut,
+    ComplianceItemCreateBody,
     EligibilityCheckBody,
     EligibilityCheckOut,
+    EmployeeCreateBody,
+    EmployeePatchBody,
     HomeBandsOut,
     HomeOut,
     IngestUploadBody,
@@ -29,8 +33,10 @@ from app.platform.schemas import (
     IntakeEventOut,
     IntakePatchBody,
     ObligationOut,
+    OnboardingPatchBody,
     PracticeOut,
     PulseOut,
+    SupervisionEntryCreateBody,
 )
 from app.store import store
 
@@ -88,6 +94,15 @@ def _build_attention(practice_id: str) -> list[AttentionItemOut]:
                 href="/#intake",
             )
         )
+    if any(o.source == "hr_onboarding" for o in due_engine.list_open(practice_id)):
+        items.append(
+            AttentionItemOut(
+                code="hr_onboarding",
+                title="Onboarding / clearance item needs attention",
+                domain="people",
+                href="/#onboarding",
+            )
+        )
     return items
 
 
@@ -137,6 +152,10 @@ def _home_payload(user: CurrentUser) -> HomeOut:
     # Tier-0 / Tier-1 feeds into due engine
     ensure_seeded_clocks(practice_id=user.practice_id, owner_user_id=user.user_id)
     credential_store.reconcile(
+        practice_id=user.practice_id, owner_user_id=user.user_id
+    )
+    onboarding_store.ensure_seeded(user.practice_id)
+    onboarding_store.reconcile_due(
         practice_id=user.practice_id, owner_user_id=user.user_id
     )
     reconcile_stale_ingest(practice_id=user.practice_id, owner_user_id=user.user_id)
@@ -192,6 +211,10 @@ def current_practice(user: CurrentUser) -> PracticeOut:
 def due_bands(user: CurrentUser) -> HomeBandsOut:
     ensure_seeded_clocks(practice_id=user.practice_id, owner_user_id=user.user_id)
     credential_store.reconcile(
+        practice_id=user.practice_id, owner_user_id=user.user_id
+    )
+    onboarding_store.ensure_seeded(user.practice_id)
+    onboarding_store.reconcile_due(
         practice_id=user.practice_id, owner_user_id=user.user_id
     )
     reconcile_stale_ingest(practice_id=user.practice_id, owner_user_id=user.user_id)
@@ -372,6 +395,130 @@ def create_eligibility_check(
     except ValueError as e:
         raise HTTPException(status_code=422, detail=str(e)) from e
     return EligibilityCheckOut.model_validate(row.to_public_dict())
+
+
+# --- HR onboarding & compliance (owner / back-office admin) ---
+
+
+@router.get("/hr/roster")
+def hr_roster(user: HrAdminUser) -> list[dict]:
+    onboarding_store.ensure_seeded(user.practice_id)
+    onboarding_store.reconcile_due(
+        practice_id=user.practice_id, owner_user_id=user.user_id
+    )
+    return onboarding_store.roster_rows(user.practice_id)
+
+
+@router.get("/hr/dashboard")
+def hr_compliance_dashboard(user: HrAdminUser) -> dict:
+    onboarding_store.ensure_seeded(user.practice_id)
+    return onboarding_store.compliance_dashboard(user.practice_id)
+
+
+@router.post("/hr/employees")
+def hr_create_employee(user: HrAdminUser, body: EmployeeCreateBody) -> dict:
+    try:
+        emp = onboarding_store.create_employee(
+            practice_id=user.practice_id,
+            display_name=body.display_name,
+            title=body.title,
+            license_type=body.license_type,  # type: ignore[arg-type]
+            license_number=body.license_number,
+            license_expiry=body.license_expiry,
+            supervisor_id=body.supervisor_id,
+            start_date=body.start_date,
+            drive_folder_url=body.drive_folder_url,
+            updated_by=user.user_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+    return onboarding_store.hire_detail(user.practice_id, emp.employee_id)
+
+
+@router.get("/hr/employees/{employee_id}")
+def hr_hire_detail(employee_id: str, user: HrAdminUser) -> dict:
+    try:
+        return onboarding_store.hire_detail(user.practice_id, employee_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail="employee not found") from e
+
+
+@router.patch("/hr/employees/{employee_id}")
+def hr_patch_employee(
+    employee_id: str, user: HrAdminUser, body: EmployeePatchBody
+) -> dict:
+    try:
+        onboarding_store.patch_employee(
+            user.practice_id, employee_id, body.model_dump(exclude_none=True)
+        )
+        return onboarding_store.hire_detail(user.practice_id, employee_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail="employee not found") from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+@router.patch("/hr/employees/{employee_id}/onboarding")
+def hr_patch_onboarding(
+    employee_id: str, user: HrAdminUser, body: OnboardingPatchBody
+) -> dict:
+    try:
+        onboarding_store.patch_onboarding(
+            user.practice_id,
+            employee_id,
+            steps=body.steps or None,
+            notes=body.notes,
+            updated_by=user.user_id,
+        )
+        return onboarding_store.hire_detail(user.practice_id, employee_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail="employee not found") from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+@router.post("/hr/employees/{employee_id}/compliance")
+def hr_add_compliance(
+    employee_id: str, user: HrAdminUser, body: ComplianceItemCreateBody
+) -> dict:
+    try:
+        onboarding_store.add_compliance_item(
+            practice_id=user.practice_id,
+            employee_id=employee_id,
+            type=body.type,  # type: ignore[arg-type]
+            issue_date=body.issue_date,
+            expiry_date=body.expiry_date,
+            renewal_interval_months=body.renewal_interval_months,
+            document_drive_url=body.document_drive_url,
+            updated_by=user.user_id,
+        )
+        return onboarding_store.hire_detail(user.practice_id, employee_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail="employee not found") from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
+
+
+@router.post("/hr/employees/{employee_id}/supervision")
+def hr_add_supervision(
+    employee_id: str, user: HrAdminUser, body: SupervisionEntryCreateBody
+) -> dict:
+    try:
+        onboarding_store.add_supervision_entry(
+            practice_id=user.practice_id,
+            supervisee_id=employee_id,
+            supervisor_id=body.supervisor_id,
+            date_str=body.date,
+            duration_minutes=body.duration_minutes,
+            format=body.format,  # type: ignore[arg-type]
+            notes=body.notes,
+            signed_by_both=body.signed_by_both,
+        )
+        return onboarding_store.hire_detail(user.practice_id, employee_id)
+    except KeyError as e:
+        raise HTTPException(status_code=404, detail="employee not found") from e
+    except ValueError as e:
+        raise HTTPException(status_code=422, detail=str(e)) from e
 
 
 @legacy.get("/home", response_model=HomeOut)

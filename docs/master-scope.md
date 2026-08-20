@@ -6,8 +6,8 @@
 
 | Field | Value |
 |---|---|
-| Version | 2.0 |
-| Last updated | 2026-08-07 |
+| Version | 2.1 |
+| Last updated | 2026-08-20 |
 | Owner | Evan, COO |
 | Status | Architecture of record |
 
@@ -25,6 +25,7 @@
 
 | Version | Date | Change |
 |---|---|---|
+| **2.1** | 2026-08-20 | Added §12.9 Onboarding & Compliance Tracking (design of record from the 2026-08-18 module scope). Replaces `H4C_Onboarding_Tracker.xlsx`. HR/Employee PII zone — distinct from §6 COMPLY registry (legacy OPS-2). Canonical module text: `docs/modules/ops2-onboarding-compliance-scope.md`. |
 | 1.0 | — | Initial scope. Platform overview + OPS-1 (PTO/Productivity/Bonus). |
 | 1.1 | 2026-08-07 | Markdown conversion. Added OPS-2 (Compliance & Credentialing Register). Added Appendix A (Medicaid/MA gap items), Appendix B (open decisions). |
 | 1.2 | 2026-08-07 | **Architecture of record set** — Attune is a custom application built in Cursor; PHI constraint overridden. Expanded OPS-2 to full compliance registry scope. Added OPS-3 (Intake Log & Access Standards), OPS-4 (Telephony Event Capture). Added Appendix C (SimplePractice gap analysis), Appendix D (related artifacts). Expanded Appendix A with enrollment prerequisites and PerformCare findings. |
@@ -945,6 +946,38 @@ On acceptance, generate a dated checklist from role and license type. For a clin
 ### 12.8 Data classification
 
 [Certain] Applicant data is **not PHI** but is sensitive PII with its own retention rules and its own access wall. Same tier as OPS-1 HR data: owner and back-office admin only. Interview notes about a candidate are discoverable in an employment claim — write them accordingly, and say so in the UI.
+
+### 12.9 Onboarding & Compliance Tracking (spreadsheet replacement)
+
+**Status: In progress (Clynotion v0.14).** Design of record scoped 2026-08-18.
+
+> **Naming note.** The practice module sheet is titled “OPS-2 · Onboarding & Compliance Tracking.” In this master document, **§6 OPS-2** remains the COMPLY Compliance & Credentialing Registry (practice calendar + six clinician clocks). This §12.9 module is the **HR Employee onboarding tracker** (legacy alias `OPS-2-onboarding` / handoff from OPS-7). Do not merge the two stores.
+
+**Purpose.** Track each new hire’s onboarding progress and each employee’s ongoing clearance/license status in one admin view, replacing `H4C_Onboarding_Tracker.xlsx`. Encodes the Digital Onboarding Playbook: packet e-sign, W-4 + direct deposit via QuickBooks Workforce (status mirrors only), I-9 verified in person, PA clearances, insurance credentialing, and — for LSW hires — a clinical supervision agreement plus supervised-hours logging.
+
+**Design principles**
+
+- **PII minimization (hard rule).** Store *status + dates + short notes only.* Do NOT store SSNs, bank details, clearance document contents, or DOB. Drive links and QuickBooks completion flags only.
+- **v1 = manual entry.** No SimplePractice or third-party APIs required to ship.
+- **Conditional by license type.** LSW surfaces supervision fields; LCSW does not.
+- **Compliance is ongoing.** Clearances and licenses expire; renewal dates surface on Home.
+
+**Data model (shared Employee spine with OPS-1 — do not duplicate)**
+
+- `Employee`: `licenseType` (LCSW|LSW|LPC|admin|other), `licenseNumber`, `licenseExpiry`, `supervisorId`, `startDate`, `driveFolderUrl`.
+- `OnboardingRecord`: step statuses (`NotStarted|InProgress|Complete|NA`) including I-9 §1/§2, W-4/DD QuickBooks mirrors, Acts 151/34/114, Drive folder, welcome email, `supervisionAgreement` (LSW only).
+- `ComplianceItem`: Act151|Act34|Act114|License|Other with issue/expiry (PA clearances default +60 months) and Drive link only.
+- `SupervisionLog` (LSW only): date, duration, format, notes, signedByBoth.
+
+**Computed:** `percentComplete`, `overallStatus`, `i9Section2Overdue` (startDate + 3 business days), `expiringSoon` (default 60 days), `supervisionHoursToDate` vs configurable PA LCSW target.
+
+**Access:** Owner + back-office admin only. Employee-PII zone — separate from client/PHI.
+
+**Migration seed:** Alex Mistovich (LCSW), Nathan Sterry (LSW), Kayleigh (LSW).
+
+**Open questions (unchanged from module scope):** email vs in-app alerts; day-to-day owner; confirm PA Board supervised-hours target; license expiry for all staff vs new hires only; Drive links in-app (recommended: yes).
+
+Full acceptance criteria and step list: `docs/modules/ops2-onboarding-compliance-scope.md`.
 
 ---
 

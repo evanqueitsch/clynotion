@@ -218,3 +218,51 @@ def get_optional_user(
 
 CurrentUser = Annotated[User, Depends(get_current_user)]
 OptionalUser = Annotated[Optional[User], Depends(get_optional_user)]
+
+
+def is_hr_admin(user: User) -> bool:
+    """Owner / back-office admin gate for HR onboarding (employee PII zone).
+
+    Allow when:
+    - username is a known seed owner (alice), or
+    - email is in ATTUNE_HR_ADMIN_EMAILS, or
+    - roster clinician with same email has default_role admin.
+    """
+    if user.username in ("alice",):
+        return True
+    allow = {
+        e.strip().lower()
+        for e in (os.environ.get("ATTUNE_HR_ADMIN_EMAILS") or "").split(",")
+        if e.strip()
+    }
+    email = (user.email or "").strip().lower()
+    if email and email in allow:
+        return True
+    if email:
+        try:
+            from app.clinicians import clinician_store
+
+            for clin in clinician_store.list_for_practice(user.practice_id):
+                if clin.default_role != "admin":
+                    continue
+                clin_email = (clin.email or "").strip().lower()
+                if email and clin_email == email:
+                    return True
+                # Directory may not have populated email yet — match display name.
+                if (user.username or "").strip().lower() == clin.display_name.strip().lower():
+                    return True
+        except Exception:
+            pass
+    return False
+
+
+def require_hr_admin(user: CurrentUser) -> User:
+    if not is_hr_admin(user):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="HR admin only — onboarding is owner/back-office access",
+        )
+    return user
+
+
+HrAdminUser = Annotated[User, Depends(require_hr_admin)]

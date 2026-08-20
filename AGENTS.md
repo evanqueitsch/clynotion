@@ -12,11 +12,12 @@ Historical name “Attune” referred to the same product before the domain deci
 
 - `app/platform/` — practice registry, due engine, **catalog / crosswalk**, shell APIs
 - `app/comply/` — compliance registry clocks + **per-clinician credential clocks** → due engine
+- `app/hr/` — onboarding & employee compliance (checklist, clearances, LSW hours; admin-only)
 - `app/ingest/` — SimplePractice CSV ingest (documentation reports; demographics deferred)
 - `app/grow/` — intake log (case codes only) → due engine access clocks
 - `app/eligibility/` — eligibility checks (mock/manual; live adapters deferred)
 - `app/` — supervision capture pipeline, roster, providers
-- UI: Home by business unit + Supervision, Compliance, Ingest, Intake, Eligibility
+- UI: Home by business unit + Supervision, Compliance, **Onboarding**, Ingest, Intake, Eligibility
 
 ## Stack
 
@@ -25,6 +26,7 @@ Historical name “Attune” referred to the same product before the domain deci
 - Tests/smoke: `ATTUNE_MODE=mock`
 - Local voice enroll/match (no third-party biometrics network)
 - Meeting bot: stubbed / deferred
+- HR onboarding: owner/back-office only (`alice` in dev; Google users with roster **Admin** role, or `ATTUNE_HR_ADMIN_EMAILS`)
 
 ## Commands
 
