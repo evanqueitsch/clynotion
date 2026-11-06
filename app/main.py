@@ -503,6 +503,49 @@ def gmail_send_start(user: CurrentUser) -> RedirectResponse:
     return response
 
 
+_GMAIL_SEND_REDIRECT = {
+    "gmail_send_domain": "domain",
+    "gmail_send_identity_failed": "identity",
+    "gmail_send_exchange_failed": "exchange",
+    "gmail_send_token_missing": "exchange",
+    "gmail_send_scope": "scope",
+    "gmail_send_policy": "policy",
+    "gmail_send_redirect": "redirect",
+    "gmail_send_denied": "denied",
+    "gmail_send_state": "state",
+    "gmail_send_session": "session",
+    "gmail_send_save_failed": "save",
+    "gmail_send_missing": "missing",
+    "gmail_send_refresh_missing": "refresh",
+    "gmail_send_access_expired": "refresh",
+}
+
+
+def _gmail_send_back(code_name: str) -> RedirectResponse:
+    if code_name not in set(_GMAIL_SEND_REDIRECT.values()) | {"connected"}:
+        code_name = "exchange"
+    print("gmail_send_callback", {"result": code_name}, flush=True)
+    response = RedirectResponse(f"/?gmail_send={code_name}#time-self-test", status_code=302)
+    response.delete_cookie(key=_GMAIL_SEND_STATE_COOKIE, path="/")
+    return response
+
+
+def _note_gmail_send_failure(request: Request, code: str) -> None:
+    from app.hr.gmail_oauth import note_gmail_send_error
+
+    token = request.cookies.get(COOKIE_NAME)
+    if not token:
+        return
+    try:
+        user = decode_token_safe(token)
+    except Exception:
+        return
+    try:
+        note_gmail_send_error(user.practice_id, code)
+    except Exception as exc:
+        print("gmail_send_error_not_stored", {"type": type(exc).__name__}, flush=True)
+
+
 @app.get("/auth/google/gmail-send/callback")
 def gmail_send_callback(
     request: Request,
@@ -512,25 +555,32 @@ def gmail_send_callback(
 ) -> RedirectResponse:
     from app.hr.gmail_oauth import GmailSendError, exchange_gmail_send_code, save_gmail_send_tokens
 
-    def _back(code_name: str) -> RedirectResponse:
-        response = RedirectResponse(f"/?gmail_send={code_name}#time-self-test", status_code=302)
-        response.delete_cookie(key=_GMAIL_SEND_STATE_COOKIE, path="/")
-        return response
-
     if error:
-        return _back("denied")
+        google_error = (error or "").strip().lower()[:80]
+        print("gmail_send_callback", {"result": "google_error", "google_error": google_error}, flush=True)
+        mapped = {
+            "access_denied": "gmail_send_denied",
+            "invalid_scope": "gmail_send_scope",
+            "admin_policy_enforced": "gmail_send_policy",
+            "org_internal": "gmail_send_policy",
+            "redirect_uri_mismatch": "gmail_send_redirect",
+        }.get(google_error, "gmail_send_denied")
+        _note_gmail_send_failure(request, mapped)
+        return _gmail_send_back(_GMAIL_SEND_REDIRECT[mapped])
     if not code or not state:
-        return _back("missing")
+        _note_gmail_send_failure(request, "gmail_send_missing")
+        return _gmail_send_back("missing")
     cookie_state = request.cookies.get(_GMAIL_SEND_STATE_COOKIE, "")
     if not cookie_state or cookie_state != state or not verify_state(state, jwt_signing_secret()):
-        return _back("state")
+        _note_gmail_send_failure(request, "gmail_send_state")
+        return _gmail_send_back("state")
     token = request.cookies.get(COOKIE_NAME)
     if not token:
-        return _back("session")
+        return _gmail_send_back("session")
     try:
         user = decode_token_safe(token)
     except Exception:
-        return _back("session")
+        return _gmail_send_back("session")
     try:
         granted = exchange_gmail_send_code(code)
         save_gmail_send_tokens(
@@ -538,14 +588,16 @@ def gmail_send_callback(
             refresh_token=granted["refresh_token"],
             access_token=granted["access_token"],
             email=granted["email"],
+            expires_in=int(granted.get("expires_in") or 0),
         )
     except GmailSendError as exc:
-        if exc.code == "gmail_send_domain":
-            return _back("domain")
-        return _back("exchange")
-    except Exception:
-        return _back("exchange")
-    return _back("connected")
+        _note_gmail_send_failure(request, exc.code)
+        return _gmail_send_back(_GMAIL_SEND_REDIRECT.get(exc.code, "exchange"))
+    except Exception as exc:
+        print("gmail_send_callback", {"result": "save", "type": type(exc).__name__}, flush=True)
+        _note_gmail_send_failure(request, "gmail_send_save_failed")
+        return _gmail_send_back("save")
+    return _gmail_send_back("connected")
 
 
 @app.post("/hr/time/gmail-send/disconnect")
