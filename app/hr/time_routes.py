@@ -159,13 +159,27 @@ def time_self_test_send(user: CurrentUser, body: SelfTestSendBody) -> dict:
     """Send one labelled self-test message. Does not run the payroll scheduler."""
     from app.hr.gmail_oauth import deliver_self_test_message
 
-    return _call(
+    result = _call(
         lambda: time_store.send_self_test(
             user,
             body.kind,
             lambda message: deliver_self_test_message(user.practice_id, message),
         )
     )
+    send = result.get("send_result") if isinstance(result, dict) else {}
+    send = send if isinstance(send, dict) else {}
+    print(
+        "self_test_send",
+        {
+            "kind": send.get("kind") or body.kind,
+            "status": send.get("status") or "",
+            "error": send.get("last_error") or "",
+            "gmail_message_id": send.get("gmail_message_id") or "",
+            "duplicate": bool(send.get("duplicate")),
+        },
+        flush=True,
+    )
+    return result
 
 
 @router.post("/hr/time/settings/test-reminder")

@@ -892,6 +892,7 @@ class TimeStore:
                 slot["status"] = "sent"
                 slot["sent_at"] = _iso(moment)
                 slot["last_error"] = ""
+                slot["gmail_message_id"] = safe_provider_id(str(getattr(result, "provider_id", "") or ""))
             elif status == "uncertain":
                 slot["status"] = "uncertain"
                 slot["last_error"] = "gmail_uncertain"
@@ -909,6 +910,8 @@ class TimeStore:
                 "status": slot["status"],
                 "to": slot.get("to") or "",
                 "duplicate": False,
+                "last_error": slot.get("last_error") or "",
+                "gmail_message_id": slot.get("gmail_message_id") or "",
             }
             self._flush_if_dirty()
             return payload
@@ -928,7 +931,14 @@ class TimeStore:
         status = str(prior.get("status") or "")
         if status in ("sent", "uncertain"):
             payload = self._self_test_public(user, moment)
-            payload["send_result"] = {"kind": kind, "status": status, "to": prior.get("to") or "", "duplicate": True}
+            payload["send_result"] = {
+                "kind": kind,
+                "status": status,
+                "to": prior.get("to") or "",
+                "duplicate": True,
+                "last_error": prior.get("last_error") or "",
+                "gmail_message_id": prior.get("gmail_message_id") or "",
+            }
             return None, payload
         if status == "sending":
             expiry = str(prior.get("claim_expires_at") or "")
@@ -2206,6 +2216,7 @@ def _send_state(slot: Optional[dict[str, Any]]) -> dict[str, Any]:
         "to": str((slot or {}).get("to") or ""),
         "at": str((slot or {}).get("sent_at") or (slot or {}).get("at") or ""),
         "last_error": str((slot or {}).get("last_error") or ""),
+        "gmail_message_id": str((slot or {}).get("gmail_message_id") or ""),
         "can_send": status not in ("sent", "uncertain", "sending"),
     }
 

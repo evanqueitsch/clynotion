@@ -9,6 +9,7 @@ No inbox read, and no service-account delegation.
 from __future__ import annotations
 
 import base64
+import re
 from email.message import EmailMessage
 from typing import Any, Optional
 from urllib.parse import urlencode
@@ -218,6 +219,26 @@ def _raw_message(message: OutboundMail, sender: str) -> str:
     return base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
 
 
+def _gmail_failure_code(status: int, body: dict[str, Any]) -> str:
+    """Map a Gmail error to a safe code. Do not keep the provider message text."""
+    reasons: list[str] = []
+    err = body.get("error") if isinstance(body, dict) else None
+    if isinstance(err, dict):
+        if err.get("status"):
+            reasons.append(str(err.get("status")))
+        for item in list(err.get("errors") or []) + list(err.get("details") or []):
+            if isinstance(item, dict) and item.get("reason"):
+                reasons.append(str(item.get("reason")))
+    blob = " ".join(reasons).lower()
+    if "accessnotconfigured" in blob or "service_disabled" in blob:
+        return "gmail_api_disabled"
+    if "insufficient" in blob or "scope" in blob:
+        return "gmail_scope"
+    if 400 <= status <= 599:
+        return f"gmail_http_{status}"
+    return "gmail_http_error"
+
+
 def deliver_self_test_message(practice_id: str, message: OutboundMail) -> MailResult:
     """Send one already-built self-test message from the connected mailbox."""
     record = gmail_send_record(practice_id)
@@ -253,8 +274,21 @@ def deliver_self_test_message(practice_id: str, message: OutboundMail) -> MailRe
     except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.RemoteProtocolError, httpx.HTTPError):
         return MailResult(status="uncertain", detail="gmail_uncertain")
     if 200 <= resp.status_code < 300:
-        return MailResult(status="sent", detail="gmail_accepted")
-    return MailResult(status="failed", detail=f"gmail_http_{resp.status_code}")
+        message_id = ""
+        try:
+            payload = resp.json() if isinstance(resp.json(), dict) else {}
+        except Exception:
+            payload = {}
+        if isinstance(payload, dict):
+            candidate = str(payload.get("id") or "")
+            if re.fullmatch(r"[A-Za-z0-9_-]{1,64}", candidate):
+                message_id = candidate
+        return MailResult(status="sent", detail="gmail_accepted", provider_id=message_id)
+    try:
+        body = resp.json() if isinstance(resp.json(), dict) else {}
+    except Exception:
+        body = {}
+    return MailResult(status="failed", detail=_gmail_failure_code(resp.status_code, body))
 
 
 _STATUS_DETAIL = {
