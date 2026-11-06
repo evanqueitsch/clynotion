@@ -24,8 +24,11 @@ jobs:
         run: |
           set -euo pipefail
           vols="$(flyctl volumes list -a clynotion --json)"
-          count="$(echo "$vols" | jq '[.[] | select(.Name=="attune_data" and .Region=="iad")] | length')"
+          # flyctl JSON uses lowercase name/region. Matching only .Name made this
+          # count 0 and create another volume on every deploy.
+          count="$(echo "$vols" | jq '[.[] | select((.name // .Name)=="attune_data" and ((.region // .Region)=="iad"))] | length')"
           echo "Existing attune_data volumes in iad: $count"
+          echo "$vols" | jq -r '.[] | select((.name // .Name)=="attune_data") | "volume \(.id // .ID) region=\(.region // .Region) attached=\(.attached_machine_id // .attached_alloc_id // "none")"'
           if [ "$count" -lt 1 ]; then
             flyctl volumes create attune_data --region iad --size 1 -a clynotion -y
           fi
