@@ -135,7 +135,21 @@ def test_real_mode_passes_when_fully_configured(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv("ATTUNE_JWT_SECRET", "s" * 32)
     monkeypatch.setenv("DEEPGRAM_API_KEY", "fake-deepgram-key")
     monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-anthropic-key")
+    monkeypatch.setenv("ATTUNE_HR_TIME_PERSISTENCE", "file")
+    monkeypatch.setenv("ATTUNE_HR_TIME_DATA_PATH", "/data/hr_time.enc")
+    monkeypatch.setenv("TIME_MAIL_MODE", "off")
     validate_startup_secrets()  # must not raise
+
+
+def test_real_mode_refuses_in_memory_weekly_hours(monkeypatch: pytest.MonkeyPatch) -> None:
+    _real_mode_env(monkeypatch)
+    monkeypatch.setenv("ATTUNE_DATA_ENCRYPTION_KEY", "k" * 32)
+    monkeypatch.setenv("ATTUNE_JWT_SECRET", "s" * 32)
+    monkeypatch.setenv("DEEPGRAM_API_KEY", "fake-deepgram-key")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake-anthropic-key")
+    monkeypatch.setenv("ATTUNE_HR_TIME_PERSISTENCE", "memory")
+    with pytest.raises(RuntimeError, match="ATTUNE_HR_TIME_PERSISTENCE=file"):
+        validate_startup_secrets()
 
 
 def test_mock_mode_needs_no_vendor_secrets(monkeypatch: pytest.MonkeyPatch) -> None:

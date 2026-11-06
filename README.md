@@ -202,6 +202,7 @@ Paths on Fly:
 - `/data/workspace_tokens.enc` — Workspace directory refresh token
 - `/data/sessions.enc` — sessions/notes (set `ATTUNE_PERSISTENCE=file`; raw transcript is
   cleared at finalize, only validated fields + rendered note remain)
+- `/data/hr_time.enc` — weekly hours (image sets `ATTUNE_HR_TIME_PERSISTENCE=file` and `TIME_MAIL_MODE=off`)
 
 Also set Fly secret `ATTUNE_DATA_ENCRYPTION_KEY` (stable Fernet key) so encrypted files remain readable across deploys.
 

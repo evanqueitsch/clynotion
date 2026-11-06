@@ -126,6 +126,9 @@ def validate_startup_secrets() -> None:
             "MOCK providers — " + ", ".join(sorted(set(refused)))
         )
 
+    if mode == MODE_REAL:
+        missing.extend(_real_mode_hours_config_problems())
+
     if missing:
         # de-dupe while preserving order
         seen: set[str] = set()
@@ -137,3 +140,31 @@ def validate_startup_secrets() -> None:
         raise RuntimeError(
             "Refusing to start without required secrets/config: " + ", ".join(ordered)
         )
+
+
+def _real_mode_hours_config_problems() -> list[str]:
+    """Weekly hours must stay on the existing encrypted volume in real mode.
+
+    Memory mode would drop entries on restart. This does not create or rotate
+    ATTUNE_DATA_ENCRYPTION_KEY. A file that will not decrypt refuses boot
+    instead of being overwritten.
+    """
+    problems: list[str] = []
+    persistence = (os.environ.get("ATTUNE_HR_TIME_PERSISTENCE") or "memory").strip().lower()
+    path = (os.environ.get("ATTUNE_HR_TIME_DATA_PATH") or "").strip()
+    if persistence != "file":
+        problems.append("ATTUNE_HR_TIME_PERSISTENCE=file")
+    if not path.startswith("/data/"):
+        problems.append("ATTUNE_HR_TIME_DATA_PATH=/data/hr_time.enc")
+    if problems:
+        return problems
+    hours_path = Path(path)
+    if not hours_path.is_file():
+        return []
+    from app.hr.time_entry import TimeStore, TimeStoreError
+
+    try:
+        TimeStore(mode="file", path=hours_path).probe_readable()
+    except TimeStoreError:
+        problems.append("weekly-hours store unreadable; refusing to overwrite it")
+    return problems

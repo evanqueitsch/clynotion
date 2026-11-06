@@ -695,9 +695,12 @@
         <h2 style="margin:0;">Weekly hours settings</h2>
         <button class="ghost" id="btn-time-settings-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
       </div>
+      <p class="warn" id="time-settings-mail"></p>
+      <p class="meta" id="time-enabled-summary"></p>
       <p class="meta" id="time-settings-note"></p>
       <p class="warn" id="time-settings-corrector"></p>
-      <span class="section-label">Hourly staff who submit</span>
+      <span class="section-label">Who may enter hours</span>
+      <p class="meta">Unchecked people are not enabled. Nothing is turned on until you save a selection. You can enable yourself.</p>
       <div id="time-roster"></div>
       <label for="time-rem1-day">First reminder day</label>
       <select id="time-rem1-day"></select>
@@ -1061,7 +1064,13 @@
         const block = $("time-entry-block");
         if (!data.is_participant && !data.can_edit) {
           block.classList.add("hidden");
-          setStatus($("time-status"), "You are not on the hourly submitter list. An admin chooses that list in settings.", "ok");
+          setStatus(
+            $("time-status"),
+            data.can_manage_settings
+              ? "You are not enabled to submit hours. Open Settings and select yourself or other roster staff. Nobody is enabled until you do."
+              : "Time entry is not enabled for your account.",
+            "ok",
+          );
         } else {
           block.classList.remove("hidden");
           const entry = data.entry;
@@ -1216,6 +1225,17 @@
         line.appendChild(text);
         audit.appendChild(line);
       });
+      const notes = $("time-admin-audit");
+      const uncertain = (data.notifications || []).filter((item) => item.status === "uncertain");
+      uncertain.forEach((item) => {
+        const line = document.createElement("div");
+        line.className = "due-row overdue";
+        const text = document.createElement("span");
+        text.className = "due-title";
+        text.textContent = `Uncertain mail ${item.kind} to ${item.recipient}: ${item.last_error || "unconfirmed"}. Not retried automatically.`;
+        line.appendChild(text);
+        notes.appendChild(line);
+      });
       setStatus(
         $("time-admin-status"),
         data.can_correct ? "You can correct this week." : "View only. After cutoff, only Melissa can change hours.",
@@ -1268,6 +1288,15 @@
     }
 
     function renderTimeSettings(data) {
+      const delivery = data.delivery || {};
+      const enabled = (data.roster || []).filter((person) => person.selected).map((person) => person.display_name);
+      const disabled = (data.roster || []).filter((person) => person.selectable && !person.selected).map((person) => person.display_name);
+      $("time-settings-mail").textContent = delivery.sends_mail
+        ? "Mail is on. This testing deploy is supposed to keep mail off."
+        : "Mail is off. No reminders or summaries are sent, and no scheduler is calling the mailer.";
+      $("time-enabled-summary").textContent = enabled.length
+        ? `Enabled (${enabled.length}): ${enabled.join(", ")}. Not enabled: ${disabled.join(", ") || "none"}.`
+        : `Nobody is enabled yet${disabled.length ? `. Not enabled: ${disabled.join(", ")}.` : "."}`;
       $("time-settings-note").textContent = `${data.schedule_note || ""} ${data.hours_cap_note || ""}`.trim();
       $("time-settings-corrector").textContent = data.corrector_note || "";
       $("time-rem1-subject").textContent = `Message: ${data.reminder_first_subject}. Keep this on the day before cutoff; the text says due tomorrow.`;
@@ -1291,7 +1320,7 @@
         box.dataset.email = person.email || "";
         const text = document.createElement("span");
         text.textContent = person.selectable
-          ? `${person.display_name} (${person.email})`
+          ? `${person.selected ? "Enabled" : "Not enabled"} — ${person.display_name} (${person.email})`
           : `${person.display_name} — no email on the roster, so they cannot be selected`;
         row.appendChild(box);
         row.appendChild(text);
@@ -1311,13 +1340,6 @@
         note.textContent = warning;
         warnings.appendChild(note);
       });
-      const delivery = data.delivery || {};
-      const mode = document.createElement("p");
-      mode.className = "meta";
-      mode.textContent = delivery.sends_mail
-        ? `Mail mode is gmail${delivery.sender ? ` as ${delivery.sender}` : ""}. Cron secret ${delivery.cron_secret_set ? "is set" : "is not set"}.`
-        : "Mail is off. Nothing is sent until TIME_MAIL_MODE=gmail and the tick secret are configured.";
-      warnings.appendChild(mode);
     }
 
     async function openTimeSettings() {
@@ -1543,7 +1565,7 @@
         block.appendChild(desc);
         (unit.tools || []).forEach((tool) => {
           const card = document.createElement("div");
-          card.className = "tool-card" + (tool.status === "planned" ? " planned" : "");
+          card.className = "tool-card" + ((tool.status === "planned" || tool.status === "disabled") ? " planned" : "");
           const title = document.createElement("h3");
           title.style.cssText = "font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;";
           title.textContent = tool.name;
@@ -1552,10 +1574,10 @@
           meta.style.marginBottom = "0.85rem";
           meta.textContent = tool.description || "";
           card.appendChild(title);
-          if (tool.status === "planned") {
+          if (tool.status === "planned" || tool.status === "disabled") {
             const tag = document.createElement("div");
             tag.className = "planned-tag";
-            tag.textContent = "Coming soon";
+            tag.textContent = tool.status === "disabled" ? "Not enabled for you" : "Coming soon";
             card.appendChild(tag);
           }
           card.appendChild(meta);
@@ -1563,7 +1585,7 @@
             const btn = document.createElement("button");
             btn.type = "button";
             btn.className = "primary";
-            btn.textContent = `Open ${tool.name}`;
+            btn.textContent = tool.open_label || `Open ${tool.name}`;
             btn.onclick = () => openToolByHref(tool.href);
             card.appendChild(btn);
           }

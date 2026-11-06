@@ -598,21 +598,18 @@ def test_expired_claim_can_be_taken_and_a_stale_finish_does_not_overwrite_it() -
         backoff=(timedelta(minutes=5),),
         max_attempts=3,
     )
-    assert len(second.jobs) == 1
-    assert second.jobs[0].claim_token != job.claim_token
+    assert second.jobs == []
     assert time_store.finish_delivery(job.delivery_id, job.claim_token, MailResult("sent", "ok"), THU_0900) == "stale"
-    assert (
-        time_store.finish_delivery(
-            second.jobs[0].delivery_id,
-            second.jobs[0].claim_token,
-            MailResult("sent", "ok", "msg"),
-            THU_0900,
-        )
-        == "sent"
-    )
     delivery = next(iter(time_store._deliveries.values()))
-    assert delivery.status == "sent"
-    assert delivery.provider_id == "msg"
+    assert delivery.status == "uncertain"
+    assert delivery.last_error == "claim_expired_unconfirmed"
+    mailer = RecordingMailer()
+    again = run_tick(mailer=mailer, now=THU_0900 + timedelta(hours=1))
+    assert again["sent"] == 0
+    assert mailer.sent == []
+    week = time_store.week_view(_alice_user(), WEEK, THU_0900 + timedelta(hours=1))
+    note = next(item for item in week["notifications"] if item["status"] == "uncertain")
+    assert note["last_error"] == "claim_expired_unconfirmed"
 
 
 def test_mailer_exception_is_uncertain_and_unconfigured_mail_does_not_consume_the_week() -> None:
@@ -657,7 +654,8 @@ def test_catalog_tile_is_live(client: TestClient) -> None:
     hr = next(unit for unit in catalog if unit["id"] == "hr")
     tile = next(tool for tool in hr["tools"] if tool["id"] == "time_entry")
     assert tile["status"] == "live"
-    assert tile["href"] == "/#time"
+    assert tile["href"] == "/#time-settings"
+    assert tile["open_label"] == "Weekly hours settings"
 
 
 def test_encrypted_file_is_atomic_and_isolated_across_stores(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -783,6 +781,32 @@ def test_service_account_errors_hide_the_secret_and_timeouts_are_classified(monk
     failed = down.send(OutboundMail(to="a@heart4change.org", subject="s", text="body"))
     assert failed.status == "failed"
     assert failed.detail == "gmail_connect"
+
+
+def test_nav_enables_only_selected_people(client: TestClient) -> None:
+    _roster()
+    bob = user_store._users["bob"][1]
+    hidden = client.get("/catalog", headers=_auth(bob)).json()
+    bob_tile = next(tool for unit in hidden if unit["id"] == "hr" for tool in unit["tools"] if tool["id"] == "time_entry")
+    assert bob_tile["status"] == "disabled"
+    assert bob_tile["href"] == ""
+    home = client.get("/home", headers=_auth(bob)).json()
+    assert all(tool["id"] != "time_entry" for tool in home["tools"])
+
+    set_clock(WED)
+    _save_settings(client, participant_emails=["jordan@heart4change.org"])
+    jordan = client.get("/catalog", headers=_auth(_jordan())).json()
+    jordan_tile = next(tool for unit in jordan if unit["id"] == "hr" for tool in unit["tools"] if tool["id"] == "time_entry")
+    assert jordan_tile["href"] == "/#time"
+    assert jordan_tile["status"] == "live"
+    sam = client.get("/catalog", headers=_auth(_sam())).json()
+    sam_tile = next(tool for unit in sam if unit["id"] == "hr" for tool in unit["tools"] if tool["id"] == "time_entry")
+    assert sam_tile["status"] == "disabled"
+    denied = _enter(client, _sam(), 1, 0)
+    assert denied.status_code == 403
+    melissa = client.get("/catalog", headers=_auth(_melissa())).json()
+    melissa_tile = next(tool for unit in melissa if unit["id"] == "hr" for tool in unit["tools"] if tool["id"] == "time_entry")
+    assert melissa_tile["href"] == "/#time-settings"
 
 
 def test_open_week_uses_live_roster_until_cutoff(client: TestClient) -> None:

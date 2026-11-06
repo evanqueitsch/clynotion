@@ -86,9 +86,21 @@ All practice ids come from the signed-in user. Another practice’s ids 404.
 
 `week_ending` is the Friday (`YYYY-MM-DD`).
 
+## Who sees it
+
+Nobody is enabled until an HR admin or Melissa checks them on Weekly hours settings and saves. The home tile follows that choice:
+
+- Admins and Melissa always get **Weekly hours settings**, including the ability to enable themselves.
+- A selected person gets **Enter weekly hours**.
+- Everyone else sees the tool as not enabled and gets no entry link. The API also rejects their save.
+
+The settings screen lists each roster person as Enabled or Not enabled and states that mail is off.
+
 ## Storage
 
-`ATTUNE_HR_TIME_PERSISTENCE=file` writes one Fernet blob (the same `ATTUNE_DATA_ENCRYPTION_KEY` as the rest of the app) to `ATTUNE_HR_TIME_DATA_PATH` (default `.attune_data/hr_time.enc`; on Fly use a path on `/data`, for example `/data/hr_time.enc`).
+`ATTUNE_HR_TIME_PERSISTENCE=file` writes one Fernet blob (the same `ATTUNE_DATA_ENCRYPTION_KEY` as the rest of the app) to `ATTUNE_HR_TIME_DATA_PATH`. The production image sets that to `/data/hr_time.enc` on the existing `attune_data` volume and sets `TIME_MAIL_MODE=off`. Real mode refuses to boot if hours would be stored only in memory, or if an existing hours file cannot be decrypted. It does not create or replace the encryption key.
+
+Fly runs one app process on one machine (`min_machines_running = 1`, the deploy workflow scales count to 1) with the volume mounted at `/data`. `flock` on that file is valid for that topology. A second machine is not part of this deploy.
 
 Writes take an exclusive `flock`, reload from disk, then replace the file via a temp file in the same directory, `fsync`, and `os.replace`. A failed replace leaves the previous file in place. If the file cannot be decrypted, the process refuses the request and does not overwrite it.
 
@@ -113,7 +125,7 @@ Each practice/week/kind/recipient has one delivery row:
 3. A definite Gmail rejection (`4xx`/`5xx`, connection refused before the send left) is `failed` and may retry up to 3 times, after 5, 15, then 45 minutes.
 4. A read timeout or a dropped response after the send was attempted is `uncertain` and is **not** retried. The message may or may not have been accepted.
 5. A config or token failure (`sa_missing`, token HTTP errors, and similar) is retried on the 5-minute backoff and does **not** use up the 3-attempt budget, so fixing the key still sends. The tick does not claim at all when the sender is obviously not configured.
-6. If the process dies after a claim and before the result is saved, another tick can take the row when the lease expires. If Gmail had already accepted the message, that retry can send a second copy.
+6. If the process dies after a claim and before the result is saved, the lease expiry does **not** send again. The row becomes `uncertain` with `claim_expired_unconfirmed` and stays visible on the admin week. An operator has to resolve it later; this build has no resend button.
 7. Reminders are not sent after cutoff. A failed reminder whose window has closed is cancelled. The summary stays due for the current week and the previous week (not older), and only if someone was on the list. An empty participant list does not send a summary.
 8. A Friday reminder claimed for someone who submits before the send is cancelled instead of sent. The summary body is rebuilt at send time so a last-second save is included.
 
@@ -184,6 +196,12 @@ curl -sS -X POST "$CLYNOTION_TICK_URL" \
 Expect JSON counts (`sent`, `failed`, `uncertain`, `not_ready`). Then look at the operations mailbox and one staff mailbox. One success does not prove the next tick will arrive. If a row’s status is `uncertain`, do not click a retry that is not in this build; assume it may already have been delivered.
 
 After Friday 11:30 ET, a non-Melissa admin’s save must be rejected, and Melissa’s save must show a late audit row and must not send a second summary.
+
+## Rollback
+
+Redeploy the previous image (the GitHub Action on `main`, or `flyctl deploy` of the last good release). Do not delete the Fly volume, `/data/hr_time.enc`, or any other `/data/*.enc` file. Do not rotate or unset `ATTUNE_DATA_ENCRYPTION_KEY`. Leaving the hours file in place is safe: the older image ignores it, and a later hours release can still read it with the same key.
+
+The Cloudflare tick worker is not part of this deploy. Do not `wrangler deploy` it while mail is off.
 
 ## Limits
 

@@ -520,6 +520,15 @@ class TimeStore:
             self._dirty = True
             self._flush_unlocked()
 
+    def probe_readable(self) -> None:
+        """Load the file if it exists. Do not create or replace it."""
+        if self._mode != "file":
+            return
+        if not self._path.is_file():
+            return
+        with self.exclusive():
+            return
+
     @contextmanager
     def exclusive(self) -> Iterator[None]:
         """Serialize writers and flush dirty state even when the body raises.
@@ -709,6 +718,7 @@ class TimeStore:
         moment = now or utcnow()
         week = parse_week_ending(week_ending)
         with self.exclusive():
+            self._quarantine_expired_claims(moment)
             settings = self._settings.get(user.practice_id)
             if settings is not None:
                 self._apply_scope_locks(user.practice_id, settings, moment)
@@ -784,6 +794,7 @@ class TimeStore:
         max_attempts: int,
     ) -> ClaimBatch:
         with self.exclusive():
+            self._quarantine_expired_claims(now)
             locked = 0
             jobs: list[ClaimedJob] = []
             for practice_id, settings in list(self._settings.items()):
@@ -1314,6 +1325,45 @@ class TimeStore:
             self._cancel_kind(practice_id, week.isoformat(), "summary", now)
         return jobs
 
+    def _quarantine_expired_claims(self, now: datetime) -> None:
+        """A claim whose lease expired never got a confirmed result.
+
+        Resending would duplicate mail if Gmail had already accepted it, so
+        the row becomes uncertain and stays visible for an operator.
+        """
+        for delivery in self._deliveries.values():
+            if delivery.status != "claimed" or not delivery.claim_expires_at:
+                continue
+            if _parse_iso(delivery.claim_expires_at) > now:
+                continue
+            delivery.status = "uncertain"
+            delivery.last_error = "claim_expired_unconfirmed"
+            delivery.claim_token = ""
+            delivery.unlimited_retry = False
+            delivery.updated_at = _iso(now)
+            self._dirty = True
+
+    def access_summary(self, user: User) -> dict[str, Any]:
+        """Whether this user may enter hours. Does not enable anyone."""
+        email = _email(user.email)
+        with self.exclusive():
+            self._quarantine_expired_claims(utcnow())
+            self._flush_if_dirty()
+            settings = self._settings.get(user.practice_id)
+            selected = bool(
+                settings
+                and email
+                and any(
+                    row["email"] == email
+                    for row in self._active_participants(user.practice_id, settings)
+                )
+            )
+        return {
+            "can_manage": can_manage_time(user),
+            "can_enter": selected,
+            "can_correct_locked": is_melissa(user),
+        }
+
     def _cancel_obsolete(self, practice_id: str, week_ending: str, keep: set[str], now: datetime) -> None:
         for delivery in list(self._deliveries.values()):
             if delivery.practice_id != practice_id or delivery.week_ending != week_ending:
@@ -1613,9 +1663,9 @@ def _can_reclaim(
     max_attempts: int,
 ) -> bool:
     if delivery.status == "claimed":
-        if not delivery.claim_expires_at:
-            return True
-        return _parse_iso(delivery.claim_expires_at) <= now
+        # Expired claims are quarantined instead of resent. The provider may
+        # already have accepted the message.
+        return False
     if delivery.status != "failed":
         return False
     last = _parse_iso(delivery.updated_at or delivery.claimed_at or _iso(now))
@@ -1791,6 +1841,37 @@ def _parse_iso(raw: str) -> datetime:
 
 def _long_date(day: date) -> str:
     return f"{day.strftime('%A, %B')} {day.day}, {day.year}"
+
+
+def nav_for_user(user: User) -> dict[str, Any]:
+    """Home-tile fields. Nobody is enabled until an admin selects them."""
+    access = time_store.access_summary(user)
+    if access["can_manage"]:
+        return {
+            "href": "/#time-settings",
+            "status": "live",
+            "description": (
+                "Choose which roster staff may enter a Saturday–Friday total. "
+                "Nobody is on by default, including you, until you select them. "
+                "Mail is off; nothing is emailed."
+            ),
+            "open_label": "Weekly hours settings",
+        }
+    if access["can_enter"]:
+        return {
+            "href": "/#time",
+            "status": "live",
+            "description": (
+                "Enter your Saturday–Friday hours, including the Friday afternoon you expect to work."
+            ),
+            "open_label": "Enter weekly hours",
+        }
+    return {
+        "href": "",
+        "status": "disabled",
+        "description": "Not enabled for your account. An admin selects who may enter weekly hours.",
+        "open_label": "",
+    }
 
 
 time_store = TimeStore()
