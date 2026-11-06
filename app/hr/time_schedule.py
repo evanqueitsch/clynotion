@@ -82,6 +82,7 @@ def run_tick(
                     text=fresh.body,
                     csv_filename=fresh.csv_filename,
                     csv_text=fresh.csv_text,
+                    practice_id=fresh.practice_id,
                 )
             )
         except Exception:

@@ -10,22 +10,30 @@ Hourly staff are the people an HR admin or Melissa checks on the settings screen
 
 Each person enters **one total for the pay week**, as whole hours plus minutes (0–59). The stored shape is a list of `{category, minutes}` lines. The only category today is `total` (“Weekly total”). Adding client vs supervision later means allowing more category ids and a screen; raw minutes already live on lines, and payable rounding stays a pure function of those minutes. v1 rounds the **sum** of the lines. Per-category rounding would be a separate decision.
 
-A blank week is **missing**. An explicit `0` hours and `0` minutes is **submitted**. Missing is never treated as zero in the admin view, the CSV, the summary, or the Friday reminder.
+A blank week is **missing**. An explicit `0` hours and `0` minutes is **submitted**. Missing is never treated as zero in the admin view, the CSV, or the Thursday reminder.
 
 ## Pay week and clock
 
-The pay week is Saturday 00:00 through Friday, paid that Friday. Every schedule instant is `America/New_York`, including daylight-saving transitions.
+Payroll collects the **completed prior Monday–Friday**. The Saturday and Sunday immediately after that Friday are included in the same weekly total and are not entered again the next week. The screen labels the Monday–Friday dates. The internal coverage end is that Sunday, so a weekend hour is not dropped and is not counted twice.
 
-The default employee cutoff and the summary are the same moment: **Friday 11:30 AM ET**. Reminders default to:
+Example: reminders on Wednesday, November 11, 2026 and Thursday, November 12, 2026 collect Monday, November 2 through Friday, November 6. Hours worked Saturday, November 7 or Sunday, November 8 belong in that same total. Payroll runs Thursday, November 12 at 11:30 AM ET. The next total is Monday, November 9 through Friday, November 13, including November 14–15, and is not open while the November 2 week is still the one being collected.
 
-- Thursday 9:00 AM ET, subject `Weekly hours are due tomorrow`, to every active selected person
-- Friday 8:00 AM ET, subject `Enter your weekly hours today!`, only to selected people who have not submitted (including people who saved an explicit zero — they are not reminded)
+There is still one total per selected person, not a per-day grid. The physical cap remains 168:00 because the total can include that following weekend.
 
-Both messages include the Saturday–Friday dates, the deadline, this sentence, and `https://clynotion.com/#time`:
+Every schedule instant is `America/New_York`, including daylight-saving transitions.
 
-> Include the hours you expect to work Friday afternoon. The cutoff is before the end of Friday, so enter expected Friday afternoon hours before the deadline. Discrepancies after cutoff go to Melissa for correction.
+The default employee cutoff and Melissa’s payroll link are the same moment: **Thursday 11:30 AM ET**. Reminders default to:
 
-The same sentence is the entry helper in the app. Day and time are editable. The two subject lines are not. Keep the first reminder on the day before cutoff and the day-of reminder on cutoff day before the cutoff; the settings screen warns when that stops being true.
+- Wednesday 9:00 AM ET, subject `Weekly hours are due tomorrow`, to every active selected person
+- Thursday 8:00 AM ET, subject `Enter your weekly hours today!`, only to selected people who have not submitted (an explicit zero is submitted and is not reminded)
+
+A stored schedule that is still the old Thursday 9:00 / Friday 8:00 / Friday 11:30 default is read as these new defaults. A schedule someone changed on purpose keeps those days and times, now placed on the payroll week that contains Thursday. Old locked weeks stay Saturday–Friday records (`schedule_version` 1) and are not relabeled.
+
+Employees can enter only while that prior week is open: from the Saturday after the workweek Friday until the Thursday cutoff. They cannot enter the week that is still in progress. After cutoff the week is read-only except for Melissa.
+
+Melissa’s Thursday 11:30 email is a short reminder with a link to that exact payroll week (`#time-admin?week=YYYY-MM-DD&v=2`). The dashboard is the source of truth. The email does not include the pay table or a CSV. The dashboard can still download a CSV.
+
+Scheduled reminders stay off until an HR admin checks **Send scheduled reminders** on the settings screen. Turning that on does not send reminders whose minute has already passed. It uses the connected operations mailbox, not `TIME_MAIL_MODE`. `TIME_MAIL_MODE` remains off so the old service-account path does not send. The self-test Send buttons are separate and still send only when pressed.
 
 Spring-forward gaps and fall-back overlap hours follow Python `zoneinfo` (`fold=0`, the first occurrence). The default morning times are not in those hours. A configured time that lands in the spring-forward gap is evaluated at the instant zoneinfo returns for that label.
 
