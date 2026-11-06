@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hmac
 import os
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import Response
@@ -16,7 +17,7 @@ from app.hr.time_entry import (
     TimeStoreError,
     time_store,
 )
-from app.hr.time_mail import build_mailer
+from app.hr.time_mail import ConnectedMailboxMailer, build_mailer
 from app.hr.time_schedule import run_tick
 
 router = APIRouter(tags=["weekly-hours"])
@@ -43,6 +44,7 @@ class SettingsBody(BaseModel):
     summary_weekday: int = Field(ge=0, le=6)
     summary_time: str
     summary_recipient: str
+    automation_enabled: bool = False
 
 
 class ReminderPreviewBody(BaseModel):
@@ -78,13 +80,13 @@ def time_me(user: CurrentUser) -> dict:
 
 
 @router.get("/hr/time/week")
-def time_week(user: CurrentUser, week_ending: str) -> dict:
-    return _call(lambda: time_store.week_view(user, week_ending))
+def time_week(user: CurrentUser, week_ending: str, v: Optional[int] = None) -> dict:
+    return _call(lambda: time_store.week_view(user, week_ending, version=v))
 
 
 @router.get("/hr/time/week.csv")
-def time_week_csv(user: CurrentUser, week_ending: str) -> Response:
-    text = _call(lambda: time_store.week_csv(user, week_ending))
+def time_week_csv(user: CurrentUser, week_ending: str, v: Optional[int] = None) -> Response:
+    text = _call(lambda: time_store.week_csv(user, week_ending, version=v))
     filename = f"weekly-hours-{week_ending[:10]}.csv"
     return Response(
         content=text,
@@ -208,7 +210,10 @@ def _require_cron(request: Request) -> None:
 def time_tick(request: Request) -> dict:
     _require_cron(request)
     try:
-        result = run_tick(mailer=build_mailer())
+        # Scheduled payroll mail uses the connected mailbox only when a practice
+        # turns automation on. TIME_MAIL_MODE is not consulted, so this tick
+        # cannot wake the old service-account jobs or send catch-up mail.
+        result = run_tick(mailer=ConnectedMailboxMailer())
     except TimeStoreError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
     except HTTPException:

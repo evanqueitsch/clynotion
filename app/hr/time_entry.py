@@ -1,9 +1,11 @@
 """Weekly hours collector (legacy alias OPS-6).
 
-Hourly staff submit one Saturday–Friday total. Payable minutes round up to the
-next 15 on read; raw minutes are stored exactly. After cutoff only Melissa
-(msmith@heart4change.org) may fill or correct a week. Summary-recipient
-changes do not grant that authority.
+Hourly staff submit one total for the completed Monday–Friday before Thursday
+payroll. The Saturday and Sunday after that Friday are included in the same
+total. Payable minutes round up to the next 15 on read; raw minutes are stored
+exactly. After the Thursday cutoff only Melissa (msmith@heart4change.org) may
+fill or correct that payroll week. Summary-recipient changes do not grant that
+authority.
 
 No client identifiers, no punch clock, no payroll vendor. Design of record:
 docs/modules/ops6-weekly-hours.md.
@@ -50,15 +52,19 @@ SELF_TEST_BANNER = (
 CATEGORY_TOTAL = "total"
 KNOWN_CATEGORIES: dict[str, str] = {CATEGORY_TOTAL: "Weekly total"}
 
-# Every minute that exists in a Saturday–Friday week. Not an overtime policy.
+# The stored total covers Monday through the following Sunday (7 days).
+# Not an overtime policy.
 MAX_WEEK_MINUTES = 7 * 24 * 60
+SCHEDULE_V1 = 1  # legacy Saturday–Friday week, Friday cutoff
+SCHEDULE_V2 = 2  # Monday–Friday workweek, Thursday payroll
 
 REMINDER_FIRST_SUBJECT = "Weekly hours are due tomorrow"
 REMINDER_DUE_SUBJECT = "Enter your weekly hours today!"
-EXPECTED_FRIDAY_HOURS_TEXT = (
-    "Include the hours you expect to work Friday afternoon. "
-    "The cutoff is before the end of Friday, so enter expected Friday afternoon hours before the deadline. "
-    "Discrepancies after cutoff go to Melissa for correction."
+HOURS_HELPER_TEXT = (
+    "Enter one total for the completed Monday–Friday shown above. "
+    "If you worked the Saturday or Sunday right after that Friday, include those hours in this same total. "
+    "Do not enter them again next week, and do not include hours from the following week. "
+    "These are hours already worked."
 )
 HOURS_CAP_NOTE = (
     "Weekly totals are capped at 168:00 — every minute in the pay week. "
@@ -127,19 +133,58 @@ def can_manage_time(user: User) -> bool:
 
 
 def pay_week_ending(moment: datetime) -> date:
-    """Friday that closes the Saturday–Friday pay week containing ``moment`` (ET)."""
+    """Workweek Friday shown for entry at ``moment``.
+
+    Before the Thursday payroll cutoff this is the prior completed Monday–Friday.
+    After that cutoff it is the same closed week until the next Saturday, when
+    the following workweek opens. It is not the Saturday–Friday week that
+    contains ``moment``.
+    """
+    friday, _open = entry_period(moment)
+    return friday
+
+
+def entry_period(moment: datetime) -> tuple[date, bool]:
+    """Return ``(workweek Friday, open for employee entry)``."""
     local = moment.astimezone(ET)
-    weekday = local.weekday()  # Monday=0 … Sunday=6, Friday=4
-    if weekday <= 4:
-        delta = 4 - weekday
+    today = local.date()
+    if today.weekday() == 4:
+        friday = today - timedelta(days=7)
     else:
-        delta = 4 - weekday + 7
-    return local.date() + timedelta(days=delta)
+        friday = today - timedelta(days=(today.weekday() - 4) % 7)
+    deadline = at_local(payroll_thursday(friday), "11:30")
+    # The configured cutoff time is applied by callers that have settings.
+    # This default matches the product cutoff so the open flag is right
+    # before settings are loaded; ``period_is_open`` rechecks the real time.
+    return friday, moment < deadline
+
+
+def period_is_open(moment: datetime, week_ending: date, settings: "TimeSettings") -> bool:
+    if workweek_friday_for(moment) != week_ending:
+        return False
+    return moment < deadline_instant(week_ending, settings)
+
+
+def workweek_friday_for(moment: datetime) -> date:
+    friday, _open = entry_period(moment)
+    return friday
 
 
 def pay_week_start(week_ending: date) -> date:
+    """Monday of the displayed Monday–Friday workweek."""
     _require_friday(week_ending)
-    return week_ending - timedelta(days=6)
+    return week_ending - timedelta(days=4)
+
+
+def payroll_thursday(week_ending: date) -> date:
+    _require_friday(week_ending)
+    return week_ending + timedelta(days=6)
+
+
+def coverage_end(week_ending: date) -> date:
+    """Sunday after the workweek Friday. Those weekend hours belong here."""
+    _require_friday(week_ending)
+    return week_ending + timedelta(days=2)
 
 
 def round_payable_minutes(raw_minutes: int) -> int:
@@ -206,8 +251,8 @@ def line_minutes(lines: list[dict[str, Any]]) -> int:
     return sum(int(line["minutes"]) for line in lines)
 
 
-def admin_url(week_ending: str) -> str:
-    return f"https://clynotion.com/#time-admin?week={week_ending}"
+def admin_url(week_ending: str, version: int = SCHEDULE_V2) -> str:
+    return f"https://clynotion.com/#time-admin?week={week_ending}&v={int(version)}"
 
 
 def week_range_label(week_ending: date) -> str:
@@ -239,12 +284,17 @@ def parse_week_ending(raw: str) -> date:
 
 
 def date_for_weekday(week_ending: date, weekday: int) -> date:
-    """Map Python weekday (Monday=0) onto the Saturday–Friday pay week."""
+    """Map Python weekday onto the payroll week that contains payroll Thursday.
+
+    Wednesday and Thursday of that week are the default reminders. They fall
+    after the workweek, not inside it.
+    """
     _require_friday(week_ending)
     if weekday < 0 or weekday > 6:
         raise ValueError("weekday must be 0 (Monday) through 6 (Sunday).")
-    saturday = week_ending - timedelta(days=6)
-    return saturday + timedelta(days=(weekday - 5) % 7)
+    thursday = payroll_thursday(week_ending)
+    monday = thursday - timedelta(days=3)
+    return monday + timedelta(days=weekday)
 
 
 def at_local(day: date, hhmm: str) -> datetime:
@@ -257,8 +307,18 @@ def at_local(day: date, hhmm: str) -> datetime:
     return datetime(day.year, day.month, day.day, hour, minute, tzinfo=ET)
 
 
-def deadline_instant(week_ending: date, settings: "TimeSettings") -> datetime:
-    day = date_for_weekday(week_ending, settings.summary_weekday)
+def legacy_date_for_weekday(week_ending: date, weekday: int) -> date:
+    """Saturday–Friday mapping kept for schedule version 1 records."""
+    _require_friday(week_ending)
+    saturday = week_ending - timedelta(days=6)
+    return saturday + timedelta(days=(weekday - 5) % 7)
+
+
+def deadline_instant(week_ending: date, settings: "TimeSettings", version: int = SCHEDULE_V2) -> datetime:
+    if int(version) == SCHEDULE_V1:
+        day = legacy_date_for_weekday(week_ending, settings.summary_weekday)
+    else:
+        day = date_for_weekday(week_ending, settings.summary_weekday)
     return at_local(day, settings.summary_time)
 
 
@@ -282,20 +342,27 @@ def schedule_warnings(settings: "TimeSettings", week_ending: date) -> list[str]:
     return warnings
 
 
+_OLD_SCHEDULE_DEFAULT = (3, "09:00", 4, "08:00", 4, "11:30")
+_NEW_SCHEDULE_DEFAULT = (2, "09:00", 3, "08:00", 3, "11:30")
+
+
 @dataclass
 class TimeSettings:
     practice_id: str
     participant_emails: list[str]
-    reminder_first_weekday: int = 3  # Thursday
+    reminder_first_weekday: int = 2  # Wednesday of the payroll week
     reminder_first_time: str = "09:00"
-    reminder_due_weekday: int = 4  # Friday
+    reminder_due_weekday: int = 3  # Thursday
     reminder_due_time: str = "08:00"
-    summary_weekday: int = 4
+    summary_weekday: int = 3  # Thursday payroll cutoff
     summary_time: str = "11:30"
     summary_recipient: str = MELISSA_EMAIL
     active_from_week: str = ""
     created_at: str = ""
     updated_at: str = ""
+    schedule_version: int = SCHEDULE_V2
+    schedule_migrated: bool = False
+    automation_enabled: bool = False
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -311,23 +378,43 @@ class TimeSettings:
             "active_from_week": self.active_from_week,
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "schedule_version": self.schedule_version,
+            "automation_enabled": self.automation_enabled,
         }
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TimeSettings":
+        first_wd = int(data.get("reminder_first_weekday", _NEW_SCHEDULE_DEFAULT[0]))
+        first_time = str(data.get("reminder_first_time") or _NEW_SCHEDULE_DEFAULT[1])
+        due_wd = int(data.get("reminder_due_weekday", _NEW_SCHEDULE_DEFAULT[2]))
+        due_time = str(data.get("reminder_due_time") or _NEW_SCHEDULE_DEFAULT[3])
+        summary_wd = int(data.get("summary_weekday", _NEW_SCHEDULE_DEFAULT[4]))
+        summary_time = str(data.get("summary_time") or _NEW_SCHEDULE_DEFAULT[5])
+        version = int(data.get("schedule_version") or 0)
+        migrated = False
+        stored = (first_wd, first_time, due_wd, due_time, summary_wd, summary_time)
+        if version < SCHEDULE_V2 and stored == _OLD_SCHEDULE_DEFAULT:
+            first_wd, first_time, due_wd, due_time, summary_wd, summary_time = _NEW_SCHEDULE_DEFAULT
+            migrated = True
+            version = SCHEDULE_V2
+        elif version < SCHEDULE_V2:
+            version = SCHEDULE_V2
         return cls(
             practice_id=str(data["practice_id"]),
             participant_emails=[str(e).strip().lower() for e in data.get("participant_emails") or []],
-            reminder_first_weekday=int(data.get("reminder_first_weekday", 3)),
-            reminder_first_time=str(data.get("reminder_first_time") or "09:00"),
-            reminder_due_weekday=int(data.get("reminder_due_weekday", 4)),
-            reminder_due_time=str(data.get("reminder_due_time") or "08:00"),
-            summary_weekday=int(data.get("summary_weekday", 4)),
-            summary_time=str(data.get("summary_time") or "11:30"),
+            reminder_first_weekday=first_wd,
+            reminder_first_time=first_time,
+            reminder_due_weekday=due_wd,
+            reminder_due_time=due_time,
+            summary_weekday=summary_wd,
+            summary_time=summary_time,
             summary_recipient=str(data.get("summary_recipient") or MELISSA_EMAIL).strip().lower(),
             active_from_week=str(data.get("active_from_week") or ""),
             created_at=str(data.get("created_at") or ""),
             updated_at=str(data.get("updated_at") or ""),
+            schedule_version=version,
+            schedule_migrated=migrated,
+            automation_enabled=bool(data.get("automation_enabled", False)),
         )
 
 
@@ -339,6 +426,7 @@ class WeekState:
     snapshot: list[dict[str, str]] = field(default_factory=list)
     summary_recipient: str = ""
     lock_deadline: str = ""
+    schedule_version: int = SCHEDULE_V1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -348,6 +436,7 @@ class WeekState:
             "snapshot": [dict(row) for row in self.snapshot],
             "summary_recipient": self.summary_recipient,
             "lock_deadline": self.lock_deadline,
+            "schedule_version": self.schedule_version,
         }
 
     @classmethod
@@ -370,6 +459,7 @@ class WeekState:
             snapshot=snapshot,
             summary_recipient=str(data.get("summary_recipient") or "").strip().lower(),
             lock_deadline=str(data.get("lock_deadline") or ""),
+            schedule_version=int(data.get("schedule_version") or SCHEDULE_V1),
         )
 
 
@@ -385,6 +475,7 @@ class Submission:
     created_at: str
     updated_at: str
     updated_by: str
+    schedule_version: int = SCHEDULE_V1
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -398,6 +489,7 @@ class Submission:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "updated_by": self.updated_by,
+            "schedule_version": self.schedule_version,
         }
 
     @classmethod
@@ -413,6 +505,7 @@ class Submission:
             created_at=str(data.get("created_at") or ""),
             updated_at=str(data.get("updated_at") or ""),
             updated_by=str(data.get("updated_by") or ""),
+            schedule_version=int(data.get("schedule_version") or SCHEDULE_V1),
         )
 
 
@@ -483,6 +576,7 @@ class ClaimedJob:
     body: str
     csv_filename: str = ""
     csv_text: str = ""
+    practice_id: str = ""
 
 
 @dataclass
@@ -609,8 +703,9 @@ class TimeStore:
                 self._apply_scope_locks(user.practice_id, settings, moment)
                 self._flush_if_dirty()
             effective = settings or default_settings(user.practice_id, moment)
-            state = self._weeks.get((user.practice_id, week.isoformat()))
-            locked = bool(state and state.locked_at)
+            week = workweek_friday_for(moment)
+            state = self._get_week(user.practice_id, week.isoformat())
+            locked = bool(state and state.locked_at) or not period_is_open(moment, week, effective)
             entry = self._own_entry(user.practice_id, week.isoformat(), email)
             history = self._history(user.practice_id, email)
             participant = bool(
@@ -624,8 +719,11 @@ class TimeStore:
                 "can_correct_locked": is_melissa(user),
                 "can_self_test": self._is_self_tester(user),
                 "can_edit": self._can_write(user, email, week, moment, settings, state),
-                "helper_text": EXPECTED_FRIDAY_HOURS_TEXT,
-                "pay_week_note": "Pay week is Saturday through Friday and is paid that Friday. Times are America/New_York.",
+                "helper_text": HOURS_HELPER_TEXT,
+                "pay_week_note": (
+                    "Enter the completed Monday–Friday before Thursday payroll. "
+                    "The Saturday and Sunday after that Friday belong in this total. Times are America/New_York."
+                ),
                 "hours_cap_note": HOURS_CAP_NOTE,
                 "categories": [
                     {"id": key, "label": label} for key, label in KNOWN_CATEGORIES.items()
@@ -657,10 +755,10 @@ class TimeStore:
             settings = self._settings.get(user.practice_id)
             if settings is not None:
                 self._apply_scope_locks(user.practice_id, settings, moment)
-            state = self._weeks.get((user.practice_id, week.isoformat()))
+            state = self._get_week(user.practice_id, week.isoformat())
             self._authorize_write(user, target, week, moment, settings, state)
             display_name, clinician_id = self._identity(user, target, settings, state)
-            key = (user.practice_id, week.isoformat(), target)
+            key = self._sub_key(user.practice_id, week.isoformat(), target)
             existing_id = self._submission_index.get(key)
             late = bool(state and state.locked_at)
             if existing_id:
@@ -694,6 +792,7 @@ class TimeStore:
                     created_at=_iso(moment),
                     updated_at=_iso(moment),
                     updated_by=user.user_id,
+                    schedule_version=SCHEDULE_V2,
                 )
                 self._submissions[sub.submission_id] = sub
                 self._submission_index[key] = sub.submission_id
@@ -725,7 +824,9 @@ class TimeStore:
                 raise NotFoundError()
             return self._save_existing(user, sub, hours, minutes, moment)
 
-    def week_view(self, user: User, week_ending: str, now: Optional[datetime] = None) -> dict[str, Any]:
+    def week_view(
+        self, user: User, week_ending: str, now: Optional[datetime] = None, version: Optional[int] = None
+    ) -> dict[str, Any]:
         self._require_manager(user)
         moment = now or utcnow()
         week = parse_week_ending(week_ending)
@@ -734,13 +835,13 @@ class TimeStore:
             settings = self._settings.get(user.practice_id)
             if settings is not None:
                 self._apply_scope_locks(user.practice_id, settings, moment)
-            report = self._report_unlocked(user.practice_id, week, moment, settings)
+            report = self._report_unlocked(user.practice_id, week, moment, settings, version)
             report["can_correct"] = is_melissa(user)
             self._flush_if_dirty()
             return report
 
-    def week_csv(self, user: User, week_ending: str, now: Optional[datetime] = None) -> str:
-        report = self.week_view(user, week_ending, now)
+    def week_csv(self, user: User, week_ending: str, now: Optional[datetime] = None, version: Optional[int] = None) -> str:
+        report = self.week_view(user, week_ending, now, version)
         return rows_to_csv(report["rows"])
 
     def preview_summary(self, user: User, week_ending: str, now: Optional[datetime] = None) -> dict[str, Any]:
@@ -1003,8 +1104,8 @@ class TimeStore:
     def _self_test_public(self, user: User, now: datetime) -> dict[str, Any]:
         email = _email(user.email)
         settings = self._settings.get(user.practice_id) or default_settings(user.practice_id, now)
-        week = pay_week_ending(now)
-        state = self._weeks.get((user.practice_id, week.isoformat()))
+        week = workweek_friday_for(now)
+        state = self._get_week(user.practice_id, week.isoformat())
         header = self._week_header(settings, week, state)
         deadline = _parse_iso(header["deadline"])
         record = self._self_tests.get((user.practice_id, user.user_id))
@@ -1163,9 +1264,9 @@ class TimeStore:
 
     def _clear(self) -> None:
         self._settings: dict[str, TimeSettings] = {}
-        self._weeks: dict[tuple[str, str], WeekState] = {}
+        self._weeks: dict[tuple[str, str, int], WeekState] = {}
         self._submissions: dict[str, Submission] = {}
-        self._submission_index: dict[tuple[str, str, str], str] = {}
+        self._submission_index: dict[tuple[str, str, int, str], str] = {}
         self._audits: list[dict[str, Any]] = []
         self._deliveries: dict[str, Delivery] = {}
         self._delivery_index: dict[tuple[str, str, str, str], str] = {}
@@ -1173,6 +1274,17 @@ class TimeStore:
         self._self_tests: dict[tuple[str, str], dict[str, Any]] = {}
         self._dirty = False
         self._memory_blob: Optional[bytes] = None
+
+    def _get_week(self, practice_id: str, week_ending: str, version: int = SCHEDULE_V2) -> Optional[WeekState]:
+        return self._weeks.get((practice_id, week_ending, int(version)))
+
+    def _put_week(self, state: WeekState) -> None:
+        self._weeks[(state.practice_id, state.week_ending, int(state.schedule_version))] = state
+
+    def _sub_key(
+        self, practice_id: str, week_ending: str, email: str, version: int = SCHEDULE_V2
+    ) -> tuple[str, str, int, str]:
+        return (practice_id, week_ending, int(version), _email(email))
 
     def _require_manager(self, user: User) -> None:
         if not can_manage_time(user):
@@ -1212,6 +1324,9 @@ class TimeStore:
             active_from_week=base.active_from_week or pay_week_ending(now).isoformat(),
             created_at=base.created_at or _iso(now),
             updated_at=_iso(now),
+            schedule_version=SCHEDULE_V2,
+            schedule_migrated=base.schedule_migrated,
+            automation_enabled=bool(patch.get("automation_enabled", base.automation_enabled)),
         )
 
     def _validate_participants(self, practice_id: str, emails: list[str]) -> list[str]:
@@ -1299,8 +1414,8 @@ class TimeStore:
     def _settings_public(self, settings: TimeSettings, now: datetime, *, saved: bool) -> dict[str, Any]:
         from app.hr.time_mail import delivery_flags
 
-        week = pay_week_ending(now)
-        state = self._weeks.get((settings.practice_id, week.isoformat()))
+        week = workweek_friday_for(now)
+        state = self._get_week(settings.practice_id, week.isoformat())
         return {
             "saved": saved,
             "practice_id": settings.practice_id,
@@ -1321,7 +1436,10 @@ class TimeStore:
             "schedule_note": SCHEDULE_NOTE,
             "schedule_warnings": schedule_warnings(settings, week),
             "hours_cap_note": HOURS_CAP_NOTE,
-            "helper_text": EXPECTED_FRIDAY_HOURS_TEXT,
+            "helper_text": HOURS_HELPER_TEXT,
+            "schedule_version": settings.schedule_version,
+            "schedule_migrated": settings.schedule_migrated,
+            "automation_enabled": settings.automation_enabled,
             "current_week": self._week_header(settings, week, state),
             "roster": self._staff_choices(settings.practice_id, set(settings.participant_emails)),
             "directory": self._directory_public(settings.practice_id),
@@ -1339,20 +1457,25 @@ class TimeStore:
         return count
 
     def _lock_if_due(self, practice_id: str, settings: TimeSettings, week: date, now: datetime) -> bool:
-        key = (practice_id, week.isoformat())
-        existing = self._weeks.get(key)
+        existing = self._get_week(practice_id, week.isoformat(), SCHEDULE_V2)
         if existing and existing.locked_at:
+            return False
+        legacy = self._get_week(practice_id, week.isoformat(), SCHEDULE_V1)
+        if legacy is not None:
             return False
         deadline = deadline_instant(week, settings)
         if now < deadline:
             return False
-        self._weeks[key] = WeekState(
-            practice_id=practice_id,
-            week_ending=week.isoformat(),
-            locked_at=_iso(now),
-            snapshot=self._active_participants(practice_id, settings),
-            summary_recipient=settings.summary_recipient,
-            lock_deadline=deadline.isoformat(),
+        self._put_week(
+            WeekState(
+                practice_id=practice_id,
+                week_ending=week.isoformat(),
+                locked_at=_iso(now),
+                snapshot=self._active_participants(practice_id, settings),
+                summary_recipient=settings.summary_recipient,
+                lock_deadline=deadline.isoformat(),
+                schedule_version=SCHEDULE_V2,
+            )
         )
         self._dirty = True
         return True
@@ -1544,8 +1667,8 @@ class TimeStore:
                 )
             if not own:
                 raise TimeAuthzError("Before cutoff, each person enters only their own hours.")
-            if week != pay_week_ending(now):
-                raise ValueError("Hours can only be entered for the current pay week.")
+            if not period_is_open(now, week, settings or default_settings(user.practice_id, now)):
+                raise ValueError("Hours can only be entered for the payroll week that is open.")
             raise TimeAuthzError("Only selected hourly staff can enter hours.")
 
     def _can_write(
@@ -1562,7 +1685,7 @@ class TimeStore:
         own = target == _email(user.email)
         locked = bool(state and state.locked_at)
         if not locked:
-            if not own or week != pay_week_ending(now) or settings is None:
+            if not own or settings is None or not period_is_open(now, week, settings):
                 return False
             return any(row["email"] == target for row in self._active_participants(user.practice_id, settings))
         if not is_melissa(user) or state is None:
@@ -1596,7 +1719,7 @@ class TimeStore:
         if settings is not None:
             self._apply_scope_locks(user.practice_id, settings, moment)
         week = parse_week_ending(sub.week_ending)
-        state = self._weeks.get((user.practice_id, sub.week_ending))
+        state = self._get_week(user.practice_id, sub.week_ending, sub.schedule_version)
         self._authorize_write(user, sub.email, week, moment, settings, state)
         raw = combine_hours_minutes(hours, minutes)
         lines = total_line(raw)
@@ -1654,7 +1777,7 @@ class TimeStore:
         self._dirty = True
 
     def _own_entry(self, practice_id: str, week_ending: str, email: str) -> Optional[dict[str, Any]]:
-        submission_id = self._submission_index.get((practice_id, week_ending, email))
+        submission_id = self._submission_index.get(self._sub_key(practice_id, week_ending, email, SCHEDULE_V2))
         if not submission_id:
             return None
         return self._entry_public(self._submissions[submission_id])
@@ -1690,18 +1813,41 @@ class TimeStore:
         }
 
     def _week_header(self, settings: TimeSettings, week: date, state: Optional[WeekState]) -> dict[str, Any]:
+        version = state.schedule_version if state is not None else SCHEDULE_V2
         if state and state.lock_deadline:
             deadline = _parse_iso(state.lock_deadline)
         else:
-            deadline = deadline_instant(week, settings)
+            deadline = deadline_instant(week, settings, version)
+        if version == SCHEDULE_V1:
+            start = week - timedelta(days=6)
+            label = f"{_long_date(start)} – {_long_date(week)}"
+            payroll = week
+            coverage = week
+            helper = "Historical Saturday–Friday payroll week. It is not relabeled as a Monday–Friday period."
+        else:
+            start = pay_week_start(week)
+            label = week_range_label(week)
+            payroll = payroll_thursday(week)
+            coverage = coverage_end(week)
+            helper = HOURS_HELPER_TEXT
+        submitted = 0
+        missing = 0
         return {
             "week_ending": week.isoformat(),
-            "week_start": pay_week_start(week).isoformat(),
-            "label": week_range_label(week),
+            "schedule_version": version,
+            "week_start": start.isoformat(),
+            "label": label,
+            "payroll_date": payroll.isoformat(),
+            "payroll_label": _long_date(payroll),
+            "coverage_end": coverage.isoformat(),
+            "coverage_note": helper,
             "deadline": deadline.isoformat(),
             "deadline_label": deadline_label(deadline),
             "locked": bool(state and state.locked_at),
             "locked_at": state.locked_at if state else "",
+            "dashboard_url": admin_url(week.isoformat(), version),
+            "submitted_count": submitted,
+            "missing_count": missing,
         }
 
     def _report_unlocked(
@@ -1710,13 +1856,23 @@ class TimeStore:
         week: date,
         now: datetime,
         settings: Optional[TimeSettings],
+        version: Optional[int] = None,
     ) -> dict[str, Any]:
-        state = self._weeks.get((practice_id, week.isoformat()))
+        if version is None:
+            if self._get_week(practice_id, week.isoformat(), SCHEDULE_V1) is not None and self._get_week(
+                practice_id, week.isoformat(), SCHEDULE_V2
+            ) is None:
+                version = SCHEDULE_V1
+            else:
+                version = SCHEDULE_V2
+        state = self._get_week(practice_id, week.isoformat(), int(version))
         effective = settings or default_settings(practice_id, now)
         people = self._people(practice_id, settings, state)
         rows: list[dict[str, Any]] = []
         for person in people:
-            submission_id = self._submission_index.get((practice_id, week.isoformat(), person["email"]))
+            submission_id = self._submission_index.get(
+                self._sub_key(practice_id, week.isoformat(), person["email"], version)
+            )
             sub = self._submissions.get(submission_id) if submission_id else None
             if sub is None:
                 rows.append(
@@ -1753,6 +1909,8 @@ class TimeStore:
             )
         rows.sort(key=lambda row: (row["display_name"].casefold(), row["email"]))
         header = self._week_header(effective, week, state)
+        header["submitted_count"] = sum(1 for row in rows if row["status"] == "submitted")
+        header["missing_count"] = sum(1 for row in rows if row["status"] == "missing")
         recipient = state.summary_recipient if state and state.locked_at else effective.summary_recipient
         audits = [
             dict(row)
@@ -1787,17 +1945,27 @@ class TimeStore:
         backoff: tuple[timedelta, ...],
         max_attempts: int,
     ) -> list[ClaimedJob]:
-        state = self._weeks.get((practice_id, week.isoformat()))
+        state = self._get_week(practice_id, week.isoformat())
         locked = bool(state and state.locked_at)
         reminders = _reminder_kinds(now, settings, week, locked)
-        summary_is_due = bool(locked) or now >= deadline_instant(week, settings)
+        deadline = deadline_instant(week, settings)
+        summary_keep = settings.automation_enabled and deadline <= now < deadline + timedelta(hours=3)
+        summary_create = _on_schedule_minute(now, deadline)
+        first_at = at_local(
+            date_for_weekday(week, settings.reminder_first_weekday),
+            settings.reminder_first_time,
+        )
+        due_at = at_local(
+            date_for_weekday(week, settings.reminder_due_weekday),
+            settings.reminder_due_time,
+        )
         keep = set(reminders)
-        if summary_is_due:
+        if summary_keep:
             keep.add("summary")
         self._cancel_obsolete(practice_id, week.isoformat(), keep, now)
         jobs: list[ClaimedJob] = []
         report = self._report_unlocked(practice_id, week, now, settings)
-        deadline = _parse_iso(report["deadline"])
+        report_deadline = _parse_iso(report["deadline"])
         if "reminder_first" in reminders:
             for row in report["rows"]:
                 job = self._claim_mail(
@@ -1809,7 +1977,8 @@ class TimeStore:
                     lease=lease,
                     backoff=backoff,
                     max_attempts=max_attempts,
-                    subject_body=lambda: render_reminder(slot="first", week_ending=week, deadline=deadline),
+                    subject_body=lambda: render_reminder(slot="first", week_ending=week, deadline=report_deadline),
+                    allow_create=_on_schedule_minute(now, first_at),
                 )
                 if job:
                     jobs.append(job)
@@ -1826,12 +1995,13 @@ class TimeStore:
                     lease=lease,
                     backoff=backoff,
                     max_attempts=max_attempts,
-                    subject_body=lambda: render_reminder(slot="due", week_ending=week, deadline=deadline),
+                    subject_body=lambda: render_reminder(slot="due", week_ending=week, deadline=report_deadline),
+                    allow_create=_on_schedule_minute(now, due_at),
                 )
                 if job:
                     jobs.append(job)
-        if summary_is_due and report["rows"]:
-            subject, body, csv_text, filename = render_summary(report)
+        if summary_keep and report["rows"]:
+            subject, body, _csv_text, _filename = render_summary(report)
             job = self._claim_mail(
                 practice_id,
                 week.isoformat(),
@@ -1842,12 +2012,13 @@ class TimeStore:
                 backoff=backoff,
                 max_attempts=max_attempts,
                 subject_body=lambda: (subject, body),
-                csv_filename=filename,
-                csv_text=csv_text,
+                csv_filename="",
+                csv_text="",
+                allow_create=summary_create,
             )
             if job:
                 jobs.append(job)
-        elif summary_is_due:
+        elif summary_keep:
             self._cancel_kind(practice_id, week.isoformat(), "summary", now)
         return jobs
 
@@ -1928,6 +2099,7 @@ class TimeStore:
         subject_body: Any,
         csv_filename: str = "",
         csv_text: str = "",
+        allow_create: bool = True,
     ) -> Optional[ClaimedJob]:
         recipient = _email(recipient)
         if not recipient:
@@ -1937,6 +2109,8 @@ class TimeStore:
         if existing and existing.status in ("sent", "uncertain", "cancelled"):
             return None
         if existing and not _can_reclaim(existing, now, backoff, max_attempts):
+            return None
+        if existing is None and not allow_create:
             return None
         if existing is None:
             existing = Delivery(
@@ -1964,6 +2138,7 @@ class TimeStore:
             body=body,
             csv_filename=csv_filename,
             csv_text=csv_text,
+            practice_id=practice_id,
         )
 
     def _finish_unlocked(
@@ -2035,6 +2210,7 @@ class TimeStore:
                     body=body,
                     csv_filename=filename,
                     csv_text=csv_text,
+                    practice_id=delivery.practice_id,
                 )
             slot = "first" if delivery.kind == "reminder_first" else "due"
             subject, body = render_reminder(
@@ -2048,6 +2224,7 @@ class TimeStore:
                 to=delivery.recipient,
                 subject=subject,
                 body=body,
+                practice_id=delivery.practice_id,
             )
 
     def _release_claim(self, delivery: Delivery, now: datetime, *, status: str) -> None:
@@ -2085,14 +2262,14 @@ class TimeStore:
                 week = WeekState.from_dict(item)
             except (KeyError, TypeError, ValueError):
                 continue
-            self._weeks[(week.practice_id, week.week_ending)] = week
+            self._put_week(week)
         for item in payload.get("submissions") or []:
             try:
                 sub = Submission.from_dict(item)
             except (KeyError, TypeError, ValueError):
                 continue
             self._submissions[sub.submission_id] = sub
-            self._submission_index[(sub.practice_id, sub.week_ending, sub.email)] = sub.submission_id
+            self._submission_index[self._sub_key(sub.practice_id, sub.week_ending, sub.email, sub.schedule_version)] = sub.submission_id
         for item in payload.get("audits") or []:
             if isinstance(item, dict) and item.get("audit_id") and item.get("practice_id"):
                 self._audits.append(dict(item))
@@ -2164,8 +2341,14 @@ def _delivery_public(delivery: Delivery) -> dict[str, Any]:
     }
 
 
+def _on_schedule_minute(now: datetime, scheduled: datetime) -> bool:
+    """True only for the scheduled minute. A later tick does not catch up."""
+    return scheduled <= now < scheduled + timedelta(minutes=2)
+
+
 def _reminder_kinds(now: datetime, settings: TimeSettings, week: date, locked: bool) -> set[str]:
-    if locked or now >= deadline_instant(week, settings):
+    """Kinds that may still be retried. A brand-new send is a separate minute check."""
+    if not settings.automation_enabled or locked or now >= deadline_instant(week, settings):
         return set()
     lock_at = deadline_instant(week, settings)
     first_at = at_local(
@@ -2177,7 +2360,7 @@ def _reminder_kinds(now: datetime, settings: TimeSettings, week: date, locked: b
         settings.reminder_due_time,
     )
     kinds: set[str] = set()
-    if first_at <= now < min(due_at, lock_at):
+    if first_at <= now < lock_at:
         kinds.add("reminder_first")
     if due_at < lock_at and due_at <= now < lock_at:
         kinds.add("reminder_due")
@@ -2270,14 +2453,17 @@ def _self_test_summary(entry: dict[str, Any], header: dict[str, Any]) -> dict[st
 
 def render_reminder(*, slot: str, week_ending: date, deadline: datetime) -> tuple[str, str]:
     subject = REMINDER_FIRST_SUBJECT if slot == "first" else REMINDER_DUE_SUBJECT
+    weekend = coverage_end(week_ending)
+    saturday = week_ending + timedelta(days=1)
     body = "\n".join(
         [
             subject,
             "",
-            f"Pay week: {week_range_label(week_ending)}",
-            f"Deadline: {deadline_label(deadline)}",
+            f"Workweek: {week_range_label(week_ending)}",
+            f"Payroll run: {deadline_label(deadline)}",
             "",
-            EXPECTED_FRIDAY_HOURS_TEXT,
+            "Enter the hours you already worked that Monday through Friday. "
+            f"Hours from {_long_date(saturday)} and {_long_date(weekend)} belong in this same total if you worked them.",
             "",
             f"Enter hours: {TIME_ENTRY_URL}",
         ]
@@ -2286,37 +2472,18 @@ def render_reminder(*, slot: str, week_ending: date, deadline: datetime) -> tupl
 
 
 def render_summary(report: dict[str, Any]) -> tuple[str, str, str, str]:
-    subject = f"Weekly hours summary — week ending {report['week_ending']}"
+    subject = f"Payroll hours are ready — {report['label']}"
+    submitted = int(report.get("submitted_count") or 0)
+    missing = int(report.get("missing_count") or 0)
+    link = str(report.get("dashboard_url") or admin_url(str(report["week_ending"]), int(report.get("schedule_version") or SCHEDULE_V2)))
     lines = [
-        f"Pay week: {report['label']}",
-        f"Deadline: {report['deadline_label']}",
+        f"Workweek: {report['label']}",
+        f"Payroll run: {report.get('payroll_label') or report['deadline_label']}",
+        f"Submitted: {submitted}. Missing: {missing}. Missing is not zero.",
         "",
-        "Totals include the expected Friday afternoon hours staff were asked to enter before cutoff.",
-        "Missing is not zero. An explicit 0:00 counts as submitted.",
-        "",
-        "Submitted (sorted by name):",
+        f"Open this payroll week: {link}",
     ]
-    submitted = [row for row in report["rows"] if row["status"] == "submitted"]
-    if not submitted:
-        lines.append("- (none)")
-    for row in submitted:
-        lines.append(
-            f"- {row['display_name']}: raw {row['raw_display']}, payable {row['rounded_display']} ({row['decimal_hours']})"
-        )
-    lines.extend(["", "Missing:"])
-    if not report["missing"]:
-        lines.append("- (none)")
-    for name in report["missing"]:
-        lines.append(f"- {name}")
-    lines.extend(
-        [
-            "",
-            f"Admin view: {admin_url(report['week_ending'])}",
-            "CSV is attached. Melissa's later corrections are logged and are not emailed again.",
-        ]
-    )
-    filename = f"weekly-hours-{report['week_ending']}.csv"
-    return subject, "\n".join(lines), rows_to_csv(report["rows"]), filename
+    return subject, "\n".join(lines), "", ""
 
 
 def rows_to_csv(rows: list[dict[str, Any]]) -> str:

@@ -677,8 +677,9 @@
         <button class="ghost" id="btn-time-admin-entry" type="button">My hours</button>
         <button class="ghost" id="btn-time-admin-settings" type="button">Settings</button>
       </div>
-      <label for="time-admin-week">Week ending (Friday)</label>
+      <label for="time-admin-week">Workweek Friday</label>
       <input id="time-admin-week" type="date" />
+      <input id="time-admin-version" type="hidden" value="2" />
       <div class="row">
         <button class="primary" id="btn-time-admin-load" type="button">Show week</button>
         <button class="ghost" id="btn-time-admin-csv" type="button">Download CSV</button>
@@ -724,6 +725,8 @@
       <input id="time-lock-time" type="time" step="60" />
       <label for="time-summary-to">Summary recipient</label>
       <input id="time-summary-to" type="email" autocomplete="off" />
+      <label><input id="time-automation" type="checkbox" /> Send scheduled reminders and the Thursday payroll link</label>
+      <p class="meta">Leave this off until you want future reminders to go out. Turning it on does not send reminders whose time has already passed. The operations mailbox must stay connected. Scheduled payroll mail is separate from the self-test Send buttons.</p>
       <div id="time-settings-warnings"></div>
       <div class="row">
         <button class="primary" id="btn-time-settings-save" type="button">Save settings</button>
@@ -1161,7 +1164,8 @@
     async function openTimeAdmin(week) {
       show("time-admin-panel");
       const ending = week || "";
-      window.history.replaceState({}, "", ending ? `/#time-admin?week=${ending}` : "/#time-admin");
+      const version = ($("time-admin-version") && $("time-admin-version").value) || "2";
+      window.history.replaceState({}, "", ending ? `/#time-admin?week=${ending}&v=${version}` : "/#time-admin");
       setStatus($("time-admin-status"), "Loading…");
       try {
         let chosen = ending;
@@ -1177,9 +1181,11 @@
     }
 
     async function loadTimeAdmin(ending) {
-      const data = await api(`/hr/time/week?week_ending=${encodeURIComponent(ending)}`);
-      window.history.replaceState({}, "", `/#time-admin?week=${ending}`);
-      $("time-admin-meta").textContent = `${data.label}. Deadline ${data.deadline_label}. ${data.locked ? "Locked." : "Open."} Summary recipient ${data.summary_recipient}. Missing is not zero.`;
+        const version = ($("time-admin-version") && $("time-admin-version").value) || "2";
+        const data = await api(`/hr/time/week?week_ending=${encodeURIComponent(ending)}&v=${encodeURIComponent(version)}`);
+        window.history.replaceState({}, "", `/#time-admin?week=${ending}&v=${version}`);
+        const counts = `${data.submitted_count || 0} submitted, ${data.missing_count || 0} missing`;
+        $("time-admin-meta").textContent = `${data.label}. Payroll ${data.payroll_label || data.deadline_label}. ${counts}. ${data.locked ? "Locked." : "Open."} ${data.coverage_note || ""}`;
       const root = $("time-admin-rows");
       root.innerHTML = "";
       (data.rows || []).forEach((row) => {
@@ -1289,7 +1295,8 @@
       try {
         const headers = {};
         if (state.token) headers.Authorization = `Bearer ${state.token}`;
-        const res = await fetch(`/hr/time/week.csv?week_ending=${encodeURIComponent(ending)}`, {
+        const version = ($("time-admin-version") && $("time-admin-version").value) || "2";
+        const res = await fetch(`/hr/time/week.csv?week_ending=${encodeURIComponent(ending)}&v=${encodeURIComponent(version)}`, {
           headers,
           credentials: "include",
         });
@@ -1324,6 +1331,7 @@
         summary_weekday: Number($("time-lock-day").value),
         summary_time: trimTime($("time-lock-time").value),
         summary_recipient: $("time-summary-to").value.trim(),
+        automation_enabled: !!($("time-automation") && $("time-automation").checked),
       };
     }
 
@@ -1358,7 +1366,7 @@
         : `Nobody is enabled yet${disabled.length ? `. Not enabled: ${disabled.join(", ")}.` : "."}`;
       $("time-settings-note").textContent = `${data.schedule_note || ""} ${data.hours_cap_note || ""}`.trim();
       $("time-settings-corrector").textContent = data.corrector_note || "";
-      $("time-rem1-subject").textContent = `Message: ${data.reminder_first_subject}. Keep this on the day before cutoff; the text says due tomorrow.`;
+      $("time-rem1-subject").textContent = `Message: ${data.reminder_first_subject}. Default is Wednesday 9:00 for the prior Monday–Friday. The text says due tomorrow.`;
       $("time-rem2-subject").textContent = `Message: ${data.reminder_due_subject}. Keep this on cutoff day, before the cutoff.`;
       $("time-rem1-day").value = String(data.reminder_first_weekday);
       $("time-rem1-time").value = data.reminder_first_time;
@@ -1367,6 +1375,7 @@
       $("time-lock-day").value = String(data.summary_weekday);
       $("time-lock-time").value = data.summary_time;
       $("time-summary-to").value = data.summary_recipient || "";
+      if ($("time-automation")) $("time-automation").checked = !!data.automation_enabled;
       const roster = $("time-roster");
       roster.innerHTML = "";
       (data.roster || []).forEach((person) => {
@@ -1696,6 +1705,9 @@
         const wantElig = hash === "#eligibility";
         const wantOnboarding = hash === "#onboarding";
         const timeRoute = hashRoute();
+        if (timeRoute.path === "time-admin" && timeRoute.params.get("v") && $("time-admin-version")) {
+          $("time-admin-version").value = timeRoute.params.get("v");
+        }
         const wantTime = timeRoute.path === "time";
         const wantTimeAdmin = timeRoute.path === "time-admin";
         const wantTimeSettings = timeRoute.path === "time-settings";

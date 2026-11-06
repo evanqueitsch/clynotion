@@ -13,7 +13,7 @@ from fastapi.testclient import TestClient
 from app.auth import User, issue_token, user_store
 from app.clinicians import clinician_store
 from app.hr.time_entry import (
-    EXPECTED_FRIDAY_HOURS_TEXT,
+    HOURS_HELPER_TEXT,
     MAX_WEEK_MINUTES,
     MELISSA_EMAIL,
     REMINDER_DUE_SUBJECT,
@@ -41,12 +41,12 @@ from app.hr.time_mail import (
 from app.hr.time_schedule import run_tick
 from app.main import app
 
-WEEK = "2026-03-13"
-WED = datetime(2026, 3, 11, 15, 0, tzinfo=timezone.utc)  # Wed 11:00 EDT
-THU_0900 = datetime(2026, 3, 12, 13, 0, tzinfo=timezone.utc)  # Thu 09:00 EDT
-FRI_0800 = datetime(2026, 3, 13, 12, 0, tzinfo=timezone.utc)  # Fri 08:00 EDT
-FRI_1129 = datetime(2026, 3, 13, 15, 29, tzinfo=timezone.utc)
-FRI_1130 = datetime(2026, 3, 13, 15, 30, tzinfo=timezone.utc)
+WEEK = "2026-03-13"  # workweek Monday Mar 9 – Friday Mar 13; payroll Thursday Mar 19
+WED = datetime(2026, 3, 18, 14, 0, tzinfo=timezone.utc)  # Wed Mar 18 10:00 EDT, entry open
+THU_0900 = datetime(2026, 3, 18, 13, 0, tzinfo=timezone.utc)  # Wed Mar 18 09:00 EDT reminder
+FRI_0800 = datetime(2026, 3, 19, 12, 0, tzinfo=timezone.utc)  # Thu Mar 19 08:00 EDT reminder
+FRI_1129 = datetime(2026, 3, 19, 15, 29, tzinfo=timezone.utc)
+FRI_1130 = datetime(2026, 3, 19, 15, 30, tzinfo=timezone.utc)  # Thu Mar 19 11:30 EDT cutoff
 
 
 @pytest.fixture
@@ -100,13 +100,14 @@ def _melissa() -> User:
 def _settings(**overrides: object) -> dict:
     body: dict = {
         "participant_emails": ["jordan@heart4change.org", "sam@heart4change.org"],
-        "reminder_first_weekday": 3,
+        "reminder_first_weekday": 2,
         "reminder_first_time": "09:00",
-        "reminder_due_weekday": 4,
+        "reminder_due_weekday": 3,
         "reminder_due_time": "08:00",
-        "summary_weekday": 4,
+        "summary_weekday": 3,
         "summary_time": "11:30",
         "summary_recipient": MELISSA_EMAIL,
+        "automation_enabled": True,
     }
     body.update(overrides)
     return body
@@ -157,33 +158,102 @@ def test_hours_cap_is_the_minutes_in_a_week_not_eighty() -> None:
         normalize_lines([{"category": "supervision", "minutes": 15}])
 
 
-def test_pay_week_is_saturday_through_friday_including_dst() -> None:
-    assert datetime(2026, 1, 9).weekday() == 4
-    assert pay_week_ending(datetime(2026, 1, 10, 4, 59, tzinfo=timezone.utc)).isoformat() == "2026-01-09"
-    assert pay_week_ending(datetime(2026, 1, 10, 5, 0, tzinfo=timezone.utc)).isoformat() == "2026-01-16"
+def test_prior_monday_friday_payroll_thursday_across_dst() -> None:
+    from app.hr.time_entry import TimeSettings, coverage_end, payroll_thursday, pay_week_start
 
-    # Spring forward Sunday 2026-03-08. Saturday midnight is still EST (UTC-5).
-    assert datetime(2026, 3, 8).weekday() == 6
-    assert pay_week_ending(datetime(2026, 3, 7, 4, 59, tzinfo=timezone.utc)).isoformat() == "2026-03-06"
-    assert pay_week_ending(datetime(2026, 3, 7, 5, 0, tzinfo=timezone.utc)).isoformat() == "2026-03-13"
+    # Reminders on Wed Nov 11 and Thu Nov 12, 2026 collect Mon Nov 2–Fri Nov 6.
+    # Sat Nov 7 and Sun Nov 8 are inside that same total. Payroll is Thu Nov 12.
+    wednesday = datetime(2026, 11, 11, 14, 0, tzinfo=timezone.utc)  # 09:00 EST
+    assert pay_week_ending(wednesday).isoformat() == "2026-11-06"
+    assert pay_week_start(pay_week_ending(wednesday)).isoformat() == "2026-11-02"
+    assert coverage_end(pay_week_ending(wednesday)).isoformat() == "2026-11-08"
+    assert payroll_thursday(pay_week_ending(wednesday)).isoformat() == "2026-11-12"
+    # The next workweek is not open on Friday Nov 6; it opens Saturday Nov 7.
+    friday_evening = datetime(2026, 11, 6, 22, 0, tzinfo=timezone.utc)
+    assert pay_week_ending(friday_evening).isoformat() == "2026-10-30"
+    saturday = datetime(2026, 11, 7, 15, 0, tzinfo=timezone.utc)
+    assert pay_week_ending(saturday).isoformat() == "2026-11-06"
+
+    # Spring forward Sunday 2026-03-08. Payroll Thursday Mar 19 is EDT (UTC-4).
+    spring_week = pay_week_ending(datetime(2026, 3, 18, 14, 0, tzinfo=timezone.utc))
+    spring_lock = deadline_instant(
+        spring_week,
+        TimeSettings(practice_id="p", participant_emails=[], summary_weekday=3, summary_time="11:30"),
+    )
+    assert spring_week.isoformat() == "2026-03-13"
+    assert spring_lock.astimezone(timezone.utc) == datetime(2026, 3, 19, 15, 30, tzinfo=timezone.utc)
+
+    # Fall back Sunday 2026-11-01. Payroll Thursday Nov 12 is EST (UTC-5).
+    fall_lock = deadline_instant(
+        pay_week_ending(wednesday),
+        TimeSettings(practice_id="p", participant_emails=[], summary_weekday=3, summary_time="11:30"),
+    )
+    assert fall_lock.astimezone(timezone.utc) == datetime(2026, 11, 12, 16, 30, tzinfo=timezone.utc)
+
+
+def test_old_default_schedule_migrates_and_custom_times_stay(client: TestClient) -> None:
+    _roster()
+    set_clock(WED)
+    stored = {
+        "practice_id": "practice-a",
+        "participant_emails": ["jordan@heart4change.org"],
+        "reminder_first_weekday": 3,
+        "reminder_first_time": "09:00",
+        "reminder_due_weekday": 4,
+        "reminder_due_time": "08:00",
+        "summary_weekday": 4,
+        "summary_time": "11:30",
+        "summary_recipient": MELISSA_EMAIL,
+    }
     from app.hr.time_entry import TimeSettings
 
-    spring_lock = deadline_instant(
-        pay_week_ending(datetime(2026, 3, 13, 15, 0, tzinfo=timezone.utc)),
-        TimeSettings(practice_id="p", participant_emails=[], summary_weekday=4, summary_time="11:30"),
-    )
-    assert spring_lock.astimezone(timezone.utc) == datetime(2026, 3, 13, 15, 30, tzinfo=timezone.utc)
-    assert datetime(2026, 3, 13, 15, 29, tzinfo=timezone.utc) < spring_lock
+    migrated = TimeSettings.from_dict(stored)
+    assert migrated.schedule_migrated is True
+    assert (migrated.reminder_first_weekday, migrated.reminder_due_weekday, migrated.summary_weekday) == (2, 3, 3)
+    custom = TimeSettings.from_dict({**stored, "reminder_first_time": "10:15"})
+    assert custom.schedule_migrated is False
+    assert custom.reminder_first_time == "10:15"
+    assert custom.reminder_first_weekday == 3
+    assert custom.automation_enabled is False
 
-    # Fall back Sunday 2026-11-01. Friday lock that week is EST (UTC-5).
-    assert datetime(2026, 11, 1).weekday() == 6
-    assert pay_week_ending(datetime(2026, 10, 31, 3, 59, tzinfo=timezone.utc)).isoformat() == "2026-10-30"
-    assert pay_week_ending(datetime(2026, 10, 31, 4, 0, tzinfo=timezone.utc)).isoformat() == "2026-11-06"
-    fall_lock = deadline_instant(
-        pay_week_ending(datetime(2026, 11, 6, 16, 0, tzinfo=timezone.utc)),
-        TimeSettings(practice_id="p", participant_emails=[], summary_weekday=4, summary_time="11:30"),
+
+def test_turning_automation_on_does_not_catch_up_a_passed_reminder() -> None:
+    _roster()
+    late = datetime(2026, 3, 18, 19, 0, tzinfo=timezone.utc)  # Wed 3:00 PM EDT
+    time_store.save_settings(
+        _alice_user(),
+        _settings(participant_emails=["jordan@heart4change.org"], automation_enabled=True),
+        late,
     )
-    assert fall_lock.astimezone(timezone.utc) == datetime(2026, 11, 6, 16, 30, tzinfo=timezone.utc)
+    mailer = RecordingMailer()
+    assert run_tick(mailer=mailer, now=late)["sent"] == 0
+    assert mailer.sent == []
+
+
+def test_legacy_week_is_not_relabeled(client: TestClient) -> None:
+    from app.hr.time_entry import SCHEDULE_V1, WeekState
+
+    _roster()
+    set_clock(WED)
+    _save_settings(client)
+    time_store._put_week(
+        WeekState(
+            practice_id="practice-a",
+            week_ending=WEEK,
+            locked_at="2026-03-13T15:30:00+00:00",
+            snapshot=[{"email": "jordan@heart4change.org", "display_name": "Jordan Lee", "clinician_id": ""}],
+            summary_recipient=MELISSA_EMAIL,
+            lock_deadline="2026-03-13T15:30:00+00:00",
+            schedule_version=SCHEDULE_V1,
+        )
+    )
+    legacy = client.get(f"/hr/time/week?week_ending={WEEK}&v=1", headers=_alice()).json()
+    assert legacy["schedule_version"] == 1
+    assert "Saturday" in legacy["label"]
+    current = client.get(f"/hr/time/week?week_ending={WEEK}&v=2", headers=_alice()).json()
+    assert current["schedule_version"] == 2
+    assert current["label"].startswith("Monday, March 9, 2026")
+    assert "Jordan Lee" in legacy["label"] or legacy["rows"][0]["display_name"] == "Jordan Lee"
 
 
 def test_selected_staff_can_save_zero_and_history_stays_private(client: TestClient) -> None:
@@ -203,7 +273,7 @@ def test_selected_staff_can_save_zero_and_history_stays_private(client: TestClie
 
     me = client.get("/hr/time/me", headers=_auth(_jordan()))
     assert me.status_code == 200
-    assert EXPECTED_FRIDAY_HOURS_TEXT in me.json()["helper_text"]
+    assert HOURS_HELPER_TEXT in me.json()["helper_text"]
     assert me.json()["entry"]["raw_minutes"] == 0
     assert all(row["email"] == "jordan@heart4change.org" for row in me.json()["history"])
 
@@ -389,10 +459,11 @@ def test_preview_and_test_reminder_never_send(client: TestClient) -> None:
     assert preview.status_code == 200, preview.text
     body = preview.json()
     assert body["sent"] is False
-    assert "5:14" in body["body"] and "5:15" in body["body"] and "5.25" in body["body"]
-    assert "Sam Rivera" in body["body"]
-    assert f"https://clynotion.com/#time-admin?week={WEEK}" in body["body"]
-    assert "submitted,314,315,5.25" in body["csv"]
+    assert "Submitted: 1. Missing: 1." in body["body"]
+    assert f"https://clynotion.com/#time-admin?week={WEEK}&v=2" in body["body"]
+    assert body["csv"] == ""
+    assert "Monday, March 9, 2026" in body["body"]
+    assert "Friday, March 13, 2026" in body["body"]
     reminder = client.post(
         "/hr/time/settings/test-reminder",
         headers=_auth(_melissa()),
@@ -403,10 +474,13 @@ def test_preview_and_test_reminder_never_send(client: TestClient) -> None:
     assert payload["sent"] is False
     assert [item["to"] for item in payload["messages"]] == ["sam@heart4change.org"]
     assert payload["messages"][0]["subject"] == REMINDER_DUE_SUBJECT
-    assert EXPECTED_FRIDAY_HOURS_TEXT in payload["messages"][0]["body"]
+    assert "already worked" in payload["messages"][0]["body"]
     assert TIME_ENTRY_URL in payload["messages"][0]["body"]
-    assert "Saturday, March 7, 2026" in payload["messages"][0]["body"]
+    assert "Monday, March 9, 2026" in payload["messages"][0]["body"]
     assert "Friday, March 13, 2026" in payload["messages"][0]["body"]
+    assert "Saturday, March 14, 2026" in payload["messages"][0]["body"]
+    assert "Sunday, March 15, 2026" in payload["messages"][0]["body"]
+    assert "expect to work Friday" not in payload["messages"][0]["body"]
     first = client.post(
         "/hr/time/settings/test-reminder",
         headers=_alice(),
@@ -426,17 +500,17 @@ def test_reminders_honor_exact_minutes_and_skip_submitted_including_zero(client:
     _enter(client, _jordan(), 0, 0)
     mailer = RecordingMailer()
     set_mailer_for_tests(mailer)
-    set_clock(datetime(2026, 3, 12, 13, 6, tzinfo=timezone.utc))  # Thu 09:06 EDT
-    early = run_tick(mailer=mailer, now=datetime(2026, 3, 12, 13, 6, tzinfo=timezone.utc))
+    set_clock(datetime(2026, 3, 18, 13, 6, tzinfo=timezone.utc))  # Wed 09:06 EDT
+    early = run_tick(mailer=mailer, now=datetime(2026, 3, 18, 13, 6, tzinfo=timezone.utc))
     assert early["sent"] == 0
-    due = run_tick(mailer=mailer, now=datetime(2026, 3, 12, 13, 7, tzinfo=timezone.utc))
+    due = run_tick(mailer=mailer, now=datetime(2026, 3, 18, 13, 7, tzinfo=timezone.utc))
     assert due["sent"] == 2
     assert {message.to for message in mailer.sent} == {
         "jordan@heart4change.org",
         "sam@heart4change.org",
     }
     assert all(message.subject == REMINDER_FIRST_SUBJECT for message in mailer.sent)
-    assert all(EXPECTED_FRIDAY_HOURS_TEXT in message.text for message in mailer.sent)
+    assert all("already worked" in message.text for message in mailer.sent)
     assert all(TIME_ENTRY_URL in message.text for message in mailer.sent)
 
     mailer.sent.clear()
@@ -466,16 +540,16 @@ def test_summary_is_practice_isolated_and_melissa_edits_do_not_send_mail(client:
     mailer = RecordingMailer()
     set_mailer_for_tests(mailer)
     result = run_tick(mailer=mailer, now=FRI_1130)
-    summaries = [message for message in mailer.sent if message.subject.startswith("Weekly hours summary")]
+    summaries = [message for message in mailer.sent if message.subject.startswith("Payroll hours are ready")]
     assert result["sent"] == 2
     assert len(summaries) == 2
-    practice_a = next(message for message in summaries if "Jordan Lee" in message.text)
-    practice_b = next(message for message in summaries if "Riley Chen" in message.text)
+    practice_a = next(message for message in summaries if "Submitted: 1." in message.text)
+    practice_b = next(message for message in summaries if "Submitted: 0." in message.text)
     assert "Riley" not in practice_a.text
     assert "Jordan" not in practice_b.text
-    assert "5:01" in practice_a.text and "5:15" in practice_a.text and "5.25" in practice_a.text
-    assert "Sam Rivera" in practice_a.text
-    assert "missing,0" not in practice_a.csv_text
+    assert f"week={WEEK}&v=2" in practice_a.text
+    assert practice_a.csv_text == ""
+    assert practice_b.csv_text == ""
     before = len(mailer.sent)
     patched = client.patch(
         f"/hr/time/entries/{_submission_id(client)}",
@@ -645,7 +719,8 @@ def test_tick_endpoint_requires_the_secret_and_does_not_echo_it(client: TestClie
     assert secret not in wrong.text
     ok = client.post("/internal/time/tick", headers={"Authorization": f"Bearer {secret}"})
     assert ok.status_code == 200, ok.text
-    assert ok.json()["mail"] == "not_configured"
+    assert ok.json()["mail"] == "configured"
+    assert ok.json()["sent"] == 0
     assert secret not in ok.text
 
 

@@ -65,6 +65,7 @@ class OutboundMail:
     text: str
     csv_filename: str = ""
     csv_text: str = ""
+    practice_id: str = ""
 
 
 @dataclass(frozen=True)
@@ -127,6 +128,24 @@ def clear_mailer_for_tests() -> None:
 
 def mail_mode() -> str:
     return (os.environ.get(ENV_MAIL_MODE) or "off").strip().lower() or "off"
+
+
+class ConnectedMailboxMailer:
+    """Send scheduled hours mail from the practice's connected Gmail mailbox.
+
+    Returns a normal failure when that mailbox is not connected. It does not
+    read TIME_MAIL_MODE and it does not use a service account.
+    """
+
+    def check_ready(self) -> Optional[str]:
+        return None
+
+    def send(self, message: OutboundMail) -> MailResult:
+        from app.hr.gmail_oauth import deliver_self_test_message
+
+        if not message.practice_id:
+            return MailResult(status="failed", detail="mail_practice_missing")
+        return deliver_self_test_message(message.practice_id, message)
 
 
 def build_mailer() -> Optional[MailSender]:
