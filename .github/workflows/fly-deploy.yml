@@ -81,6 +81,34 @@ jobs:
               out["scheduled_mail"] = status.get("scheduled_mail") or ""
           except Exception as exc:
               out["mailbox"] = type(exc).__name__
+          # Empty body cannot be a message. A 400 means the API accepted the
+          # call and rejected the payload. A 403 is the same rejection the
+          # sends hit, with its reason code and no delivery.
+          try:
+              import re
+              import httpx
+              from app.hr.gmail_oauth import GMAIL_SEND_URL, _refresh_gmail_access
+              from app.workspace_directory import gmail_send_record
+              record = gmail_send_record(default_practice_id())
+              access = _refresh_gmail_access(record.get("refresh_token") or "")
+              resp = httpx.post(GMAIL_SEND_URL, json={}, headers={"Authorization": "Bearer " + access}, timeout=20.0)
+              body = resp.json() if "json" in resp.headers.get("content-type", "") else {}
+              err = body.get("error") if isinstance(body, dict) else {}
+              reasons = []
+              if isinstance(err, dict):
+                  if err.get("status"):
+                      reasons.append(str(err.get("status"))[:80])
+                  for item in (err.get("errors") or []) + (err.get("details") or []):
+                      if isinstance(item, dict) and item.get("reason"):
+                          reasons.append(str(item.get("reason"))[:80])
+                  message = str(err.get("message") or "")
+                  project = re.search(r"project(?:s)?(?:=|/)(\d{6,})", message)
+                  if project:
+                      out["gmail_project_number"] = project.group(1)
+              out["probe_http"] = resp.status_code
+              out["probe_reasons"] = reasons[:6]
+          except Exception as exc:
+              out["probe"] = type(exc).__name__
           print(json.dumps(out))
           '''
           print(base64.b64encode(script.encode()).decode())
