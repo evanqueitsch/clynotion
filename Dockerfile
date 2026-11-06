@@ -32,7 +32,10 @@ ENV PYTHONUNBUFFERED=1 \
     ATTUNE_ELIGIBILITY_PERSISTENCE=file \
     ATTUNE_ELIGIBILITY_DATA_PATH=/data/eligibility.enc \
     ATTUNE_CREDENTIAL_PERSISTENCE=file \
-    ATTUNE_CREDENTIAL_DATA_PATH=/data/credentials.enc
+    ATTUNE_CREDENTIAL_DATA_PATH=/data/credentials.enc \
+    ATTUNE_HR_TIME_PERSISTENCE=file \
+    ATTUNE_HR_TIME_DATA_PATH=/data/hr_time.enc \
+    TIME_MAIL_MODE=off
 WORKDIR /app
 
 COPY --from=builder /app/.venv .venv/

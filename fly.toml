@@ -22,7 +22,7 @@ primary_region = 'iad'
     method = 'GET'
     path = '/health'
 
-# Durable roster + Workspace directory tokens (create with deploy workflow).
+# Durable roster, hours, and Workspace directory tokens (one machine, one volume).
 [[mounts]]
   source = 'attune_data'
   destination = '/data'

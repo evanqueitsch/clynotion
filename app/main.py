@@ -254,7 +254,19 @@ def health() -> dict[str, Any]:
         "clinician_persistence": os.environ.get("ATTUNE_CLINICIAN_PERSISTENCE", "memory"),
         "session_persistence": os.environ.get("ATTUNE_PERSISTENCE", "memory"),
         "data_path": data_path,
+        "time_persistence": os.environ.get("ATTUNE_HR_TIME_PERSISTENCE", "memory"),
+        "time_data_path": os.environ.get("ATTUNE_HR_TIME_DATA_PATH", ""),
+        "time_mail_mode": _public_time_mail_mode(),
     }
+
+
+def _public_time_mail_mode() -> str:
+    mode = (os.environ.get("TIME_MAIL_MODE") or "off").strip().lower()
+    if mode in ("", "mock", "off"):
+        return "off"
+    if mode == "gmail":
+        return "gmail"
+    return "off"
 
 
 @app.get("/auth/config", response_model=AuthConfigResponse)

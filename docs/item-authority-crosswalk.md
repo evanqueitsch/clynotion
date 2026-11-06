@@ -34,7 +34,7 @@ Source of truth in code: `app/platform/catalog.py` (`GET /catalog`, `GET /catalo
 | Eligibility | Clinical Tools | live | OPS-5 | Hard gate — eligibility before every service; PA EVS/PROMISe when enabled |
 | SimplePractice ingest | Technology | live | Platform · Ingest | Feeds unsigned-note aging (55 Pa. Code 1101.51) |
 | Time, PTO & bonus | HR | planned | OPS-1 | FLSA wage-and-hour (when time drives pay) |
-| Time entry | HR | planned | OPS-6 | FLSA — accurate hours for non-exempt employees |
+| Time entry | HR | live | OPS-6 | FLSA — accurate hours for non-exempt employees. Weekly total only; see `docs/modules/ops6-weekly-hours.md`. |
 | Hiring & onboarding | HR | planned | OPS-7 | 42 CFR 455.436 (exclusion screening at hire) |
 | Marketing workbench | Marketing | planned | OPS-8 | — |
 | Financial ops | Finance | planned | FIN-1 | PerformCare Ch. VI claims aging (context) |

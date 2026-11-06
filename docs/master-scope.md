@@ -841,7 +841,9 @@ Adding a backend must never require changing the record, the UI, or the gate log
 
 ## 11. PEOPLE · Time Entry (`OPS-6`)
 
-**Status: Not started.** Tier 3. Extends OPS-1 rather than standing alone.
+**Status: weekly hours slice shipped.** Tier 3. The shipped behavior is one Saturday–Friday total for selected hourly staff, not the daily category log below. Design of record: `docs/modules/ops6-weekly-hours.md`. The category-ratio and payroll-export notes in this section are not that slice.
+
+**Status (original plan): Not started.** Tier 3. Extends OPS-1 rather than standing alone.
 
 ### 11.1 Objective
 

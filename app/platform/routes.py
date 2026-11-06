@@ -169,16 +169,31 @@ def _home_payload(user: CurrentUser) -> HomeOut:
         overdue=[_obligation_out(o) for o in bands_raw["overdue"]],
         this_week=[_obligation_out(o) for o in bands_raw["this_week"]],
     )
-    units = catalog_by_unit(include_planned=True)
-    tools = [
-        {
-            "id": t["id"],
-            "name": t["name"],
-            "href": t["href"],
-            "description": t["description"],
-        }
-        for t in live_tools()
-    ]
+    units = _time_entry_nav(catalog_by_unit(include_planned=True), user)
+    tools = []
+    for item in live_tools():
+        if item["id"] == "time_entry":
+            match = next(
+                (
+                    tool
+                    for unit in units
+                    if unit["id"] == "hr"
+                    for tool in unit["tools"]
+                    if tool["id"] == "time_entry" and tool.get("status") == "live" and tool.get("href")
+                ),
+                None,
+            )
+            if match is None:
+                continue
+            item = match
+        tools.append(
+            {
+                "id": item["id"],
+                "name": item["name"],
+                "href": item["href"],
+                "description": item["description"],
+            }
+        )
     return HomeOut(
         user_id=user.user_id,
         username=user.username,
@@ -248,8 +263,23 @@ def comply_catalog(user: CurrentUser) -> list[ComplyCatalogItemOut]:
 @router.get("/catalog")
 def product_catalog(user: CurrentUser) -> list[dict]:
     """Business units → tools (planned + live). Plain names; legacy ids in payload."""
-    _ = user
-    return catalog_by_unit(include_planned=True)
+    return _time_entry_nav(catalog_by_unit(include_planned=True), user)
+
+
+def _time_entry_nav(units: list[dict], user: CurrentUser) -> list[dict]:
+    """Show weekly hours only to selected staff, plus admins and Melissa."""
+    from app.hr.time_entry import nav_for_user
+
+    nav = nav_for_user(user)
+    for unit in units:
+        for tool in unit.get("tools") or []:
+            if tool.get("id") != "time_entry":
+                continue
+            tool["href"] = nav["href"]
+            tool["status"] = nav["status"]
+            tool["description"] = nav["description"]
+            tool["open_label"] = nav["open_label"]
+    return units
 
 
 @router.get("/catalog/crosswalk")
@@ -529,3 +559,12 @@ def legacy_attune_home(user: CurrentUser) -> HomeOut:
 @legacy.get("/practice", response_model=PracticeOut)
 def legacy_attune_practice(user: CurrentUser) -> PracticeOut:
     return current_practice(user)
+
+
+def _mount_time_routes() -> None:
+    from app.hr.time_routes import router as time_router
+
+    router.include_router(time_router)
+
+
+_mount_time_routes()
