@@ -874,10 +874,13 @@ class TimeStore:
             self._flush_if_dirty()
         try:
             result = transport(message)
-        except Exception:
+        except Exception as exc:
+            # The sender reports an ambiguous network result itself. An
+            # exception here means Gmail was not called.
+            print("self_test_send_error", {"phase": "before_response", "type": type(exc).__name__}, flush=True)
             from app.hr.time_mail import MailResult
 
-            result = MailResult(status="uncertain", detail="mailer_exception")
+            result = MailResult(status="failed", detail="send_not_attempted")
         with self.exclusive():
             key = (user.practice_id, user.user_id)
             record = dict(self._self_tests.get(key) or {})
@@ -895,7 +898,10 @@ class TimeStore:
                 slot["gmail_message_id"] = safe_provider_id(str(getattr(result, "provider_id", "") or ""))
             elif status == "uncertain":
                 slot["status"] = "uncertain"
-                slot["last_error"] = "gmail_uncertain"
+                slot["last_error"] = safe_error_code(
+                    str(getattr(result, "detail", "") or ""),
+                    fallback="gmail_uncertain",
+                )
             else:
                 slot["status"] = "failed"
                 slot["last_error"] = safe_error_code(str(getattr(result, "detail", "") or ""), fallback="mail_failed")

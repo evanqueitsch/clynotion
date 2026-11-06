@@ -211,9 +211,12 @@ def _raw_message(message: OutboundMail, sender: str) -> str:
     mime["Subject"] = message.subject
     mime.set_content(message.text)
     if message.csv_text:
+        # Bytes need an explicit main type. subtype alone raises TypeError
+        # before any network call.
         mime.add_attachment(
-            message.csv_text.encode("utf-8"),
+            message.csv_text,
             subtype="csv",
+            charset="utf-8",
             filename=message.csv_filename or "weekly-hours-self-test.csv",
         )
     return base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
@@ -259,7 +262,11 @@ def deliver_self_test_message(practice_id: str, message: OutboundMail) -> MailRe
         return MailResult(status="failed", detail=safe_error_code(exc.code))
     if not access:
         return MailResult(status="failed", detail="gmail_not_connected")
-    raw = _raw_message(message, sender)
+    try:
+        raw = _raw_message(message, sender)
+    except Exception as exc:
+        print("self_test_send_error", {"phase": "mime", "type": type(exc).__name__}, flush=True)
+        return MailResult(status="failed", detail="gmail_mime_failed")
     try:
         with httpx.Client(timeout=httpx.Timeout(20.0, connect=5.0)) as client:
             resp = client.post(
@@ -267,11 +274,13 @@ def deliver_self_test_message(practice_id: str, message: OutboundMail) -> MailRe
                 json={"raw": raw},
                 headers={"Authorization": f"Bearer {access}"},
             )
-    except httpx.ConnectError:
+    except (httpx.ConnectError, httpx.ConnectTimeout, httpx.PoolTimeout):
         return MailResult(status="failed", detail="gmail_connect")
-    except httpx.ConnectTimeout:
-        return MailResult(status="failed", detail="gmail_connect_timeout")
-    except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.RemoteProtocolError, httpx.HTTPError):
+    except (httpx.ReadTimeout, httpx.WriteTimeout, httpx.ReadError, httpx.WriteError, httpx.RemoteProtocolError):
+        # The request may already have been received.
+        return MailResult(status="uncertain", detail="gmail_uncertain")
+    except Exception as exc:
+        print("self_test_send_error", {"phase": "after_post", "type": type(exc).__name__}, flush=True)
         return MailResult(status="uncertain", detail="gmail_uncertain")
     if 200 <= resp.status_code < 300:
         message_id = ""
