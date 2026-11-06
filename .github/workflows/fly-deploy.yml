@@ -18,18 +18,51 @@ jobs:
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
-      - name: Redacted self-test delivery lines
+      - name: Read self-test delivery status only
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
         run: |
           set +e
-          flyctl logs -a clynotion --no-tail 2>&1 \
-            | sed -E \
-              -e 's/([?&](code|state|access_token|refresh_token|id_token|token)=)[^&" ]+/\1REDACTED/g' \
-              -e 's/ya29\.[A-Za-z0-9._-]+/REDACTED_TOKEN/g' \
-              -e 's/Bearer [A-Za-z0-9._-]+/Bearer REDACTED/g' \
-            | awk '/self-test|gmail_send_callback|gmail_send_exchange|gmail_accepted|gmail_http|gmail_not_connected/ { print }' \
-            | tail -n 120
+          B64=$(python3 - <<'PY'
+          import base64
+          script = r'''
+          import json, os, sys
+          os.chdir("/app")
+          sys.path.insert(0, "/app")
+          from pathlib import Path
+          from app.crypto import decrypt_utf8
+          from app.google_oauth import default_practice_id
+          from app.hr.gmail_oauth import connect_status
+          path = os.environ.get("ATTUNE_HR_TIME_DATA_PATH", "")
+          data = {}
+          if path and Path(path).is_file():
+              data = json.loads(decrypt_utf8(Path(path).read_bytes()))
+          rows = []
+          for item in data.get("self_tests") or []:
+              kinds = {}
+              for kind, slot in (item.get("sends") or {}).items():
+                  if isinstance(slot, dict):
+                      kinds[kind] = {
+                          "status": slot.get("status") or "",
+                          "last_error": slot.get("last_error") or "",
+                          "at": slot.get("sent_at") or slot.get("at") or "",
+                      }
+              rows.append({"kinds": kinds})
+          status = connect_status(default_practice_id())
+          print(json.dumps({
+              "self_test_count": len(rows),
+              "rows": rows,
+              "mailbox_connected": bool(status.get("connected")),
+              "sender_email": status.get("sender_email") or "",
+              "refresh_saved": bool(status.get("refresh_saved")),
+              "mailbox_error": status.get("last_error") or "",
+              "scheduled_mail": status.get("scheduled_mail") or "",
+          }))
+          '''
+          print(base64.b64encode(script.encode()).decode())
+          PY
+          )
+          timeout 45 flyctl ssh console -a clynotion -C "python -c \"import base64; exec(base64.b64decode('${B64}'))\"" < /dev/null
           exit 0
 
       - name: Ensure attune_data volume in iad
