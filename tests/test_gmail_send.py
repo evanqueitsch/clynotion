@@ -454,6 +454,7 @@ class _GmailHttp:
     def __init__(self, mode: dict[str, str]) -> None:
         self.mode = mode
         self.send_calls = 0
+        self.raw = ""
 
     def __call__(self, *args: object, **kwargs: object) -> "_GmailHttp":
         return self
@@ -469,6 +470,7 @@ class _GmailHttp:
             return _FakeResponse(200, {"access_token": "access-token"})
         if url.endswith("/messages/send"):
             self.send_calls += 1
+            self.raw = str((json or {}).get("raw") or "")
             if self.mode["result"] == "403":
                 return _FakeResponse(
                     403,
@@ -538,6 +540,159 @@ def test_disabled_gmail_api_fails_visibly_and_a_later_accept_is_one_shot(
     assert again.json()["send_result"]["duplicate"] is True
     assert again.json()["send_result"]["status"] == "sent"
     assert router.send_calls == 2
+
+
+def test_summary_attachment_is_utf8_csv_for_zero_and_nonzero_hours() -> None:
+    from app.hr.gmail_oauth import _raw_message
+    from app.hr.time_entry import _self_test_summary
+    from app.hr.time_mail import OutboundMail
+
+    header = {"label": "Saturday – Friday", "deadline_label": "Friday at 11:30"}
+    for minutes, decimal, raw_display, rounded in (
+        (0, 0, "0:00", "0:00"),
+        (310, 5.25, "5:10", "5:15"),
+    ):
+        summary = _self_test_summary(
+            {
+                "display_name": "Niño — Ops",
+                "email": "operations@heart4change.org",
+                "raw_display": raw_display,
+                "rounded_display": rounded,
+                "decimal_hours": decimal,
+                "raw_minutes": minutes,
+                "rounded_minutes": minutes if minutes == 0 else 315,
+            },
+            header,
+        )
+        message = OutboundMail(
+            to=summary["to"],
+            subject=summary["subject"],
+            text=summary["body"],
+            csv_filename=summary["csv_filename"],
+            csv_text=summary["csv"],
+        )
+        from email import message_from_bytes, policy
+
+        decoded = base64.urlsafe_b64decode(_raw_message(message, "operations@heart4change.org") + "===")
+        parsed = message_from_bytes(decoded, policy=policy.default)
+        csv_parts = [part.get_content() for part in parsed.walk() if part.get_content_type() == "text/csv"]
+        assert csv_parts
+        assert "Niño — Ops" in csv_parts[0]
+        assert str(minutes) in csv_parts[0]
+        assert "—" in parsed["Subject"]
+
+
+def test_summary_send_reaches_mocked_gmail_and_a_mime_error_is_failed(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    _google_env(monkeypatch, tmp_path)
+    alice = _alice_enabled(client)
+    save_gmail_send_tokens(
+        "practice-a",
+        refresh_token="send-refresh",
+        access_token="send-access",
+        email="operations@heart4change.org",
+        expires_in=3600,
+    )
+    saved = client.put(
+        "/hr/time/self-test",
+        headers=_auth(alice),
+        json={"hours": 5, "minutes": 10},
+    )
+    assert saved.status_code == 200, saved.text
+    router = _GmailHttp({"result": "200"})
+    with patch("app.hr.gmail_oauth.httpx.Client", router):
+        summary = client.post(
+            "/hr/time/self-test/send",
+            headers=_auth(alice),
+            json={"kind": "summary"},
+        )
+    assert summary.status_code == 200, summary.text
+    assert summary.json()["send_result"]["status"] == "sent"
+    assert summary.json()["send_result"]["gmail_message_id"] == "18c0a1b2c3d4e5f6"
+    assert summary.json()["send_result"]["to"] == "msmith@heart4change.org"
+    assert router.send_calls == 1
+    decoded = base64.urlsafe_b64decode(router.raw + "===")
+    assert b"text/csv" in decoded
+    assert b"msmith@heart4change.org" in decoded
+
+    with patch("app.hr.gmail_oauth.httpx.Client", router):
+        reminder = client.post(
+            "/hr/time/self-test/send",
+            headers=_auth(alice),
+            json={"kind": "friday"},
+        )
+    assert reminder.status_code == 200, reminder.text
+    assert reminder.json()["send_result"]["status"] == "sent"
+    assert router.send_calls == 2
+
+    def broken_raw(message, sender):
+        raise TypeError("maintype")
+
+    monkeypatch.setattr("app.hr.gmail_oauth._raw_message", broken_raw)
+    calls_before = router.send_calls
+    with patch("app.hr.gmail_oauth.httpx.Client", router):
+        local = client.post(
+            "/hr/time/self-test/send",
+            headers=_auth(alice),
+            json={"kind": "thursday"},
+        )
+    assert local.status_code == 200, local.text
+    assert local.json()["send_result"]["status"] == "failed"
+    assert local.json()["send_result"]["last_error"] == "gmail_mime_failed"
+    assert local.json()["thursday"]["delivery"]["can_send"] is True
+    assert router.send_calls == calls_before
+
+
+def test_timeout_after_post_stays_uncertain_and_is_not_retried(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    import httpx
+
+    _google_env(monkeypatch, tmp_path)
+    alice = _alice_enabled(client)
+    save_gmail_send_tokens(
+        "practice-a",
+        refresh_token="send-refresh",
+        access_token="send-access",
+        email="operations@heart4change.org",
+        expires_in=3600,
+    )
+
+    class TimeoutAfterPost:
+        def __init__(self) -> None:
+            self.send_calls = 0
+
+        def __call__(self, *args: object, **kwargs: object) -> "TimeoutAfterPost":
+            return self
+
+        def __enter__(self) -> "TimeoutAfterPost":
+            return self
+
+        def __exit__(self, *args: object) -> bool:
+            return False
+
+        def post(self, url: str, data: dict | None = None, json: dict | None = None, headers: dict | None = None):
+            if url.endswith("/token"):
+                return _FakeResponse(200, {"access_token": "access-token"})
+            self.send_calls += 1
+            raise httpx.ReadTimeout("timed out")
+
+    saved = client.put("/hr/time/self-test", headers=_auth(alice), json={"hours": 0, "minutes": 0})
+    assert saved.status_code == 200, saved.text
+    router = TimeoutAfterPost()
+    with patch("app.hr.gmail_oauth.httpx.Client", router):
+        first = client.post("/hr/time/self-test/send", headers=_auth(alice), json={"kind": "summary"})
+    assert first.status_code == 200, first.text
+    assert first.json()["send_result"]["status"] == "uncertain"
+    assert first.json()["send_result"]["gmail_message_id"] == ""
+    assert first.json()["summary"]["delivery"]["can_send"] is False
+    assert router.send_calls == 1
+    with patch("app.hr.gmail_oauth.httpx.Client", router):
+        again = client.post("/hr/time/self-test/send", headers=_auth(alice), json={"kind": "summary"})
+    assert again.json()["send_result"]["duplicate"] is True
+    assert again.json()["send_result"]["status"] == "uncertain"
+    assert router.send_calls == 1
 
 
 def test_send_buttons_have_adjacent_status_lines() -> None:

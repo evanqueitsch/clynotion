@@ -1465,12 +1465,15 @@
         return [`Gmail accepted this message.${idNote} That is not the same as it already being in the inbox.`, "ok"];
       }
       if (status === "uncertain") {
-        return ["Gmail did not confirm acceptance. This will not be sent again.", "error"];
+        return ["Outcome not confirmed. This attempt will not be sent again.", "error"];
       }
       if (status === "sending") return ["Sending…", ""];
       if (status === "failed" || err) {
         if (err === "gmail_http_403" || err === "gmail_api_disabled") {
           return ["Not sent. Gmail did not accept a message (HTTP 403, accessNotConfigured / SERVICE_DISABLED). The Gmail API is disabled for Google Cloud project 610340555869. Enable that API, then press Send again. This attempt was not delivered.", "error"];
+        }
+        if (err === "gmail_mime_failed" || err === "send_not_attempted") {
+          return ["Not sent. The message was not given to Gmail. You can press Send again.", "error"];
         }
         return [`Not sent (${err || "failed"}). Gmail did not accept a message.`, "error"];
       }
@@ -2943,11 +2946,11 @@
         });
         const notice = sendOutcome(delivery);
         const text = result.duplicate
-          ? `Already recorded as ${result.status}. It was not sent again. ${notice[0] || ""}`.trim()
+          ? (notice[0] || `Already recorded as ${result.status}. It was not sent again.`)
           : (notice[0] || `Finished (${result.status || "unknown"}).`);
-        const kindName = result.duplicate ? "ok" : (notice[1] || (result.status === "sent" ? "ok" : "error"));
+        const kindName = notice[1] || (result.status === "sent" ? "ok" : "error");
         if (statusEl) setStatus(statusEl, text, kindName);
-        setStatus($("time-self-test-status"), text, kindName);
+        setStatus($("time-self-test-status"), "");
       } catch (e) {
         const message = errText(e);
         if (statusEl) setStatus(statusEl, message, "error");
