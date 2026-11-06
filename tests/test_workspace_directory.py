@@ -36,6 +36,76 @@ def _auth(username: str = "alice") -> dict[str, str]:
     return {"Authorization": f"Bearer {issue_token(user)}"}
 
 
+def test_directory_pages_filter_domain_and_non_people() -> None:
+    from app.workspace_directory import consume_directory_pages
+
+    pages = [
+        {
+            "users": [
+                {
+                    "id": "1",
+                    "primaryEmail": "a@heart4change.org",
+                    "name": {"fullName": "A Person"},
+                    "isAdmin": True,
+                },
+                {
+                    "id": "2",
+                    "primaryEmail": "b@other.org",
+                    "name": {"fullName": "Out"},
+                },
+                {
+                    "id": "3",
+                    "primaryEmail": "c@heart4change.org",
+                    "name": {"fullName": "Suspended"},
+                    "suspended": True,
+                },
+                {
+                    "id": "4",
+                    "primaryEmail": "d@heart4change.org",
+                    "name": {"fullName": "Room"},
+                    "orgUnitPath": "/Rooms",
+                },
+                {
+                    "id": "5",
+                    "primaryEmail": "e@heart4change.org",
+                    "name": {"fullName": "Old"},
+                    "archived": True,
+                },
+                {
+                    "id": "9",
+                    "primaryEmail": "a@heart4change.org",
+                    "name": {"fullName": "Dup"},
+                },
+            ],
+            "nextPageToken": "p2",
+        },
+        {
+            "users": [
+                {
+                    "id": "7",
+                    "primaryEmail": "f@heart4change.org",
+                    "name": {"fullName": "F Person"},
+                }
+            ]
+        },
+    ]
+    fetched = consume_directory_pages(pages, ["heart4change.org"])
+    assert fetched.complete is True
+    assert fetched.pages == 2
+    assert [user.email for user in fetched.users] == [
+        "a@heart4change.org",
+        "f@heart4change.org",
+    ]
+    assert fetched.skipped["out_of_domain"] == 1
+    assert fetched.skipped["suspended"] == 1
+    assert fetched.skipped["shared_or_resource"] == 1
+    assert fetched.skipped["archived"] == 1
+    assert fetched.skipped["duplicate"] == 1
+    partial = consume_directory_pages(pages[:1], ["heart4change.org"], max_pages=1)
+    assert partial.complete is False
+    assert partial.error_code == "directory_page_limit"
+
+
 def test_workspace_status_mock_connected(client: TestClient) -> None:
     r = client.get("/workspace/status", headers=_auth())
     assert r.status_code == 200

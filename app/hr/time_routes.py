@@ -50,6 +50,11 @@ class ReminderPreviewBody(BaseModel):
     week_ending: str = ""
 
 
+class SelfTestBody(BaseModel):
+    hours: int = Field(ge=0, le=168)
+    minutes: int = Field(ge=0, le=59)
+
+
 def _call(fn):
     try:
         return fn()
@@ -122,6 +127,27 @@ def time_settings_put(user: CurrentUser, body: SettingsBody) -> dict:
 @router.post("/hr/time/settings/preview")
 def time_settings_preview(user: CurrentUser, week_ending: str) -> dict:
     return _call(lambda: time_store.preview_summary(user, week_ending))
+
+
+@router.post("/hr/time/directory/refresh")
+def time_directory_refresh(user: CurrentUser) -> dict:
+    """Reload the Workspace staff list. Does not enable anyone and does not send mail."""
+    return _call(lambda: time_store.refresh_directory(user))
+
+
+@router.get("/hr/time/self-test")
+def time_self_test(user: CurrentUser) -> dict:
+    """Labelled previews and optional self-entered hours. Never sends mail."""
+    return _call(lambda: time_store.self_test_view(user))
+
+
+@router.put("/hr/time/self-test")
+def time_self_test_save(user: CurrentUser, body: SelfTestBody) -> dict:
+    return _call(
+        lambda: time_store.save_self_test_hours(
+            user, hours=body.hours, minutes=body.minutes
+        )
+    )
 
 
 @router.post("/hr/time/settings/test-reminder")

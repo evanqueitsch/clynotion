@@ -94,7 +94,11 @@ Nobody is enabled until an HR admin or Melissa checks them on Weekly hours setti
 - A selected person gets **Enter weekly hours**.
 - Everyone else sees the tool as not enabled and gets no entry link. The API also rejects their save.
 
-The settings screen lists each roster person as Enabled or Not enabled and states that mail is off.
+The settings screen lists each person as Enabled or Not enabled and states that mail is off.
+
+The selectable staff list is a Google Workspace directory read (`https://www.googleapis.com/auth/admin.directory.user.readonly`), paged until the API has no further page token, limited to `GOOGLE_ALLOWED_DOMAINS` (Heart for Change uses `heart4change.org`). Suspended, archived, deleted, other-domain, duplicate, and resource/shared-mailbox org units are counted and left off the list. A failed refresh keeps the previous complete list and says the new read did not finish. Being in the directory does not grant HR admin and does not enable time entry. Selections stay keyed by email: new people arrive unchecked, and a person who leaves the directory stays enabled until an admin clears them. Payroll rows already saved are not deleted.
+
+**Test weekly hours** (`https://clynotion.com/#time-self-test`) is only for an HR admin who is themselves enabled. It shows a Thursday preview, a Friday preview (even after hours are entered), an entry box the admin fills in, and a one-person summary preview addressed to Melissa. Those hours are stored separately and do not appear on the payroll week, do not change the cutoff, and are not emailed. Subjects are prefixed `[TEST]`.
 
 ## Storage
 
