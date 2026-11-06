@@ -1033,7 +1033,8 @@ class TimeStore:
             "scheduled_mail": "off",
             "mailbox": mailbox,
             "sender": sender,
-            "sender_note": (
+            "sender_note": str(mailbox.get("status_detail") or "")
+            or (
                 f"Verified sending mailbox: {sender}. Scheduled payroll mail stays off."
                 if sender
                 else "No sending mailbox is connected. Scheduled payroll mail stays off. Connect a heart4change.org mailbox, then press Send."

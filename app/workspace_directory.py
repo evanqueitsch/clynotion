@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Optional
@@ -151,12 +152,34 @@ def clear_directory_tokens(practice_id: str) -> None:
     _save_token_store(store)
 
 
+# Safe stored codes only. Never put a Google error_description or a token here.
+GMAIL_SEND_ERROR_CODES = frozenset(
+    {
+        "gmail_send_exchange_failed",
+        "gmail_send_token_missing",
+        "gmail_send_identity_failed",
+        "gmail_send_domain",
+        "gmail_send_refresh_missing",
+        "gmail_send_scope",
+        "gmail_send_save_failed",
+        "gmail_send_state",
+        "gmail_send_session",
+        "gmail_send_denied",
+        "gmail_send_policy",
+        "gmail_send_redirect",
+        "gmail_send_missing",
+        "gmail_send_access_expired",
+    }
+)
+
+
 def save_gmail_send_tokens(
     practice_id: str,
     *,
     refresh_token: str,
     access_token: str = "",
     email: str = "",
+    expires_in: int = 0,
 ) -> None:
     """Store the send-only mailbox grant without touching Directory tokens."""
     store = _load_token_store()
@@ -167,7 +190,32 @@ def save_gmail_send_tokens(
         "refresh_token": refresh_token,
         "access_token": access_token,
         "email": email.strip().lower(),
+        "obtained_at": int(time.time()),
+        "expires_in": int(expires_in or 0),
     }
+    row.pop("gmail_send_error", None)
+    practices[practice_id] = row
+    _save_token_store(store)
+
+
+def note_gmail_send_error(practice_id: str, code: str) -> None:
+    """Remember a safe connect failure without dropping Directory or a saved grant.
+
+    If the token file exists but cannot be decrypted, leave it untouched.
+    """
+    safe = code if code in GMAIL_SEND_ERROR_CODES else "gmail_send_exchange_failed"
+    path = _token_path()
+    if path.is_file():
+        try:
+            json.loads(decrypt_utf8(path.read_bytes()))
+        except (ValueError, json.JSONDecodeError, OSError):
+            print("gmail_send_error_not_stored store_unreadable", flush=True)
+            return
+    store = _load_token_store()
+    practices = store.setdefault("practices", {})
+    prior = practices.get(practice_id) if isinstance(practices.get(practice_id), dict) else {}
+    row = dict(prior)
+    row["gmail_send_error"] = {"code": safe}
     practices[practice_id] = row
     _save_token_store(store)
 
@@ -198,16 +246,42 @@ def gmail_send_record(practice_id: str) -> dict[str, str]:
         "refresh_token": str(mail.get("refresh_token") or ""),
         "access_token": str(mail.get("access_token") or ""),
         "email": str(mail.get("email") or "").strip().lower(),
+        "obtained_at": str(int(mail.get("obtained_at") or 0)),
+        "expires_in": str(int(mail.get("expires_in") or 0)),
     }
+
+
+def _access_token_usable(mail: dict[str, str], *, now: Optional[float] = None) -> bool:
+    access = mail.get("access_token") or ""
+    if not access:
+        return False
+    obtained = int(mail.get("obtained_at") or 0)
+    expires_in = int(mail.get("expires_in") or 0)
+    if obtained <= 0 or expires_in <= 0:
+        return True
+    moment = time.time() if now is None else now
+    return moment < obtained + expires_in - 30
 
 
 def gmail_send_status(practice_id: str) -> dict[str, Any]:
     mail = gmail_send_record(practice_id)
     email = mail.get("email") or ""
-    connected = bool(mail.get("refresh_token")) and bool(email)
+    refresh = bool(mail.get("refresh_token"))
+    access_ok = _access_token_usable(mail)
+    connected = bool(email) and (refresh or access_ok)
+    stored_error = ""
+    if not connected:
+        row = (_load_token_store().get("practices") or {}).get(practice_id) or {}
+        err = row.get("gmail_send_error") if isinstance(row, dict) else None
+        if isinstance(err, dict) and str(err.get("code") or "") in GMAIL_SEND_ERROR_CODES:
+            stored_error = str(err.get("code"))
+        elif mail.get("access_token") and not access_ok:
+            stored_error = "gmail_send_access_expired"
     return {
         "connected": connected,
         "sender_email": email if connected else "",
+        "refresh_saved": refresh and connected,
+        "last_error": "" if connected else stored_error,
         "connect_url": "/auth/google/gmail-send/start",
         "scheduled_mail": "off",
     }

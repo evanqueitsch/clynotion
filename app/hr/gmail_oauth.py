@@ -18,17 +18,22 @@ import httpx
 from app.google_oauth import (
     GOOGLE_AUTH_URL,
     GOOGLE_TOKEN_URL,
+    GoogleOAuthError,
+    _claims_from_id_token,
     _client_id,
     _client_secret,
+    _identity_from_claims,
     allowed_domains,
     public_base_url,
 )
 from app.hr.time_mail import GMAIL_SEND_SCOPE, MailResult, OutboundMail, safe_error_code
 from app.workspace_directory import (
     WorkspaceDirectoryError,
+    _access_token_usable,
     clear_gmail_send_tokens,
     gmail_send_record,
     gmail_send_status,
+    note_gmail_send_error,
     save_gmail_send_tokens,
 )
 
@@ -76,8 +81,60 @@ def sender_email_allowed(email: str, domains: Optional[list[str]] = None) -> boo
     return cleaned.rsplit("@", 1)[-1] in allowed
 
 
+def _log_google_token_error(status: int, payload: dict[str, Any]) -> None:
+    """Log Google's error name only. Descriptions can echo an address or a code."""
+    err = str(payload.get("error") or "")[:80]
+    print("gmail_send_exchange", {"status": status, "error": err}, flush=True)
+
+
+def _google_token_error_code(payload: dict[str, Any]) -> str:
+    err = str(payload.get("error") or "").strip().lower()
+    return {
+        "redirect_uri_mismatch": "gmail_send_redirect",
+        "invalid_scope": "gmail_send_scope",
+        "access_denied": "gmail_send_denied",
+        "admin_policy_enforced": "gmail_send_policy",
+        "org_internal": "gmail_send_policy",
+    }.get(err, "gmail_send_exchange_failed")
+
+
+def _email_from_userinfo(client: httpx.Client, access: str) -> str:
+    info = client.get(USERINFO_URL, headers={"Authorization": f"Bearer {access}"})
+    if info.status_code >= 400:
+        raise GmailSendError("gmail_send_identity_failed")
+    payload = info.json() if isinstance(info.json(), dict) else {}
+    email = str(payload.get("email") or "").strip().lower()
+    verified = payload.get("email_verified")
+    verified_ok = verified is True or str(verified).strip().lower() in ("true", "1")
+    if not email or not verified_ok:
+        raise GmailSendError("gmail_send_identity_failed")
+    if not sender_email_allowed(email):
+        raise GmailSendError("gmail_send_domain")
+    return email
+
+
+def _email_from_id_token(id_token: str) -> str:
+    try:
+        identity = _identity_from_claims(_claims_from_id_token(id_token))
+    except PermissionError as exc:
+        if "domain" in str(exc):
+            raise GmailSendError("gmail_send_domain") from exc
+        raise GmailSendError("gmail_send_identity_failed") from exc
+    except GoogleOAuthError as exc:
+        raise GmailSendError("gmail_send_identity_failed") from exc
+    if not sender_email_allowed(identity.email):
+        raise GmailSendError("gmail_send_domain")
+    return identity.email
+
+
 def exchange_gmail_send_code(code: str) -> dict[str, str]:
-    """Exchange the consent code. Raises GmailSendError with a safe code."""
+    """Exchange the consent code. Raises GmailSendError with a safe code.
+
+    Identity comes from the OpenID id_token when Google sends one, and from
+    userinfo only if that token is absent. A verified practice mailbox is
+    stored even when Google omits a refresh token; the access token can send
+    until it expires.
+    """
     with httpx.Client(timeout=20.0) as client:
         resp = client.post(
             GOOGLE_TOKEN_URL,
@@ -90,28 +147,39 @@ def exchange_gmail_send_code(code: str) -> dict[str, str]:
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},
         )
+        try:
+            body = resp.json()
+        except Exception:
+            body = {}
+        if not isinstance(body, dict):
+            body = {}
         if resp.status_code >= 400:
-            raise GmailSendError("gmail_send_exchange_failed")
-        tokens = resp.json() if isinstance(resp.json(), dict) else {}
-        access = str(tokens.get("access_token") or "").strip()
-        refresh = str(tokens.get("refresh_token") or "").strip()
-        if not access:
+            _log_google_token_error(resp.status_code, body)
+            raise GmailSendError(_google_token_error_code(body))
+        access = str(body.get("access_token") or "").strip()
+        refresh = str(body.get("refresh_token") or "").strip()
+        id_token = str(body.get("id_token") or "").strip()
+        if not access and not refresh:
             raise GmailSendError("gmail_send_token_missing")
-        info = client.get(USERINFO_URL, headers={"Authorization": f"Bearer {access}"})
-        if info.status_code >= 400:
+        scope = str(body.get("scope") or "").strip()
+        if scope and GMAIL_SEND_SCOPE not in scope.split():
+            raise GmailSendError("gmail_send_scope")
+        if id_token:
+            email = _email_from_id_token(id_token)
+        elif access:
+            email = _email_from_userinfo(client, access)
+        else:
             raise GmailSendError("gmail_send_identity_failed")
-        payload = info.json() if isinstance(info.json(), dict) else {}
-    email = str(payload.get("email") or "").strip().lower()
-    verified = payload.get("email_verified")
-    verified_ok = verified is True or str(verified).strip().lower() in ("true", "1")
-    if not email or not verified_ok:
-        raise GmailSendError("gmail_send_identity_failed")
-    if not sender_email_allowed(email):
-        raise GmailSendError("gmail_send_domain")
-    if not refresh:
-        # Without a refresh token the mailbox cannot send after this access token expires.
-        raise GmailSendError("gmail_send_refresh_missing")
-    return {"access_token": access, "refresh_token": refresh, "email": email}
+    try:
+        expires_in = int(body.get("expires_in") or 0)
+    except (TypeError, ValueError):
+        expires_in = 0
+    return {
+        "access_token": access,
+        "refresh_token": refresh,
+        "email": email,
+        "expires_in": str(expires_in),
+    }
 
 
 def _refresh_gmail_access(refresh_token: str) -> str:
@@ -155,12 +223,21 @@ def deliver_self_test_message(practice_id: str, message: OutboundMail) -> MailRe
     record = gmail_send_record(practice_id)
     refresh = record.get("refresh_token") or ""
     sender = record.get("email") or ""
-    if not refresh or not sender_email_allowed(sender):
+    if not sender_email_allowed(sender):
         return MailResult(status="failed", detail="gmail_not_connected")
     try:
-        access = _refresh_gmail_access(refresh)
+        if refresh:
+            access = _refresh_gmail_access(refresh)
+        elif _access_token_usable(record):
+            access = record.get("access_token") or ""
+        elif record.get("access_token"):
+            return MailResult(status="failed", detail="gmail_send_access_expired")
+        else:
+            return MailResult(status="failed", detail="gmail_not_connected")
     except GmailSendError as exc:
         return MailResult(status="failed", detail=safe_error_code(exc.code))
+    if not access:
+        return MailResult(status="failed", detail="gmail_not_connected")
     raw = _raw_message(message, sender)
     try:
         with httpx.Client(timeout=httpx.Timeout(20.0, connect=5.0)) as client:
@@ -180,8 +257,50 @@ def deliver_self_test_message(practice_id: str, message: OutboundMail) -> MailRe
     return MailResult(status="failed", detail=f"gmail_http_{resp.status_code}")
 
 
+_STATUS_DETAIL = {
+    "gmail_send_domain": "That Google account is not on heart4change.org. Personal Gmail cannot send. Nothing was saved.",
+    "gmail_send_identity_failed": "Google did not return a verified mailbox address, so the mailbox was not saved.",
+    "gmail_send_exchange_failed": "Google returned to Clynotion, but the token exchange failed, so the mailbox was not saved.",
+    "gmail_send_token_missing": "Google did not return a token, so the mailbox was not saved.",
+    "gmail_send_scope": "Google did not grant send-only access (gmail.send). Allow that permission, or ask a Workspace admin to permit it for this app.",
+    "gmail_send_policy": "Workspace policy blocked send access. A Workspace admin must allow this app to send mail, then connect again.",
+    "gmail_send_redirect": "Google rejected the callback address. The existing OAuth client must include https://clynotion.com/auth/google/gmail-send/callback.",
+    "gmail_send_denied": "Google denied send access before a mailbox could be saved.",
+    "gmail_send_state": "The connect attempt failed the security check. Use Connect sending mailbox again from this page.",
+    "gmail_send_session": "Your sign-in was missing when Google returned. Stay signed in and use Connect sending mailbox again.",
+    "gmail_send_save_failed": "Google authorized the mailbox, but Clynotion could not store it. Nothing was sent.",
+    "gmail_send_missing": "Google returned without an authorization code. Use Connect sending mailbox again.",
+    "gmail_send_access_expired": "The sending grant expired and Google did not return a refresh token. Connect the mailbox again.",
+    "gmail_send_refresh_missing": "Google did not return a lasting grant. Connect again and approve the prompt.",
+}
+
+
 def connect_status(practice_id: str) -> dict[str, Any]:
-    return gmail_send_status(practice_id)
+    """Public mailbox status. Scheduled mail stays off even when this is connected."""
+    status = gmail_send_status(practice_id)
+    email = str(status.get("sender_email") or "")
+    if status.get("connected") and not sender_email_allowed(email):
+        status["connected"] = False
+        status["sender_email"] = ""
+        status["refresh_saved"] = False
+        status["last_error"] = "gmail_send_domain"
+    error = str(status.get("last_error") or "")
+    if status.get("connected"):
+        warning = ""
+        if not status.get("refresh_saved"):
+            warning = " Connected with a short-lived grant. If Send fails, connect the mailbox again."
+        status["status_detail"] = (
+            f"Verified From address: {status.get('sender_email')}. "
+            "Scheduled payroll mail stays off." + warning
+        )
+    else:
+        status["status_detail"] = _STATUS_DETAIL.get(
+            error,
+            "Sending mailbox is not connected. Choose the heart4change.org mailbox in the Google prompt. "
+            "operations@heart4change.org is the intended mailbox only if that is the account you authorize.",
+        )
+    status["scheduled_mail"] = "off"
+    return status
 
 
 def disconnect_sender(practice_id: str) -> None:
@@ -196,6 +315,7 @@ __all__ = [
     "deliver_self_test_message",
     "disconnect_sender",
     "exchange_gmail_send_code",
+    "note_gmail_send_error",
     "gmail_send_authorization_url",
     "gmail_send_redirect_uri",
     "save_gmail_send_tokens",

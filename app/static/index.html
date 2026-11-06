@@ -1408,12 +1408,13 @@
       $("time-self-test-mail").textContent = `${data.sender_note || ""} Thursday and Friday go only to ${data.email}. The summary goes only to ${data.summary_recipient}.`;
       const mailbox = data.mailbox || {};
       $("time-self-test-sender").textContent = mailbox.connected
-        ? `Verified From address: ${mailbox.sender_email}. This is the account that pressed Allow, not a guessed alias.`
-        : "Sending mailbox is not connected. Choose the heart4change.org mailbox in the Google prompt. operations@heart4change.org is the intended mailbox only if that is the account you authorize.";
+        ? (mailbox.status_detail || `Verified From address: ${mailbox.sender_email}. This is the account that pressed Allow, not a guessed alias.`)
+        : (mailbox.status_detail || "Sending mailbox is not connected. Choose the heart4change.org mailbox in the Google prompt. operations@heart4change.org is the intended mailbox only if that is the account you authorize.");
       const bindSend = (id, slot) => {
         const button = $(id);
         if (!button) return;
         const delivery = (slot && slot.delivery) || {};
+        // Scheduled payroll mail stays off. That must not disable an explicit connected send.
         const ready = !!mailbox.connected && delivery.can_send !== false && !(slot && slot.sent);
         if (id === "btn-send-summary" && !data.summary) {
           button.disabled = true;
@@ -1444,18 +1445,54 @@
         : data.summary_note || "";
     }
 
+    function gmailSendNotice(code) {
+      const notices = {
+        connected: ["Sending mailbox connected. Scheduled mail is still off. Press Send when you want a test message.", "ok"],
+        domain: ["That Google account is not on heart4change.org. Personal Gmail cannot send. Nothing was saved.", "error"],
+        gmail_send_domain: ["That Google account is not on heart4change.org. Personal Gmail cannot send. Nothing was saved.", "error"],
+        identity: ["Google did not return a verified mailbox address, so the mailbox was not saved.", "error"],
+        gmail_send_identity_failed: ["Google did not return a verified mailbox address, so the mailbox was not saved.", "error"],
+        exchange: ["Google returned to Clynotion, but the token exchange failed, so the mailbox was not saved.", "error"],
+        gmail_send_exchange_failed: ["Google returned to Clynotion, but the token exchange failed, so the mailbox was not saved.", "error"],
+        scope: ["Google did not grant send-only access (gmail.send). Allow that permission, or ask a Workspace admin to permit it for this app.", "error"],
+        gmail_send_scope: ["Google did not grant send-only access (gmail.send). Allow that permission, or ask a Workspace admin to permit it for this app.", "error"],
+        policy: ["Workspace policy blocked send access. A Workspace admin must allow this app to send mail, then connect again.", "error"],
+        gmail_send_policy: ["Workspace policy blocked send access. A Workspace admin must allow this app to send mail, then connect again.", "error"],
+        redirect: ["Google rejected the callback address. The existing OAuth client must include https://clynotion.com/auth/google/gmail-send/callback.", "error"],
+        gmail_send_redirect: ["Google rejected the callback address. The existing OAuth client must include https://clynotion.com/auth/google/gmail-send/callback.", "error"],
+        denied: ["Google denied send access before a mailbox could be saved.", "error"],
+        gmail_send_denied: ["Google denied send access before a mailbox could be saved.", "error"],
+        state: ["The connect attempt failed the security check. Use Connect sending mailbox again from this page.", "error"],
+        gmail_send_state: ["The connect attempt failed the security check. Use Connect sending mailbox again from this page.", "error"],
+        session: ["Your sign-in was missing when Google returned. Stay signed in and use Connect sending mailbox again.", "error"],
+        gmail_send_session: ["Your sign-in was missing when Google returned. Stay signed in and use Connect sending mailbox again.", "error"],
+        save: ["Google authorized the mailbox, but Clynotion could not store it. Nothing was sent.", "error"],
+        gmail_send_save_failed: ["Google authorized the mailbox, but Clynotion could not store it. Nothing was sent.", "error"],
+        missing: ["Google returned without an authorization code. Use Connect sending mailbox again.", "error"],
+        gmail_send_missing: ["Google returned without an authorization code. Use Connect sending mailbox again.", "error"],
+        refresh: ["The sending grant expired and Google did not return a refresh token. Connect the mailbox again.", "error"],
+        gmail_send_access_expired: ["The sending grant expired and Google did not return a refresh token. Connect the mailbox again.", "error"],
+        gmail_send_refresh_missing: ["Google did not return a lasting grant. Connect again and approve the prompt.", "error"],
+      };
+      return notices[code] || null;
+    }
+
     async function openTimeSelfTest() {
+      const flag = new URLSearchParams(window.location.search).get("gmail_send");
       show("time-self-test-panel");
-      window.history.replaceState({}, "", "/#time-self-test");
+      const nextUrl = flag ? `/?gmail_send=${encodeURIComponent(flag)}#time-self-test` : "/#time-self-test";
+      window.history.replaceState({}, "", nextUrl);
       setStatus($("time-self-test-status"), "Loading test previews…");
       try {
         const data = await api("/hr/time/self-test");
         renderSelfTest(data);
-        const flag = new URLSearchParams(window.location.search).get("gmail_send");
-        if (flag === "connected") {
+        const fromFlag = gmailSendNotice(flag);
+        const fromStore = gmailSendNotice(data.mailbox && data.mailbox.last_error);
+        const notice = fromFlag || fromStore;
+        if (data.mailbox && data.mailbox.connected && (!flag || flag === "connected")) {
           setStatus($("time-self-test-status"), "Sending mailbox connected. Scheduled mail is still off. Press Send when you want a test message.", "ok");
-        } else if (flag === "domain") {
-          setStatus($("time-self-test-status"), "That Google account is not on heart4change.org. Connect the practice mailbox.", "error");
+        } else if (notice) {
+          setStatus($("time-self-test-status"), notice[0], notice[1]);
         } else if (flag) {
           setStatus($("time-self-test-status"), `Could not connect the sending mailbox (${flag}).`, "error");
         } else {
