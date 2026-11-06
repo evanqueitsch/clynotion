@@ -55,6 +55,10 @@ class SelfTestBody(BaseModel):
     minutes: int = Field(ge=0, le=59)
 
 
+class SelfTestSendBody(BaseModel):
+    kind: str
+
+
 def _call(fn):
     try:
         return fn()
@@ -146,6 +150,20 @@ def time_self_test_save(user: CurrentUser, body: SelfTestBody) -> dict:
     return _call(
         lambda: time_store.save_self_test_hours(
             user, hours=body.hours, minutes=body.minutes
+        )
+    )
+
+
+@router.post("/hr/time/self-test/send")
+def time_self_test_send(user: CurrentUser, body: SelfTestSendBody) -> dict:
+    """Send one labelled self-test message. Does not run the payroll scheduler."""
+    from app.hr.gmail_oauth import deliver_self_test_message
+
+    return _call(
+        lambda: time_store.send_self_test(
+            user,
+            body.kind,
+            lambda message: deliver_self_test_message(user.practice_id, message),
         )
     )
 

@@ -123,21 +123,94 @@ def save_directory_tokens(
 ) -> None:
     store = _load_token_store()
     practices = store.setdefault("practices", {})
-    practices[practice_id] = {
+    prior = practices.get(practice_id) if isinstance(practices.get(practice_id), dict) else {}
+    row = {
         "refresh_token": refresh_token,
         "access_token": access_token,
         "email": email,
     }
+    # Reconnecting Directory must not drop the separate send-only mailbox grant.
+    if isinstance(prior, dict) and isinstance(prior.get("gmail_send"), dict):
+        row["gmail_send"] = prior["gmail_send"]
+    practices[practice_id] = row
     _save_token_store(store)
 
 
 def clear_directory_tokens(practice_id: str) -> None:
     store = _load_token_store()
     practices = store.get("practices") or {}
-    if practice_id in practices:
+    prior = practices.get(practice_id) if isinstance(practices.get(practice_id), dict) else None
+    if not isinstance(prior, dict):
+        return
+    gmail = prior.get("gmail_send") if isinstance(prior.get("gmail_send"), dict) else None
+    if gmail:
+        practices[practice_id] = {"gmail_send": gmail}
+    else:
         del practices[practice_id]
-        store["practices"] = practices
-        _save_token_store(store)
+    store["practices"] = practices
+    _save_token_store(store)
+
+
+def save_gmail_send_tokens(
+    practice_id: str,
+    *,
+    refresh_token: str,
+    access_token: str = "",
+    email: str = "",
+) -> None:
+    """Store the send-only mailbox grant without touching Directory tokens."""
+    store = _load_token_store()
+    practices = store.setdefault("practices", {})
+    prior = practices.get(practice_id) if isinstance(practices.get(practice_id), dict) else {}
+    row = dict(prior)
+    row["gmail_send"] = {
+        "refresh_token": refresh_token,
+        "access_token": access_token,
+        "email": email.strip().lower(),
+    }
+    practices[practice_id] = row
+    _save_token_store(store)
+
+
+def clear_gmail_send_tokens(practice_id: str) -> None:
+    store = _load_token_store()
+    practices = store.get("practices") or {}
+    prior = practices.get(practice_id) if isinstance(practices.get(practice_id), dict) else None
+    if not isinstance(prior, dict) or "gmail_send" not in prior:
+        return
+    row = dict(prior)
+    row.pop("gmail_send", None)
+    if row:
+        practices[practice_id] = row
+    else:
+        del practices[practice_id]
+    store["practices"] = practices
+    _save_token_store(store)
+
+
+def gmail_send_record(practice_id: str) -> dict[str, str]:
+    store = _load_token_store()
+    row = (store.get("practices") or {}).get(practice_id) or {}
+    mail = row.get("gmail_send") if isinstance(row, dict) else None
+    if not isinstance(mail, dict):
+        return {}
+    return {
+        "refresh_token": str(mail.get("refresh_token") or ""),
+        "access_token": str(mail.get("access_token") or ""),
+        "email": str(mail.get("email") or "").strip().lower(),
+    }
+
+
+def gmail_send_status(practice_id: str) -> dict[str, Any]:
+    mail = gmail_send_record(practice_id)
+    email = mail.get("email") or ""
+    connected = bool(mail.get("refresh_token")) and bool(email)
+    return {
+        "connected": connected,
+        "sender_email": email if connected else "",
+        "connect_url": "/auth/google/gmail-send/start",
+        "scheduled_mail": "off",
+    }
 
 
 def directory_connection_status(practice_id: str) -> dict[str, Any]:

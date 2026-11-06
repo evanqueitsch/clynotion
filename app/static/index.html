@@ -742,10 +742,17 @@
       </div>
       <p class="warn" id="time-self-test-banner"></p>
       <p class="meta" id="time-self-test-mail"></p>
+      <p class="meta" id="time-self-test-sender"></p>
+      <div class="row">
+        <button class="primary" id="btn-gmail-send-connect" type="button">Connect sending mailbox</button>
+        <button class="ghost" id="btn-gmail-send-disconnect" type="button">Disconnect mailbox</button>
+      </div>
       <span class="section-label">1. Thursday preview</span>
       <pre class="note" id="time-self-test-thursday"></pre>
+      <button class="primary" id="btn-send-thursday" type="button">Send Thursday test to me</button>
       <span class="section-label">2. Friday preview</span>
       <pre class="note" id="time-self-test-friday"></pre>
+      <button class="primary" id="btn-send-friday" type="button">Send Friday test to me</button>
       <span class="section-label">3. Your test hours</span>
       <p class="meta">Enter these yourself. The form does not fill hours in, and saving here does not write the payroll week.</p>
       <label for="time-self-test-hours">Hours</label>
@@ -755,6 +762,7 @@
       <button class="primary" id="btn-time-self-test-save" type="button">Save test hours</button>
       <span class="section-label">4. Summary preview for Melissa</span>
       <pre class="note" id="time-self-test-summary"></pre>
+      <button class="primary" id="btn-send-summary" type="button">Send test summary to Melissa</button>
       <p class="status" id="time-self-test-status"></p>
     </section>
 
@@ -1397,7 +1405,31 @@
 
     function renderSelfTest(data) {
       $("time-self-test-banner").textContent = data.banner || "";
-      $("time-self-test-mail").textContent = `${data.sender_note || ""} Thursday and Friday previews are addressed to ${data.email}. The summary preview is addressed to ${data.summary_recipient}. Sent: no.`;
+      $("time-self-test-mail").textContent = `${data.sender_note || ""} Thursday and Friday go only to ${data.email}. The summary goes only to ${data.summary_recipient}.`;
+      const mailbox = data.mailbox || {};
+      $("time-self-test-sender").textContent = mailbox.connected
+        ? `Verified From address: ${mailbox.sender_email}. This is the account that pressed Allow, not a guessed alias.`
+        : "Sending mailbox is not connected. Choose the heart4change.org mailbox in the Google prompt. operations@heart4change.org is the intended mailbox only if that is the account you authorize.";
+      const bindSend = (id, slot) => {
+        const button = $(id);
+        if (!button) return;
+        const delivery = (slot && slot.delivery) || {};
+        const ready = !!mailbox.connected && delivery.can_send !== false && !(slot && slot.sent);
+        if (id === "btn-send-summary" && !data.summary) {
+          button.disabled = true;
+          button.textContent = "Send test summary to Melissa";
+          return;
+        }
+        button.disabled = !ready;
+        if (delivery.status === "sent") button.textContent = "Sent once";
+        else if (delivery.status === "uncertain") button.textContent = "Uncertain — not retried";
+        else if (id === "btn-send-thursday") button.textContent = "Send Thursday test to me";
+        else if (id === "btn-send-friday") button.textContent = "Send Friday test to me";
+        else button.textContent = "Send test summary to Melissa";
+      };
+      bindSend("btn-send-thursday", data.thursday);
+      bindSend("btn-send-friday", data.friday);
+      bindSend("btn-send-summary", data.summary);
       const thursday = data.thursday || {};
       const friday = data.friday || {};
       $("time-self-test-thursday").textContent = `To: ${thursday.to}\nSubject: ${thursday.subject}\n\n${thursday.body}`;
@@ -1419,7 +1451,16 @@
       try {
         const data = await api("/hr/time/self-test");
         renderSelfTest(data);
-        setStatus($("time-self-test-status"), "Previews only. No email was sent.", "ok");
+        const flag = new URLSearchParams(window.location.search).get("gmail_send");
+        if (flag === "connected") {
+          setStatus($("time-self-test-status"), "Sending mailbox connected. Scheduled mail is still off. Press Send when you want a test message.", "ok");
+        } else if (flag === "domain") {
+          setStatus($("time-self-test-status"), "That Google account is not on heart4change.org. Connect the practice mailbox.", "error");
+        } else if (flag) {
+          setStatus($("time-self-test-status"), `Could not connect the sending mailbox (${flag}).`, "error");
+        } else {
+          setStatus($("time-self-test-status"), "Scheduled mail is off. Nothing is sent until you press Send.", "ok");
+        }
       } catch (e) {
         setStatus($("time-self-test-status"), errText(e), "error");
       }
@@ -2801,6 +2842,45 @@
     if (btnTimeSelfTestHome) btnTimeSelfTestHome.onclick = () => enterHome();
     const btnTimeSelfTestSave = $("btn-time-self-test-save");
     if (btnTimeSelfTestSave) btnTimeSelfTestSave.onclick = () => { saveTimeSelfTest(); };
+    const btnGmailConnect = $("btn-gmail-send-connect");
+    if (btnGmailConnect) btnGmailConnect.onclick = () => { window.location.href = "/auth/google/gmail-send/start"; };
+    const btnGmailDisconnect = $("btn-gmail-send-disconnect");
+    if (btnGmailDisconnect) {
+      btnGmailDisconnect.onclick = async () => {
+        try {
+          await api("/hr/time/gmail-send/disconnect", { method: "POST" });
+          await openTimeSelfTest();
+          setStatus($("time-self-test-status"), "Sending mailbox disconnected. Directory access was left in place.", "ok");
+        } catch (e) {
+          setStatus($("time-self-test-status"), errText(e), "error");
+        }
+      };
+    }
+    async function sendSelfTestKind(kind) {
+      setStatus($("time-self-test-status"), "Sending…");
+      try {
+        const data = await api("/hr/time/self-test/send", { method: "POST", json: { kind } });
+        renderSelfTest(data);
+        const result = data.send_result || {};
+        if (result.duplicate) {
+          setStatus($("time-self-test-status"), `Already recorded as ${result.status}. It was not sent again.`, "ok");
+        } else if (result.status === "sent") {
+          setStatus($("time-self-test-status"), `Sent once to ${result.to}.`, "ok");
+        } else if (result.status === "uncertain") {
+          setStatus($("time-self-test-status"), "Gmail did not confirm delivery. This test will not be sent again automatically.", "error");
+        } else {
+          setStatus($("time-self-test-status"), `Not sent (${result.status || "failed"}).`, "error");
+        }
+      } catch (e) {
+        setStatus($("time-self-test-status"), errText(e), "error");
+      }
+    }
+    const btnSendThursday = $("btn-send-thursday");
+    if (btnSendThursday) btnSendThursday.onclick = () => { sendSelfTestKind("thursday"); };
+    const btnSendFriday = $("btn-send-friday");
+    if (btnSendFriday) btnSendFriday.onclick = () => { sendSelfTestKind("friday"); };
+    const btnSendSummary = $("btn-send-summary");
+    if (btnSendSummary) btnSendSummary.onclick = () => { sendSelfTestKind("summary"); };
     const btnObCreate = $("btn-ob-create");
     if (btnObCreate) {
       btnObCreate.onclick = async () => {

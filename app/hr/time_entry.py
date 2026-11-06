@@ -44,7 +44,8 @@ TIME_SELF_TEST_URL = "https://clynotion.com/#time-self-test"
 SELF_TEST_BANNER = (
     "THIS IS A SELF-TEST for your signed-in account only. "
     "It is not a payroll submission, it does not change who is enabled, "
-    "and it does not change the practice cutoff. Nothing on this page is emailed."
+    "and it does not change the practice cutoff. "
+    "Mail goes out only when you press Send, and each Send runs once."
 )
 CATEGORY_TOTAL = "total"
 KNOWN_CATEGORIES: dict[str, str] = {CATEGORY_TOTAL: "Weekly total"}
@@ -818,7 +819,9 @@ class TimeStore:
             self._require_self_tester(user)
             email = _email(user.email)
             display_name, _clinician_id = self._name_for_email(user.practice_id, email)
-            self._self_tests[(user.practice_id, user.user_id)] = {
+            key = (user.practice_id, user.user_id)
+            prior = self._self_tests.get(key) or {}
+            self._self_tests[key] = {
                 "practice_id": user.practice_id,
                 "user_id": user.user_id,
                 "email": email,
@@ -826,11 +829,154 @@ class TimeStore:
                 "lines": total_line(raw),
                 "updated_at": _iso(moment),
                 "label": "self_test",
+                "sends": dict(prior.get("sends") or {}),
             }
             self._dirty = True
             payload = self._self_test_public(user, moment)
             self._flush_if_dirty()
             return payload
+
+    def send_self_test(
+        self,
+        user: User,
+        kind: str,
+        transport: Any,
+        now: Optional[datetime] = None,
+    ) -> dict[str, Any]:
+        """Send one labelled self-test message. A sent or uncertain result is not repeated."""
+        if kind not in ("thursday", "friday", "summary"):
+            raise ValueError("kind must be thursday, friday, or summary.")
+        moment = now or utcnow()
+        with self.exclusive():
+            self._require_self_tester(user)
+            message, blocked = self._prepare_self_test_send(user, kind, moment)
+            if blocked is not None:
+                return blocked
+            assert message is not None
+            token = str(uuid4())
+            key = (user.practice_id, user.user_id)
+            record = dict(self._self_tests.get(key) or {})
+            sends = dict(record.get("sends") or {})
+            sends[kind] = {
+                "status": "sending",
+                "claim_token": token,
+                "claim_expires_at": _iso(moment + timedelta(seconds=120)),
+                "to": message.to,
+                "at": _iso(moment),
+            }
+            record["sends"] = sends
+            record.setdefault("practice_id", user.practice_id)
+            record.setdefault("user_id", user.user_id)
+            record.setdefault("email", _email(user.email))
+            record.setdefault("label", "self_test")
+            self._self_tests[key] = record
+            self._dirty = True
+            self._flush_if_dirty()
+        try:
+            result = transport(message)
+        except Exception:
+            from app.hr.time_mail import MailResult
+
+            result = MailResult(status="uncertain", detail="mailer_exception")
+        with self.exclusive():
+            key = (user.practice_id, user.user_id)
+            record = dict(self._self_tests.get(key) or {})
+            sends = dict(record.get("sends") or {})
+            slot = dict(sends.get(kind) or {})
+            if slot.get("claim_token") != token or slot.get("status") != "sending":
+                payload = self._self_test_public(user, moment)
+                payload["send_result"] = {"kind": kind, "status": "stale", "duplicate": True}
+                return payload
+            status = getattr(result, "status", "uncertain")
+            if status == "sent":
+                slot["status"] = "sent"
+                slot["sent_at"] = _iso(moment)
+                slot["last_error"] = ""
+            elif status == "uncertain":
+                slot["status"] = "uncertain"
+                slot["last_error"] = "gmail_uncertain"
+            else:
+                slot["status"] = "failed"
+                slot["last_error"] = safe_error_code(str(getattr(result, "detail", "") or ""), fallback="mail_failed")
+            slot["claim_token"] = ""
+            sends[kind] = slot
+            record["sends"] = sends
+            self._self_tests[key] = record
+            self._dirty = True
+            payload = self._self_test_public(user, moment)
+            payload["send_result"] = {
+                "kind": kind,
+                "status": slot["status"],
+                "to": slot.get("to") or "",
+                "duplicate": False,
+            }
+            self._flush_if_dirty()
+            return payload
+
+    def _prepare_self_test_send(
+        self, user: User, kind: str, moment: datetime
+    ) -> tuple[Optional[Any], Optional[dict[str, Any]]]:
+        """Caller holds the lock. Returns a message, or a finished payload when not sending."""
+        from app.hr.time_mail import OutboundMail
+
+        key = (user.practice_id, user.user_id)
+        record = dict(self._self_tests.get(key) or {})
+        if _email(str(record.get("email") or user.email)) != _email(user.email) and record.get("email"):
+            raise TimeAuthzError("Test weekly hours can only be sent for your own account.")
+        sends = dict(record.get("sends") or {})
+        prior = dict(sends.get(kind) or {})
+        status = str(prior.get("status") or "")
+        if status in ("sent", "uncertain"):
+            payload = self._self_test_public(user, moment)
+            payload["send_result"] = {"kind": kind, "status": status, "to": prior.get("to") or "", "duplicate": True}
+            return None, payload
+        if status == "sending":
+            expiry = str(prior.get("claim_expires_at") or "")
+            if expiry and _parse_iso(expiry) > moment:
+                raise TimeAuthzError("That test email is already being sent.")
+            prior["status"] = "uncertain"
+            prior["last_error"] = "claim_expired_unconfirmed"
+            prior["claim_token"] = ""
+            sends[kind] = prior
+            record["sends"] = sends
+            self._self_tests[key] = record
+            self._dirty = True
+            self._flush_if_dirty()
+            payload = self._self_test_public(user, moment)
+            payload["send_result"] = {"kind": kind, "status": "uncertain", "duplicate": True}
+            return None, payload
+        public = self._self_test_public(user, moment)
+        if kind == "summary":
+            summary = public.get("summary")
+            if not summary:
+                raise ValueError("Enter your test hours before sending the summary.")
+            message = OutboundMail(
+                to=str(summary["to"]),
+                subject=str(summary["subject"]),
+                text=str(summary["body"]),
+                csv_filename=str(summary.get("csv_filename") or ""),
+                csv_text=str(summary.get("csv") or ""),
+            )
+            if message.to != MELISSA_EMAIL:
+                raise TimeAuthzError("The test summary can only be addressed to Melissa.")
+        else:
+            slot = public["thursday" if kind == "thursday" else "friday"]
+            if slot["to"] != _email(user.email):
+                raise TimeAuthzError("Thursday and Friday test emails go only to your own account.")
+            message = OutboundMail(to=slot["to"], subject=slot["subject"], text=slot["body"])
+        if not record.get("user_id"):
+            record.update(
+                {
+                    "practice_id": user.practice_id,
+                    "user_id": user.user_id,
+                    "email": _email(user.email),
+                    "display_name": public.get("display_name") or _email(user.email),
+                    "label": "self_test",
+                    "lines": list((public.get("entry") or {}).get("lines") or []),
+                }
+            )
+            self._self_tests[key] = record
+        return message, None
 
     def _require_self_tester(self, user: User) -> None:
         if not self._is_self_tester(user):
@@ -839,8 +985,6 @@ class TimeStore:
             )
 
     def _self_test_public(self, user: User, now: datetime) -> dict[str, Any]:
-        from app.hr.time_mail import delivery_flags
-
         email = _email(user.email)
         settings = self._settings.get(user.practice_id) or default_settings(user.practice_id, now)
         week = pay_week_ending(now)
@@ -870,33 +1014,43 @@ class TimeStore:
                 updated_at=str((record or {}).get("updated_at") or ""),
             )
             summary = _self_test_summary(entry, header)
-            summary_note = "Summary preview is for Melissa only. It was not sent."
-        flags = delivery_flags()
-        sender = str(flags.get("sender") or "")
+            summary["delivery"] = _send_state((record or {}).get("sends", {}).get("summary") if record else None)
+            summary_note = "Summary is addressed only to Melissa. Press Send to deliver this test once."
+        from app.hr.gmail_oauth import connect_status
+
+        mailbox = connect_status(user.practice_id)
+        sender = str(mailbox.get("sender_email") or "")
+        sends = dict((record or {}).get("sends") or {})
+        thursday_state = _send_state(sends.get("thursday"))
+        friday_state = _send_state(sends.get("friday"))
+        summary_state = _send_state(sends.get("summary"))
         return {
             "label": "self_test",
             "sent": False,
             "banner": SELF_TEST_BANNER,
             "email": email,
             "display_name": display_name,
-            "mail_mode": flags.get("mail_mode") or "off",
+            "scheduled_mail": "off",
+            "mailbox": mailbox,
             "sender": sender,
             "sender_note": (
-                f"Configured sender is {sender}."
+                f"Verified sending mailbox: {sender}. Scheduled payroll mail stays off."
                 if sender
-                else "No sender is configured. TIME_MAIL_MODE is off, so this page cannot send mail."
+                else "No sending mailbox is connected. Scheduled payroll mail stays off. Connect a heart4change.org mailbox, then press Send."
             ),
             "thursday": {
                 "to": email,
                 "subject": thursday[0],
                 "body": thursday[1],
-                "sent": False,
+                "sent": thursday_state["status"] == "sent",
+                "delivery": thursday_state,
             },
             "friday": {
                 "to": email,
                 "subject": friday[0],
                 "body": friday[1],
-                "sent": False,
+                "sent": friday_state["status"] == "sent",
+                "delivery": friday_state,
                 "note": "Shown even if you already entered test hours. The real Friday reminder still goes only to people who have not submitted.",
             },
             "entry": entry,
@@ -2042,6 +2196,17 @@ def _can_reclaim(
         return False
     index = min(max(delivery.attempts - 1, 0), len(backoff) - 1)
     return now >= last + backoff[index]
+
+
+def _send_state(slot: Optional[dict[str, Any]]) -> dict[str, Any]:
+    status = str((slot or {}).get("status") or "")
+    return {
+        "status": status,
+        "to": str((slot or {}).get("to") or ""),
+        "at": str((slot or {}).get("sent_at") or (slot or {}).get("at") or ""),
+        "last_error": str((slot or {}).get("last_error") or ""),
+        "can_send": status not in ("sent", "uncertain", "sending"),
+    }
 
 
 def _labelled_reminder(slot: str, week_ending: date, deadline: datetime) -> tuple[str, str]:
