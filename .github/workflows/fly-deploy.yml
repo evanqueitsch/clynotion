@@ -47,13 +47,16 @@ jobs:
                   key, value = item.split(b"=", 1)
                   os.environ[key.decode(errors="replace")] = value.decode(errors="replace")
               break
+          import base64
           from app.crypto import decrypt_utf8
           from app.google_oauth import default_practice_id
           from app.hr.gmail_oauth import connect_status
           path = os.environ.get("ATTUNE_HR_TIME_DATA_PATH", "")
           out = {"key_set": bool(os.environ.get("ATTUNE_DATA_ENCRYPTION_KEY")), "path_set": bool(path)}
           try:
-              data = json.loads(decrypt_utf8(Path(path).read_bytes())) if path and Path(path).is_file() else {}
+              wrapper = json.loads(Path(path).read_text(encoding="utf-8"))
+              blob = base64.b64decode(str(wrapper.get("blob") or ""))
+              data = json.loads(decrypt_utf8(blob))
               rows = []
               for item in data.get("self_tests") or []:
                   kinds = {}
