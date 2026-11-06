@@ -127,6 +127,7 @@ class MeResponse(BaseModel):
 
 _OAUTH_STATE_COOKIE = "attune_oauth_state"
 _DIRECTORY_STATE_COOKIE = "attune_directory_oauth_state"
+_GMAIL_SEND_STATE_COOKIE = "attune_gmail_send_state"
 _SESSION_TTL_SEC = 60 * 60 * 12
 
 
@@ -257,6 +258,7 @@ def health() -> dict[str, Any]:
         "time_persistence": os.environ.get("ATTUNE_HR_TIME_PERSISTENCE", "memory"),
         "time_data_path": os.environ.get("ATTUNE_HR_TIME_DATA_PATH", ""),
         "time_mail_mode": _public_time_mail_mode(),
+        "scheduled_mail": "off" if _public_time_mail_mode() != "gmail" else "gmail",
     }
 
 
@@ -475,6 +477,86 @@ def google_directory_callback(
     response = RedirectResponse("/?directory=connected", status_code=302)
     response.delete_cookie(key=_DIRECTORY_STATE_COOKIE, path="/")
     return response
+
+
+@app.get("/auth/google/gmail-send/start")
+def gmail_send_start(user: CurrentUser) -> RedirectResponse:
+    """Start a send-only Gmail consent. Does not enable scheduled payroll mail."""
+    from app.hr.gmail_oauth import gmail_send_authorization_url
+    from app.hr.time_entry import can_manage_time
+
+    if not can_manage_time(user):
+        raise HTTPException(status_code=403, detail="HR admin only")
+    if auth_mode() != "google" or not google_configured():
+        raise HTTPException(status_code=404, detail="Google auth not enabled")
+    state = make_state(jwt_signing_secret())
+    response = RedirectResponse(gmail_send_authorization_url(state), status_code=302)
+    response.set_cookie(
+        key=_GMAIL_SEND_STATE_COOKIE,
+        value=state,
+        httponly=True,
+        secure=True,
+        samesite="lax",
+        max_age=600,
+        path="/",
+    )
+    return response
+
+
+@app.get("/auth/google/gmail-send/callback")
+def gmail_send_callback(
+    request: Request,
+    code: Optional[str] = None,
+    state: Optional[str] = None,
+    error: Optional[str] = None,
+) -> RedirectResponse:
+    from app.hr.gmail_oauth import GmailSendError, exchange_gmail_send_code, save_gmail_send_tokens
+
+    def _back(code_name: str) -> RedirectResponse:
+        response = RedirectResponse(f"/?gmail_send={code_name}#time-self-test", status_code=302)
+        response.delete_cookie(key=_GMAIL_SEND_STATE_COOKIE, path="/")
+        return response
+
+    if error:
+        return _back("denied")
+    if not code or not state:
+        return _back("missing")
+    cookie_state = request.cookies.get(_GMAIL_SEND_STATE_COOKIE, "")
+    if not cookie_state or cookie_state != state or not verify_state(state, jwt_signing_secret()):
+        return _back("state")
+    token = request.cookies.get(COOKIE_NAME)
+    if not token:
+        return _back("session")
+    try:
+        user = decode_token_safe(token)
+    except Exception:
+        return _back("session")
+    try:
+        granted = exchange_gmail_send_code(code)
+        save_gmail_send_tokens(
+            user.practice_id,
+            refresh_token=granted["refresh_token"],
+            access_token=granted["access_token"],
+            email=granted["email"],
+        )
+    except GmailSendError as exc:
+        if exc.code == "gmail_send_domain":
+            return _back("domain")
+        return _back("exchange")
+    except Exception:
+        return _back("exchange")
+    return _back("connected")
+
+
+@app.post("/hr/time/gmail-send/disconnect")
+def gmail_send_disconnect(user: CurrentUser) -> dict[str, bool]:
+    from app.hr.gmail_oauth import disconnect_sender
+    from app.hr.time_entry import can_manage_time
+
+    if not can_manage_time(user):
+        raise HTTPException(status_code=403, detail="HR admin only")
+    disconnect_sender(user.practice_id)
+    return {"connected": False}
 
 
 def decode_token_safe(token: str) -> User:
