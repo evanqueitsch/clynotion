@@ -448,6 +448,114 @@ def test_unreadable_token_file_is_not_wiped_by_an_error_note(
     assert path.read_bytes() == b"not-a-fernet-token"
 
 
+class _GmailHttp:
+    """Token refresh plus the send endpoint. No other network."""
+
+    def __init__(self, mode: dict[str, str]) -> None:
+        self.mode = mode
+        self.send_calls = 0
+
+    def __call__(self, *args: object, **kwargs: object) -> "_GmailHttp":
+        return self
+
+    def __enter__(self) -> "_GmailHttp":
+        return self
+
+    def __exit__(self, *args: object) -> bool:
+        return False
+
+    def post(self, url: str, data: dict | None = None, json: dict | None = None, headers: dict | None = None) -> "_FakeResponse":
+        if url.endswith("/token"):
+            return _FakeResponse(200, {"access_token": "access-token"})
+        if url.endswith("/messages/send"):
+            self.send_calls += 1
+            if self.mode["result"] == "403":
+                return _FakeResponse(
+                    403,
+                    {
+                        "error": {
+                            "code": 403,
+                            "message": "Gmail API has not been used in project 610340555869 before or it is disabled.",
+                            "status": "PERMISSION_DENIED",
+                            "errors": [{"reason": "accessNotConfigured"}],
+                            "details": [{"reason": "SERVICE_DISABLED"}],
+                        }
+                    },
+                )
+            return _FakeResponse(200, {"id": "18c0a1b2c3d4e5f6", "threadId": "thread1"})
+        raise AssertionError(url)
+
+
+def test_disabled_gmail_api_fails_visibly_and_a_later_accept_is_one_shot(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Production path: OAuth refresh, Gmail HTTP, encrypted store. Gmail itself is mocked."""
+    _google_env(monkeypatch, tmp_path)
+    alice = _alice_enabled(client)
+    save_gmail_send_tokens(
+        "practice-a",
+        refresh_token="send-refresh",
+        access_token="send-access",
+        email="operations@heart4change.org",
+        expires_in=3600,
+    )
+    router = _GmailHttp({"result": "403"})
+    with patch("app.hr.gmail_oauth.httpx.Client", router):
+        rejected = client.post(
+            "/hr/time/self-test/send",
+            headers=_auth(alice),
+            json={"kind": "thursday"},
+        )
+    assert rejected.status_code == 200, rejected.text
+    body = rejected.json()
+    assert body["send_result"]["status"] == "failed"
+    assert body["send_result"]["last_error"] == "gmail_api_disabled"
+    assert body["send_result"]["gmail_message_id"] == ""
+    assert body["thursday"]["delivery"]["can_send"] is True
+    assert "before or it is disabled" not in rejected.text
+    assert router.send_calls == 1
+    assert build_mailer() is None
+
+    router.mode["result"] = "200"
+    with patch("app.hr.gmail_oauth.httpx.Client", router):
+        accepted = client.post(
+            "/hr/time/self-test/send",
+            headers=_auth(alice),
+            json={"kind": "thursday"},
+        )
+    assert accepted.status_code == 200, accepted.text
+    assert accepted.json()["send_result"]["status"] == "sent"
+    assert accepted.json()["send_result"]["gmail_message_id"] == "18c0a1b2c3d4e5f6"
+    assert accepted.json()["thursday"]["delivery"]["last_error"] == ""
+    assert router.send_calls == 2
+
+    with patch("app.hr.gmail_oauth.httpx.Client", router):
+        again = client.post(
+            "/hr/time/self-test/send",
+            headers=_auth(alice),
+            json={"kind": "thursday"},
+        )
+    assert again.json()["send_result"]["duplicate"] is True
+    assert again.json()["send_result"]["status"] == "sent"
+    assert router.send_calls == 2
+
+
+def test_send_buttons_have_adjacent_status_lines() -> None:
+    text = Path("app/static/index.html").read_text(encoding="utf-8")
+    for button, status in (
+        ("btn-send-thursday", "time-self-test-thursday-status"),
+        ("btn-send-friday", "time-self-test-friday-status"),
+        ("btn-send-summary", "time-self-test-summary-status"),
+    ):
+        button_at = text.index(f'id="{button}"')
+        status_at = text.index(f'id="{status}"')
+        assert 0 < status_at - button_at < 500
+    handler = text[text.index("async function sendSelfTestKind"): text.index("const btnSendThursday")]
+    assert handler.index("Sending…") < handler.index("await api")
+    assert "gmail_api_disabled" in text
+    assert "610340555869" in text
+
+
 def test_self_test_page_reads_connect_result_before_rewriting_the_url() -> None:
     text = Path("app/static/index.html").read_text(encoding="utf-8")
     start = text.index("async function openTimeSelfTest")

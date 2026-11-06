@@ -750,9 +750,11 @@
       <span class="section-label">1. Thursday preview</span>
       <pre class="note" id="time-self-test-thursday"></pre>
       <button class="primary" id="btn-send-thursday" type="button">Send Thursday test to me</button>
+      <p class="status" id="time-self-test-thursday-status" role="status" aria-live="polite"></p>
       <span class="section-label">2. Friday preview</span>
       <pre class="note" id="time-self-test-friday"></pre>
       <button class="primary" id="btn-send-friday" type="button">Send Friday test to me</button>
+      <p class="status" id="time-self-test-friday-status" role="status" aria-live="polite"></p>
       <span class="section-label">3. Your test hours</span>
       <p class="meta">Enter these yourself. The form does not fill hours in, and saving here does not write the payroll week.</p>
       <label for="time-self-test-hours">Hours</label>
@@ -763,7 +765,8 @@
       <span class="section-label">4. Summary preview for Melissa</span>
       <pre class="note" id="time-self-test-summary"></pre>
       <button class="primary" id="btn-send-summary" type="button">Send test summary to Melissa</button>
-      <p class="status" id="time-self-test-status"></p>
+      <p class="status" id="time-self-test-summary-status" role="status" aria-live="polite"></p>
+      <p class="status" id="time-self-test-status" role="status" aria-live="polite"></p>
     </section>
 
     <section id="capture-panel" class="panel hidden">
@@ -1414,19 +1417,27 @@
         const button = $(id);
         if (!button) return;
         const delivery = (slot && slot.delivery) || {};
+        const statusId = id.replace("btn-send-", "time-self-test-") + "-status";
+        const statusEl = $(statusId);
         // Scheduled payroll mail stays off. That must not disable an explicit connected send.
         const ready = !!mailbox.connected && delivery.can_send !== false && !(slot && slot.sent);
         if (id === "btn-send-summary" && !data.summary) {
           button.disabled = true;
           button.textContent = "Send test summary to Melissa";
+          if (statusEl) setStatus(statusEl, "Enter your own hours before this summary can be sent.");
           return;
         }
         button.disabled = !ready;
-        if (delivery.status === "sent") button.textContent = "Sent once";
+        if (delivery.status === "sent") button.textContent = "Sent once — Gmail accepted";
         else if (delivery.status === "uncertain") button.textContent = "Uncertain — not retried";
+        else if (delivery.status === "failed") button.textContent = id === "btn-send-summary" ? "Send test summary to Melissa" : (id === "btn-send-friday" ? "Send Friday test to me" : "Send Thursday test to me");
         else if (id === "btn-send-thursday") button.textContent = "Send Thursday test to me";
         else if (id === "btn-send-friday") button.textContent = "Send Friday test to me";
         else button.textContent = "Send test summary to Melissa";
+        if (statusEl) {
+          const notice = sendOutcome(delivery);
+          setStatus(statusEl, notice[0], notice[1]);
+        }
       };
       bindSend("btn-send-thursday", data.thursday);
       bindSend("btn-send-friday", data.friday);
@@ -1443,6 +1454,27 @@
       $("time-self-test-summary").textContent = summary
         ? `To: ${summary.to}\nSubject: ${summary.subject}\n\n${summary.body}\n\n${summary.csv}`
         : data.summary_note || "";
+    }
+
+    function sendOutcome(delivery) {
+      const status = (delivery && delivery.status) || "";
+      const err = (delivery && delivery.last_error) || "";
+      const messageId = (delivery && delivery.gmail_message_id) || "";
+      if (status === "sent") {
+        const idNote = messageId ? ` Gmail message id ${messageId}.` : "";
+        return [`Gmail accepted this message.${idNote} That is not the same as it already being in the inbox.`, "ok"];
+      }
+      if (status === "uncertain") {
+        return ["Gmail did not confirm acceptance. This will not be sent again.", "error"];
+      }
+      if (status === "sending") return ["Sending…", ""];
+      if (status === "failed" || err) {
+        if (err === "gmail_http_403" || err === "gmail_api_disabled") {
+          return ["Not sent. Gmail did not accept a message (HTTP 403, accessNotConfigured / SERVICE_DISABLED). The Gmail API is disabled for Google Cloud project 610340555869. Enable that API, then press Send again. This attempt was not delivered.", "error"];
+        }
+        return [`Not sent (${err || "failed"}). Gmail did not accept a message.`, "error"];
+      }
+      return ["", ""];
     }
 
     function gmailSendNotice(code) {
@@ -2894,22 +2926,33 @@
       };
     }
     async function sendSelfTestKind(kind) {
+      const statusEl = $("time-self-test-" + kind + "-status");
+      const button = $("btn-send-" + kind);
+      if (statusEl) setStatus(statusEl, "Sending…");
+      if (button) button.disabled = true;
       setStatus($("time-self-test-status"), "Sending…");
       try {
         const data = await api("/hr/time/self-test/send", { method: "POST", json: { kind } });
         renderSelfTest(data);
         const result = data.send_result || {};
-        if (result.duplicate) {
-          setStatus($("time-self-test-status"), `Already recorded as ${result.status}. It was not sent again.`, "ok");
-        } else if (result.status === "sent") {
-          setStatus($("time-self-test-status"), `Sent once to ${result.to}.`, "ok");
-        } else if (result.status === "uncertain") {
-          setStatus($("time-self-test-status"), "Gmail did not confirm delivery. This test will not be sent again automatically.", "error");
-        } else {
-          setStatus($("time-self-test-status"), `Not sent (${result.status || "failed"}).`, "error");
-        }
+        const slot = data[kind] || {};
+        const delivery = Object.assign({}, slot.delivery || {}, {
+          status: result.status || (slot.delivery && slot.delivery.status) || "",
+          last_error: result.last_error || (slot.delivery && slot.delivery.last_error) || "",
+          gmail_message_id: result.gmail_message_id || (slot.delivery && slot.delivery.gmail_message_id) || "",
+        });
+        const notice = sendOutcome(delivery);
+        const text = result.duplicate
+          ? `Already recorded as ${result.status}. It was not sent again. ${notice[0] || ""}`.trim()
+          : (notice[0] || `Finished (${result.status || "unknown"}).`);
+        const kindName = result.duplicate ? "ok" : (notice[1] || (result.status === "sent" ? "ok" : "error"));
+        if (statusEl) setStatus(statusEl, text, kindName);
+        setStatus($("time-self-test-status"), text, kindName);
       } catch (e) {
-        setStatus($("time-self-test-status"), errText(e), "error");
+        const message = errText(e);
+        if (statusEl) setStatus(statusEl, message, "error");
+        setStatus($("time-self-test-status"), message, "error");
+        if (button) button.disabled = false;
       }
     }
     const btnSendThursday = $("btn-send-thursday");
