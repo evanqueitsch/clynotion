@@ -111,7 +111,7 @@
       color: var(--muted);
       margin-bottom: 0.35rem;
     }
-    input[type="text"], input[type="password"], select, textarea {
+    input[type="text"], input[type="password"], input[type="number"], input[type="time"], input[type="date"], input[type="email"], select, textarea {
       width: 100%;
       border: 1px solid var(--line);
       border-radius: 10px;
@@ -207,6 +207,10 @@
       color: var(--danger);
     }
     .hidden { display: none !important; }
+    .check-row { display: flex; gap: 0.55rem; align-items: flex-start; margin: 0.35rem 0; }
+    .check-row input { width: auto; margin: 0.15rem 0 0; }
+    .time-links { display: flex; gap: 0.5rem; flex-wrap: wrap; margin: 0.35rem 0 0.85rem; }
+    .time-links button { padding: 0.45rem 0.9rem; font-size: 0.85rem; }
     .meta { font-size: 0.8rem; color: var(--muted); margin-bottom: 0.75rem; }
     .section-label {
       display: block;
@@ -397,6 +401,12 @@
       flex: 0 0 auto;
       padding: 0.4rem 0.85rem;
       font-size: 0.82rem;
+    }
+    .time-mini {
+      width: 4.6rem !important;
+      margin: 0 !important;
+      padding: 0.35rem 0.45rem !important;
+      flex: 0 0 auto;
     }
     .due-actions { display: flex; gap: 0.35rem; flex: 0 0 auto; }
     .pulse-row {
@@ -633,6 +643,87 @@
       </details>
       <div id="onboarding-detail" class="hidden" style="margin-top:1rem;"></div>
       <p class="status" id="onboarding-status"></p>
+    </section>
+
+    <section id="time-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">Weekly hours</h2>
+        <button class="ghost" id="btn-time-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <p class="meta" id="time-pay-note"></p>
+      <p class="warn" id="time-helper"></p>
+      <p class="meta" id="time-week-label"></p>
+      <div class="time-links" id="time-nav"></div>
+      <div id="time-entry-block">
+        <p class="meta">One weekly total. Client time and supervision splits are not collected here.</p>
+        <label for="time-hours">Hours (whole number)</label>
+        <input id="time-hours" type="number" min="0" max="168" step="1" inputmode="numeric" />
+        <label for="time-minutes">Minutes (0–59)</label>
+        <input id="time-minutes" type="number" min="0" max="59" step="1" inputmode="numeric" />
+        <p class="meta" id="time-payable"></p>
+        <button class="primary" id="btn-time-save" type="button">Save hours</button>
+      </div>
+      <p class="status" id="time-status"></p>
+      <span class="section-label">Your history</span>
+      <div id="time-history" class="due-list"></div>
+    </section>
+
+    <section id="time-admin-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">Weekly hours admin</h2>
+        <button class="ghost" id="btn-time-admin-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <div class="time-links">
+        <button class="ghost" id="btn-time-admin-entry" type="button">My hours</button>
+        <button class="ghost" id="btn-time-admin-settings" type="button">Settings</button>
+      </div>
+      <label for="time-admin-week">Week ending (Friday)</label>
+      <input id="time-admin-week" type="date" />
+      <div class="row">
+        <button class="primary" id="btn-time-admin-load" type="button">Show week</button>
+        <button class="ghost" id="btn-time-admin-csv" type="button">Download CSV</button>
+      </div>
+      <p class="meta" id="time-admin-meta"></p>
+      <div id="time-admin-rows" class="due-list"></div>
+      <span class="section-label">Corrections</span>
+      <div id="time-admin-audit" class="due-list"></div>
+      <p class="status" id="time-admin-status"></p>
+    </section>
+
+    <section id="time-settings-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">Weekly hours settings</h2>
+        <button class="ghost" id="btn-time-settings-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <p class="meta" id="time-settings-note"></p>
+      <p class="warn" id="time-settings-corrector"></p>
+      <span class="section-label">Hourly staff who submit</span>
+      <div id="time-roster"></div>
+      <label for="time-rem1-day">First reminder day</label>
+      <select id="time-rem1-day"></select>
+      <label for="time-rem1-time">First reminder time</label>
+      <input id="time-rem1-time" type="time" step="60" />
+      <p class="meta" id="time-rem1-subject"></p>
+      <label for="time-rem2-day">Day-of reminder day</label>
+      <select id="time-rem2-day"></select>
+      <label for="time-rem2-time">Day-of reminder time</label>
+      <input id="time-rem2-time" type="time" step="60" />
+      <p class="meta" id="time-rem2-subject"></p>
+      <label for="time-lock-day">Summary and employee cutoff day</label>
+      <select id="time-lock-day"></select>
+      <label for="time-lock-time">Summary and employee cutoff time</label>
+      <input id="time-lock-time" type="time" step="60" />
+      <label for="time-summary-to">Summary recipient</label>
+      <input id="time-summary-to" type="email" autocomplete="off" />
+      <div id="time-settings-warnings"></div>
+      <div class="row">
+        <button class="primary" id="btn-time-settings-save" type="button">Save settings</button>
+        <button class="ghost" id="btn-time-preview" type="button">Preview summary</button>
+        <button class="ghost" id="btn-time-test-reminder" type="button">Preview reminders</button>
+      </div>
+      <p class="meta">Preview and the reminder check render the message only. They do not send email.</p>
+      <pre class="note hidden" id="time-settings-preview"></pre>
+      <p class="status" id="time-settings-status"></p>
     </section>
 
     <section id="capture-panel" class="panel hidden">
@@ -889,6 +980,416 @@
       await bootstrapAuth();
     }
 
+    const TIME_WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+    function hashRoute() {
+      const raw = (window.location.hash || "").replace(/^#/, "");
+      const q = raw.indexOf("?");
+      const path = q === -1 ? raw : raw.slice(0, q);
+      const params = new URLSearchParams(q === -1 ? "" : raw.slice(q + 1));
+      return { path, params };
+    }
+
+    function fillWeekdaySelect(select) {
+      if (!select || select.options.length) return;
+      TIME_WEEKDAYS.forEach((name, index) => {
+        const opt = document.createElement("option");
+        opt.value = String(index);
+        opt.textContent = name;
+        select.appendChild(opt);
+      });
+    }
+
+    function errText(err) {
+      const detail = err && err.payload && err.payload.detail;
+      if (Array.isArray(detail)) {
+        return detail.map((item) => item.msg || item.message || "Invalid value").join(" ");
+      }
+      return (err && err.message) || "Request failed";
+    }
+
+    function renderTimeHistory(rows) {
+      const root = $("time-history");
+      root.innerHTML = "";
+      if (!rows.length) {
+        const empty = document.createElement("p");
+        empty.className = "meta";
+        empty.textContent = "No saved weeks yet.";
+        root.appendChild(empty);
+        return;
+      }
+      rows.forEach((row) => {
+        const line = document.createElement("div");
+        line.className = "due-row";
+        const text = document.createElement("span");
+        text.className = "due-title";
+        text.textContent = `${row.week_ending}: raw ${row.raw_display}, payable ${row.rounded_display} (${row.decimal_hours})`;
+        line.appendChild(text);
+        root.appendChild(line);
+      });
+    }
+
+    async function openTime() {
+      show("time-panel");
+      window.history.replaceState({}, "", "/#time");
+      setStatus($("time-status"), "Loading…");
+      try {
+        const data = await api("/hr/time/me");
+        $("time-pay-note").textContent = data.pay_week_note || "";
+        $("time-helper").textContent = data.helper_text || "";
+        const week = data.week || {};
+        $("time-week-label").textContent = week.label
+          ? `${week.label}. Deadline ${week.deadline_label}. ${week.locked ? "Locked." : "Open for entries."}`
+          : "";
+        const nav = $("time-nav");
+        nav.innerHTML = "";
+        nav.classList.toggle("hidden", !data.can_manage_settings);
+        if (data.can_manage_settings) {
+          const adminBtn = document.createElement("button");
+          adminBtn.type = "button";
+          adminBtn.className = "ghost";
+          adminBtn.textContent = "Admin week";
+          adminBtn.onclick = () => openTimeAdmin(week.week_ending || "");
+          const settingsBtn = document.createElement("button");
+          settingsBtn.type = "button";
+          settingsBtn.className = "ghost";
+          settingsBtn.textContent = "Settings";
+          settingsBtn.onclick = () => openTimeSettings();
+          nav.appendChild(adminBtn);
+          nav.appendChild(settingsBtn);
+        }
+        const block = $("time-entry-block");
+        if (!data.is_participant && !data.can_edit) {
+          block.classList.add("hidden");
+          setStatus($("time-status"), "You are not on the hourly submitter list. An admin chooses that list in settings.", "ok");
+        } else {
+          block.classList.remove("hidden");
+          const entry = data.entry;
+          $("time-hours").value = entry ? String(entry.hours) : "";
+          $("time-minutes").value = entry ? String(entry.minutes) : "";
+          $("time-payable").textContent = entry
+            ? `Saved raw ${entry.raw_display}. Payable (rounded up to 15 minutes) ${entry.rounded_display} (${entry.decimal_hours}).`
+            : "Nothing saved for this week yet. Blank is missing, not zero. Save 0 hours and 0 minutes if you did not work.";
+          const editable = !!data.can_edit;
+          $("time-hours").disabled = !editable;
+          $("time-minutes").disabled = !editable;
+          $("btn-time-save").disabled = !editable;
+          setStatus($("time-status"), editable ? "" : "This week is locked. Ask Melissa to correct it.", editable ? "" : "ok");
+        }
+        renderTimeHistory(data.history || []);
+      } catch (e) {
+        setStatus($("time-status"), errText(e), "error");
+      }
+    }
+
+    async function saveTimeEntry() {
+      const hoursRaw = $("time-hours").value.trim();
+      const minutesRaw = $("time-minutes").value.trim();
+      if (hoursRaw === "" || minutesRaw === "") {
+        setStatus($("time-status"), "Enter hours and minutes. Use 0 and 0 if you worked no hours.", "error");
+        return;
+      }
+      const hours = Number(hoursRaw);
+      const minutes = Number(minutesRaw);
+      if (!Number.isInteger(hours) || !Number.isInteger(minutes)) {
+        setStatus($("time-status"), "Hours and minutes must be whole numbers.", "error");
+        return;
+      }
+      setStatus($("time-status"), "Saving…");
+      try {
+        const me = await api("/hr/time/me");
+        const saved = await api("/hr/time/entries", {
+          method: "POST",
+          json: { week_ending: me.week.week_ending, hours, minutes },
+        });
+        await openTime();
+        setStatus($("time-status"), `Saved. Payable ${saved.rounded_display} (${saved.decimal_hours}).`, "ok");
+      } catch (e) {
+        setStatus($("time-status"), errText(e), "error");
+      }
+    }
+
+    async function openTimeAdmin(week) {
+      show("time-admin-panel");
+      const ending = week || "";
+      window.history.replaceState({}, "", ending ? `/#time-admin?week=${ending}` : "/#time-admin");
+      setStatus($("time-admin-status"), "Loading…");
+      try {
+        let chosen = ending;
+        if (!chosen) {
+          const me = await api("/hr/time/me");
+          chosen = me.week.week_ending;
+        }
+        $("time-admin-week").value = chosen;
+        await loadTimeAdmin(chosen);
+      } catch (e) {
+        setStatus($("time-admin-status"), errText(e), "error");
+      }
+    }
+
+    async function loadTimeAdmin(ending) {
+      const data = await api(`/hr/time/week?week_ending=${encodeURIComponent(ending)}`);
+      window.history.replaceState({}, "", `/#time-admin?week=${ending}`);
+      $("time-admin-meta").textContent = `${data.label}. Deadline ${data.deadline_label}. ${data.locked ? "Locked." : "Open."} Summary recipient ${data.summary_recipient}. Missing is not zero.`;
+      const root = $("time-admin-rows");
+      root.innerHTML = "";
+      (data.rows || []).forEach((row) => {
+        const wrap = document.createElement("div");
+        wrap.className = "due-row";
+        const title = document.createElement("div");
+        title.className = "due-title";
+        title.style.flex = "1";
+        title.textContent = row.status === "missing"
+          ? `${row.display_name} — missing`
+          : `${row.display_name} — raw ${row.raw_display}, payable ${row.rounded_display} (${row.decimal_hours})`;
+        wrap.appendChild(title);
+        if (data.can_correct) {
+          const hours = document.createElement("input");
+          hours.type = "number";
+          hours.min = "0";
+          hours.max = "168";
+          hours.step = "1";
+          hours.placeholder = "Hours";
+          hours.className = "time-mini";
+          hours.value = row.status === "submitted" ? String(Math.floor(row.raw_minutes / 60)) : "";
+          const minutes = document.createElement("input");
+          minutes.type = "number";
+          minutes.min = "0";
+          minutes.max = "59";
+          minutes.step = "1";
+          minutes.placeholder = "Min";
+          minutes.className = "time-mini";
+          minutes.value = row.status === "submitted" ? String(row.raw_minutes % 60) : "";
+          const btn = document.createElement("button");
+          btn.type = "button";
+          btn.className = "primary";
+          btn.textContent = row.status === "submitted" ? "Correct" : "Enter missing";
+          btn.onclick = async () => {
+            if (hours.value.trim() === "" || minutes.value.trim() === "") {
+              setStatus($("time-admin-status"), "Enter hours and minutes. Use 0 and 0 for an explicit zero.", "error");
+              return;
+            }
+            try {
+              if (row.submission_id) {
+                await api(`/hr/time/entries/${row.submission_id}`, {
+                  method: "PATCH",
+                  json: { hours: Number(hours.value), minutes: Number(minutes.value) },
+                });
+              } else {
+                await api("/hr/time/entries", {
+                  method: "POST",
+                  json: {
+                    week_ending: ending,
+                    hours: Number(hours.value),
+                    minutes: Number(minutes.value),
+                    for_email: row.email,
+                  },
+                });
+              }
+              setStatus($("time-admin-status"), "Saved. No extra email is sent for this correction.", "ok");
+              await loadTimeAdmin(ending);
+            } catch (e) {
+              setStatus($("time-admin-status"), errText(e), "error");
+            }
+          };
+          wrap.appendChild(hours);
+          wrap.appendChild(minutes);
+          wrap.appendChild(btn);
+        }
+        root.appendChild(wrap);
+      });
+      const audit = $("time-admin-audit");
+      audit.innerHTML = "";
+      if (!(data.audits || []).length) {
+        const empty = document.createElement("p");
+        empty.className = "meta";
+        empty.textContent = "No edits yet.";
+        audit.appendChild(empty);
+      }
+      (data.audits || []).forEach((item) => {
+        const line = document.createElement("div");
+        line.className = "due-row";
+        const text = document.createElement("span");
+        text.className = "due-title";
+        const before = item.before_minutes === null || item.before_minutes === undefined ? "none" : String(item.before_minutes);
+        text.textContent = `${item.at} ${item.actor_email} ${item.employee_name}: ${before} → ${item.after_minutes} minutes${item.late ? " (after cutoff)" : ""}`;
+        line.appendChild(text);
+        audit.appendChild(line);
+      });
+      setStatus(
+        $("time-admin-status"),
+        data.can_correct ? "You can correct this week." : "View only. After cutoff, only Melissa can change hours.",
+        "ok",
+      );
+    }
+
+    async function downloadTimeCsv() {
+      const ending = $("time-admin-week").value;
+      if (!ending) return;
+      try {
+        const headers = {};
+        if (state.token) headers.Authorization = `Bearer ${state.token}`;
+        const res = await fetch(`/hr/time/week.csv?week_ending=${encodeURIComponent(ending)}`, {
+          headers,
+          credentials: "include",
+        });
+        if (!res.ok) {
+          setStatus($("time-admin-status"), "Could not download the CSV.", "error");
+          return;
+        }
+        const blob = await res.blob();
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = `weekly-hours-${ending}.csv`;
+        link.click();
+        URL.revokeObjectURL(url);
+      } catch (e) {
+        setStatus($("time-admin-status"), errText(e), "error");
+      }
+    }
+
+    function settingsPayload() {
+      const emails = [];
+      document.querySelectorAll("#time-roster input[type=checkbox]:checked").forEach((box) => {
+        if (box.dataset.email) emails.push(box.dataset.email);
+      });
+      const trimTime = (value) => (value || "").slice(0, 5);
+      return {
+        participant_emails: emails,
+        reminder_first_weekday: Number($("time-rem1-day").value),
+        reminder_first_time: trimTime($("time-rem1-time").value),
+        reminder_due_weekday: Number($("time-rem2-day").value),
+        reminder_due_time: trimTime($("time-rem2-time").value),
+        summary_weekday: Number($("time-lock-day").value),
+        summary_time: trimTime($("time-lock-time").value),
+        summary_recipient: $("time-summary-to").value.trim(),
+      };
+    }
+
+    function renderTimeSettings(data) {
+      $("time-settings-note").textContent = `${data.schedule_note || ""} ${data.hours_cap_note || ""}`.trim();
+      $("time-settings-corrector").textContent = data.corrector_note || "";
+      $("time-rem1-subject").textContent = `Message: ${data.reminder_first_subject}. Keep this on the day before cutoff; the text says due tomorrow.`;
+      $("time-rem2-subject").textContent = `Message: ${data.reminder_due_subject}. Keep this on cutoff day, before the cutoff.`;
+      $("time-rem1-day").value = String(data.reminder_first_weekday);
+      $("time-rem1-time").value = data.reminder_first_time;
+      $("time-rem2-day").value = String(data.reminder_due_weekday);
+      $("time-rem2-time").value = data.reminder_due_time;
+      $("time-lock-day").value = String(data.summary_weekday);
+      $("time-lock-time").value = data.summary_time;
+      $("time-summary-to").value = data.summary_recipient || "";
+      const roster = $("time-roster");
+      roster.innerHTML = "";
+      (data.roster || []).forEach((person) => {
+        const row = document.createElement("label");
+        row.className = "check-row";
+        const box = document.createElement("input");
+        box.type = "checkbox";
+        box.disabled = !person.selectable;
+        box.checked = !!person.selected;
+        box.dataset.email = person.email || "";
+        const text = document.createElement("span");
+        text.textContent = person.selectable
+          ? `${person.display_name} (${person.email})`
+          : `${person.display_name} — no email on the roster, so they cannot be selected`;
+        row.appendChild(box);
+        row.appendChild(text);
+        roster.appendChild(row);
+      });
+      if (!(data.roster || []).length) {
+        const empty = document.createElement("p");
+        empty.className = "meta";
+        empty.textContent = "The practice roster is empty. Import people from Workspace first. Only people with an email can be selected.";
+        roster.appendChild(empty);
+      }
+      const warnings = $("time-settings-warnings");
+      warnings.innerHTML = "";
+      (data.schedule_warnings || []).forEach((warning) => {
+        const note = document.createElement("p");
+        note.className = "warn";
+        note.textContent = warning;
+        warnings.appendChild(note);
+      });
+      const delivery = data.delivery || {};
+      const mode = document.createElement("p");
+      mode.className = "meta";
+      mode.textContent = delivery.sends_mail
+        ? `Mail mode is gmail${delivery.sender ? ` as ${delivery.sender}` : ""}. Cron secret ${delivery.cron_secret_set ? "is set" : "is not set"}.`
+        : "Mail is off. Nothing is sent until TIME_MAIL_MODE=gmail and the tick secret are configured.";
+      warnings.appendChild(mode);
+    }
+
+    async function openTimeSettings() {
+      show("time-settings-panel");
+      window.history.replaceState({}, "", "/#time-settings");
+      ["time-rem1-day", "time-rem2-day", "time-lock-day"].forEach((id) => fillWeekdaySelect($(id)));
+      setStatus($("time-settings-status"), "Loading…");
+      try {
+        const data = await api("/hr/time/settings");
+        renderTimeSettings(data);
+        setStatus($("time-settings-status"), data.saved ? "Settings saved for this practice." : "Not saved yet. Choose staff and save.", "ok");
+      } catch (e) {
+        setStatus($("time-settings-status"), errText(e), "error");
+      }
+    }
+
+    async function saveTimeSettings() {
+      setStatus($("time-settings-status"), "Saving…");
+      try {
+        const data = await api("/hr/time/settings", { method: "PUT", json: settingsPayload() });
+        renderTimeSettings(data);
+        const locked = data.current_week && data.current_week.locked;
+        setStatus($("time-settings-status"), locked ? "Saved. The current week is already locked." : "Saved.", "ok");
+      } catch (e) {
+        setStatus($("time-settings-status"), errText(e), "error");
+      }
+    }
+
+    async function previewTimeSummary() {
+      try {
+        const me = await api("/hr/time/me");
+        const data = await api(`/hr/time/settings/preview?week_ending=${encodeURIComponent(me.week.week_ending)}`, { method: "POST" });
+        const pre = $("time-settings-preview");
+        pre.classList.remove("hidden");
+        pre.textContent = `Not sent.\nTo: ${data.recipient}\nSubject: ${data.subject}\n\n${data.body}\n\n${data.csv}`;
+        setStatus($("time-settings-status"), "Preview only — no email was sent.", "ok");
+      } catch (e) {
+        setStatus($("time-settings-status"), errText(e), "error");
+      }
+    }
+
+    async function previewTimeReminders() {
+      try {
+        const me = await api("/hr/time/me");
+        const week = me.week.week_ending;
+        const first = await api("/hr/time/settings/test-reminder", {
+          method: "POST",
+          json: { slot: "first", week_ending: week },
+        });
+        const due = await api("/hr/time/settings/test-reminder", {
+          method: "POST",
+          json: { slot: "due", week_ending: week },
+        });
+        const lines = ["Not sent."];
+        (first.messages || []).forEach((item) => {
+          lines.push("", `--- ${item.to} / ${item.subject}`, item.body);
+        });
+        (due.messages || []).forEach((item) => {
+          lines.push("", `--- ${item.to} / ${item.subject}`, item.body);
+        });
+        if (!(first.messages || []).length && !(due.messages || []).length) {
+          lines.push("", "No selected staff for this week.");
+        }
+        const pre = $("time-settings-preview");
+        pre.classList.remove("hidden");
+        pre.textContent = lines.join("\n");
+        setStatus($("time-settings-status"), "Reminder preview only — no email was sent.", "ok");
+      } catch (e) {
+        setStatus($("time-settings-status"), errText(e), "error");
+      }
+    }
+
     function directoryBannerMessage() {
       const params = new URLSearchParams(window.location.search);
       if (params.get("directory") === "connected") {
@@ -940,6 +1441,10 @@
         const wantIntake = hash === "#intake";
         const wantElig = hash === "#eligibility";
         const wantOnboarding = hash === "#onboarding";
+        const timeRoute = hashRoute();
+        const wantTime = timeRoute.path === "time";
+        const wantTimeAdmin = timeRoute.path === "time-admin";
+        const wantTimeSettings = timeRoute.path === "time-settings";
         if (window.location.search.includes("auth_error=") || window.location.search.includes("directory")) {
           window.history.replaceState({}, "", wantSupervision ? "/#supervision" : "/");
         }
@@ -964,6 +1469,12 @@
           await openEligibility();
         } else if (wantOnboarding) {
           await openOnboarding();
+        } else if (wantTime) {
+          await openTime();
+        } else if (wantTimeAdmin) {
+          await openTimeAdmin(timeRoute.params.get("week") || "");
+        } else if (wantTimeSettings) {
+          await openTimeSettings();
         } else {
           await enterHome();
         }
@@ -974,7 +1485,7 @@
     }
 
     function show(panel) {
-      ["auth-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel"].forEach((id) => {
+      ["auth-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel", "time-panel", "time-admin-panel", "time-settings-panel"].forEach((id) => {
         $(id).classList.toggle("hidden", id !== panel);
       });
     }
@@ -1010,6 +1521,9 @@
       if (href.includes("intake")) return openIntake();
       if (href.includes("eligibility")) return openEligibility();
       if (href.includes("onboarding")) return openOnboarding();
+      if (href.includes("time-settings")) return openTimeSettings();
+      if (href.includes("time-admin")) return openTimeAdmin();
+      if (href.includes("#time")) return openTime();
       window.location.href = href;
     }
 
@@ -2101,6 +2615,39 @@
     if (btnEligHome) btnEligHome.onclick = () => enterHome();
     const btnOnboardingHome = $("btn-onboarding-home");
     if (btnOnboardingHome) btnOnboardingHome.onclick = () => enterHome();
+    const btnTimeHome = $("btn-time-home");
+    if (btnTimeHome) btnTimeHome.onclick = () => enterHome();
+    const btnTimeSave = $("btn-time-save");
+    if (btnTimeSave) btnTimeSave.onclick = () => { saveTimeEntry(); };
+    const btnTimeAdminHome = $("btn-time-admin-home");
+    if (btnTimeAdminHome) btnTimeAdminHome.onclick = () => enterHome();
+    const btnTimeAdminEntry = $("btn-time-admin-entry");
+    if (btnTimeAdminEntry) btnTimeAdminEntry.onclick = () => { openTime(); };
+    const btnTimeAdminSettings = $("btn-time-admin-settings");
+    if (btnTimeAdminSettings) btnTimeAdminSettings.onclick = () => { openTimeSettings(); };
+    const btnTimeAdminLoad = $("btn-time-admin-load");
+    if (btnTimeAdminLoad) {
+      btnTimeAdminLoad.onclick = () => {
+        const ending = $("time-admin-week").value;
+        if (!ending) return;
+        const day = new Date(`${ending}T00:00:00`);
+        if (day.getDay() !== 5) {
+          setStatus($("time-admin-status"), "Pick the Friday that ends the pay week.", "error");
+          return;
+        }
+        loadTimeAdmin(ending).catch((e) => setStatus($("time-admin-status"), errText(e), "error"));
+      };
+    }
+    const btnTimeAdminCsv = $("btn-time-admin-csv");
+    if (btnTimeAdminCsv) btnTimeAdminCsv.onclick = () => { downloadTimeCsv(); };
+    const btnTimeSettingsHome = $("btn-time-settings-home");
+    if (btnTimeSettingsHome) btnTimeSettingsHome.onclick = () => enterHome();
+    const btnTimeSettingsSave = $("btn-time-settings-save");
+    if (btnTimeSettingsSave) btnTimeSettingsSave.onclick = () => { saveTimeSettings(); };
+    const btnTimePreview = $("btn-time-preview");
+    if (btnTimePreview) btnTimePreview.onclick = () => { previewTimeSummary(); };
+    const btnTimeTestReminder = $("btn-time-test-reminder");
+    if (btnTimeTestReminder) btnTimeTestReminder.onclick = () => { previewTimeReminders(); };
     const btnObCreate = $("btn-ob-create");
     if (btnObCreate) {
       btnObCreate.onclick = async () => {

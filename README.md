@@ -92,6 +92,14 @@ python -c "from pathlib import Path; import httpx, json; t=Path('sample_supervis
 | `ATTUNE_CLINICIAN_PERSISTENCE` | `memory` | `memory` \| `file` — encrypted voice enrollments + Workspace roster on disk |
 | `ATTUNE_CLINICIAN_DATA_PATH` | `.attune_data/clinicians.enc` | Path when clinician persistence is `file` |
 | `ATTUNE_JWT_SECRET` | *(ephemeral in mock)* | HS256 secret. **Required in real.** |
+| `ATTUNE_HR_TIME_PERSISTENCE` | `memory` | `memory` \| `file` — encrypted weekly-hours store |
+| `ATTUNE_HR_TIME_DATA_PATH` | `.attune_data/hr_time.enc` | Path when weekly-hours persistence is `file` (use `/data/...` on Fly) |
+| `TIME_MAIL_MODE` | `off` | `off` sends nothing. `gmail` sends reminders and the Friday summary |
+| `TIME_MAIL_SENDER` | *(unset)* | Workspace user the mail sender impersonates. Required only for `gmail` |
+| `GOOGLE_SA_JSON` | *(unset)* | Service-account JSON path or inline JSON. Required only for `gmail`. Never commit it |
+| `CRON_SECRET` | *(unset)* | Bearer secret for `POST /internal/time/tick`. Required only to enable the scheduler |
+
+Weekly hours (who submits, Melissa-only corrections, rounding, and how to turn mail on) are specified in [`docs/modules/ops6-weekly-hours.md`](docs/modules/ops6-weekly-hours.md). Mail stays off until `TIME_MAIL_MODE=gmail`. Preview in the app never sends.
 
 Fake users (dev only, `ATTUNE_AUTH=dev`): `alice` / `alice-pass` → `practice-a`; `bob` / `bob-pass` → `practice-b`.
 

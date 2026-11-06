@@ -1,0 +1,15 @@
+# Weekly-hours tick. Deploy only when you mean to schedule mail.
+# Do not put CRON_SECRET or any other secret in this file.
+# One-minute cron: confirm the Workers plan allows it. This repo does not
+# promise free-tier cron or delivery. See docs/modules/ops6-weekly-hours.md.
+
+name = "clynotion-time-tick"
+main = "src/index.js"
+compatibility_date = "2026-11-06"
+
+[triggers]
+crons = ["* * * * *"]
+
+[vars]
+# Public URL only. Override in the dashboard if the host differs.
+CLYNOTION_TICK_URL = "https://clynotion.com/internal/time/tick"

@@ -147,9 +147,12 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
         "name": "Time entry",
         "unit": "hr",
         "kind": "tool",
-        "status": "planned",
-        "href": "",
-        "description": "Non-session hours logged when worked.",
+        "status": "live",
+        "href": "/#time",
+        "description": (
+            "Hourly staff enter one Saturday–Friday total. Payable time rounds up "
+            "to 15 minutes. Not a punch clock, and not client time."
+        ),
         "legacy_ids": ["OPS-6"],
         "authorities": _auth("FLSA — accurate hours worked for non-exempt employees"),
     },

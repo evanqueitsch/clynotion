@@ -529,3 +529,12 @@ def legacy_attune_home(user: CurrentUser) -> HomeOut:
 @legacy.get("/practice", response_model=PracticeOut)
 def legacy_attune_practice(user: CurrentUser) -> PracticeOut:
     return current_practice(user)
+
+
+def _mount_time_routes() -> None:
+    from app.hr.time_routes import router as time_router
+
+    router.include_router(time_router)
+
+
+_mount_time_routes()
