@@ -18,6 +18,66 @@ jobs:
 
       - uses: superfly/flyctl-actions/setup-flyctl@master
 
+      - name: Redacted summary-send lines
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set +e
+          flyctl logs -a clynotion --no-tail 2>&1 \
+            | sed -E 's/([?&](code|state|access_token|refresh_token|id_token|token)=)[^&" ]+/\1REDACTED/g; s/ya29\.[A-Za-z0-9._-]+/REDACTED_TOKEN/g' \
+            | awk '/self_test_send|self-test\/send|TypeError|Traceback|mailer_exception|gmail_mime|gmail_uncertain/ { print }' \
+            | tail -n 80
+          B64=$(python3 - <<'PY'
+          import base64
+          script = r'''
+          import json, os, sys
+          os.chdir("/app")
+          sys.path.insert(0, "/app")
+          from pathlib import Path
+          for proc in Path("/proc").iterdir():
+              if not proc.name.isdigit():
+                  continue
+              try:
+                  cmd = (proc / "cmdline").read_bytes().replace(b"\x00", b" ").decode(errors="replace")
+              except OSError:
+                  continue
+              if "uvicorn" not in cmd:
+                  continue
+              for item in (proc / "environ").read_bytes().split(b"\x00"):
+                  if b"=" not in item:
+                      continue
+                  key, value = item.split(b"=", 1)
+                  os.environ[key.decode(errors="replace")] = value.decode(errors="replace")
+              break
+          import base64 as b64
+          from app.crypto import decrypt_utf8
+          path = os.environ.get("ATTUNE_HR_TIME_DATA_PATH", "")
+          out = {"claims": []}
+          try:
+              wrapper = json.loads(Path(path).read_text(encoding="utf-8"))
+              data = json.loads(decrypt_utf8(b64.b64decode(str(wrapper.get("blob") or ""))))
+              for item in data.get("self_tests") or []:
+                  kinds = {}
+                  for kind, slot in (item.get("sends") or {}).items():
+                      if not isinstance(slot, dict):
+                          continue
+                      kinds[str(kind)] = {
+                          "status": slot.get("status") or "",
+                          "last_error": slot.get("last_error") or "",
+                          "has_gmail_id": bool(slot.get("gmail_message_id")),
+                          "at": slot.get("sent_at") or slot.get("at") or "",
+                      }
+                  out["claims"].append(kinds)
+          except Exception as exc:
+              out["read"] = type(exc).__name__
+          print(json.dumps(out))
+          '''
+          print(base64.b64encode(script.encode()).decode())
+          PY
+          )
+          timeout 40 flyctl ssh console -a clynotion -C "python -c \"import base64; exec(base64.b64decode('${B64}'))\"" < /dev/null
+          exit 0
+
       - name: Ensure attune_data volume in iad
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
