@@ -699,8 +699,14 @@
       <p class="meta" id="time-enabled-summary"></p>
       <p class="meta" id="time-settings-note"></p>
       <p class="warn" id="time-settings-corrector"></p>
+      <span class="section-label">Google Workspace staff</span>
+      <p class="meta" id="time-directory-status"></p>
+      <div class="row">
+        <button class="ghost" id="btn-time-directory-refresh" type="button">Refresh from Google Workspace</button>
+        <button class="ghost" id="btn-time-self-test" type="button">Test weekly hours</button>
+      </div>
       <span class="section-label">Who may enter hours</span>
-      <p class="meta">Unchecked people are not enabled. Nothing is turned on until you save a selection. You can enable yourself.</p>
+      <p class="meta">Unchecked people are not enabled. A directory account is not an admin and is not enabled until you save it. You can enable yourself.</p>
       <div id="time-roster"></div>
       <label for="time-rem1-day">First reminder day</label>
       <select id="time-rem1-day"></select>
@@ -727,6 +733,29 @@
       <p class="meta">Preview and the reminder check render the message only. They do not send email.</p>
       <pre class="note hidden" id="time-settings-preview"></pre>
       <p class="status" id="time-settings-status"></p>
+    </section>
+
+    <section id="time-self-test-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">Test weekly hours</h2>
+        <button class="ghost" id="btn-time-self-test-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <p class="warn" id="time-self-test-banner"></p>
+      <p class="meta" id="time-self-test-mail"></p>
+      <span class="section-label">1. Thursday preview</span>
+      <pre class="note" id="time-self-test-thursday"></pre>
+      <span class="section-label">2. Friday preview</span>
+      <pre class="note" id="time-self-test-friday"></pre>
+      <span class="section-label">3. Your test hours</span>
+      <p class="meta">Enter these yourself. The form does not fill hours in, and saving here does not write the payroll week.</p>
+      <label for="time-self-test-hours">Hours</label>
+      <input id="time-self-test-hours" type="number" min="0" max="168" step="1" />
+      <label for="time-self-test-minutes">Minutes (0–59)</label>
+      <input id="time-self-test-minutes" type="number" min="0" max="59" step="1" />
+      <button class="primary" id="btn-time-self-test-save" type="button">Save test hours</button>
+      <span class="section-label">4. Summary preview for Melissa</span>
+      <pre class="note" id="time-self-test-summary"></pre>
+      <p class="status" id="time-self-test-status"></p>
     </section>
 
     <section id="capture-panel" class="panel hidden">
@@ -1291,6 +1320,25 @@
       const delivery = data.delivery || {};
       const enabled = (data.roster || []).filter((person) => person.selected).map((person) => person.display_name);
       const disabled = (data.roster || []).filter((person) => person.selectable && !person.selected).map((person) => person.display_name);
+      const directory = data.directory || {};
+      const directoryStatus = $("time-directory-status");
+      if (directoryStatus) {
+        const skipped = directory.skipped || {};
+        const skippedText = Object.keys(skipped).length
+          ? ` Skipped ${Object.entries(skipped).map(([key, count]) => `${count} ${key}`).join(", ")}.`
+          : "";
+        if (!directory.connected && directory.mode === "live") {
+          directoryStatus.textContent = "Google Workspace directory is not connected for this practice. Connect it as a Workspace admin before this list can be the full staff list. A directory account is not an admin.";
+        } else if (directory.status === "never") {
+          directoryStatus.textContent = "Google Workspace has not been refreshed yet. The names below are not a complete staff list.";
+        } else if (!directory.complete || directory.status === "error") {
+          directoryStatus.textContent = `The last directory refresh did not finish (${directory.error_code || "error"}). The list below is the previous complete read from ${directory.last_complete_at || "never"}, not a new complete list.${skippedText}`;
+        } else {
+          directoryStatus.textContent = `Directory list is complete for ${directory.domain || "the allowed domain"} as of ${directory.last_complete_at}. ${directory.listed} people, ${directory.pages} page(s).${skippedText} Being listed does not enable hours.`;
+        }
+      }
+      const selfTestBtn = $("btn-time-self-test");
+      if (selfTestBtn) selfTestBtn.classList.toggle("hidden", !data.can_self_test);
       $("time-settings-mail").textContent = delivery.sends_mail
         ? "Mail is on. This testing deploy is supposed to keep mail off."
         : "Mail is off. No reminders or summaries are sent, and no scheduler is calling the mailer.";
@@ -1319,8 +1367,13 @@
         box.checked = !!person.selected;
         box.dataset.email = person.email || "";
         const text = document.createElement("span");
+        const sourceNote = person.source === "kept_selection"
+          ? " — still enabled, not in the latest directory list"
+          : person.source === "roster_until_directory_refresh"
+            ? " — roster only until Workspace is refreshed"
+            : "";
         text.textContent = person.selectable
-          ? `${person.selected ? "Enabled" : "Not enabled"} — ${person.display_name} (${person.email})`
+          ? `${person.selected ? "Enabled" : "Not enabled"} — ${person.display_name} (${person.email})${sourceNote}`
           : `${person.display_name} — no email on the roster, so they cannot be selected`;
         row.appendChild(box);
         row.appendChild(text);
@@ -1340,6 +1393,72 @@
         note.textContent = warning;
         warnings.appendChild(note);
       });
+    }
+
+    function renderSelfTest(data) {
+      $("time-self-test-banner").textContent = data.banner || "";
+      $("time-self-test-mail").textContent = `${data.sender_note || ""} Thursday and Friday previews are addressed to ${data.email}. The summary preview is addressed to ${data.summary_recipient}. Sent: no.`;
+      const thursday = data.thursday || {};
+      const friday = data.friday || {};
+      $("time-self-test-thursday").textContent = `To: ${thursday.to}\nSubject: ${thursday.subject}\n\n${thursday.body}`;
+      $("time-self-test-friday").textContent = `To: ${friday.to}\nSubject: ${friday.subject}\n\n${friday.body}`;
+      if (data.entry) {
+        $("time-self-test-hours").value = String(data.entry.hours);
+        $("time-self-test-minutes").value = String(data.entry.minutes);
+      }
+      const summary = data.summary;
+      $("time-self-test-summary").textContent = summary
+        ? `To: ${summary.to}\nSubject: ${summary.subject}\n\n${summary.body}\n\n${summary.csv}`
+        : data.summary_note || "";
+    }
+
+    async function openTimeSelfTest() {
+      show("time-self-test-panel");
+      window.history.replaceState({}, "", "/#time-self-test");
+      setStatus($("time-self-test-status"), "Loading test previews…");
+      try {
+        const data = await api("/hr/time/self-test");
+        renderSelfTest(data);
+        setStatus($("time-self-test-status"), "Previews only. No email was sent.", "ok");
+      } catch (e) {
+        setStatus($("time-self-test-status"), errText(e), "error");
+      }
+    }
+
+    async function saveTimeSelfTest() {
+      const hoursRaw = $("time-self-test-hours").value.trim();
+      const minutesRaw = $("time-self-test-minutes").value.trim();
+      if (hoursRaw === "" || minutesRaw === "") {
+        setStatus($("time-self-test-status"), "Enter your own hours and minutes. This test does not invent them.", "error");
+        return;
+      }
+      setStatus($("time-self-test-status"), "Saving test hours…");
+      try {
+        const data = await api("/hr/time/self-test", {
+          method: "PUT",
+          json: { hours: Number(hoursRaw), minutes: Number(minutesRaw) },
+        });
+        renderSelfTest(data);
+        setStatus($("time-self-test-status"), "Test hours saved. Summary preview updated. No email was sent.", "ok");
+      } catch (e) {
+        setStatus($("time-self-test-status"), errText(e), "error");
+      }
+    }
+
+    async function refreshTimeDirectory() {
+      setStatus($("time-settings-status"), "Refreshing Google Workspace…");
+      try {
+        const data = await api("/hr/time/directory/refresh", { method: "POST" });
+        renderTimeSettings(data);
+        const directory = data.directory || {};
+        setStatus(
+          $("time-settings-status"),
+          directory.complete ? "Directory list refreshed. Nobody new was enabled." : `Directory refresh incomplete (${directory.error_code || "error"}). Previous list kept.`,
+          directory.complete ? "ok" : "error",
+        );
+      } catch (e) {
+        setStatus($("time-settings-status"), errText(e), "error");
+      }
     }
 
     async function openTimeSettings() {
@@ -1467,6 +1586,7 @@
         const wantTime = timeRoute.path === "time";
         const wantTimeAdmin = timeRoute.path === "time-admin";
         const wantTimeSettings = timeRoute.path === "time-settings";
+        const wantTimeSelfTest = timeRoute.path === "time-self-test";
         if (window.location.search.includes("auth_error=") || window.location.search.includes("directory")) {
           window.history.replaceState({}, "", wantSupervision ? "/#supervision" : "/");
         }
@@ -1497,6 +1617,8 @@
           await openTimeAdmin(timeRoute.params.get("week") || "");
         } else if (wantTimeSettings) {
           await openTimeSettings();
+        } else if (wantTimeSelfTest) {
+          await openTimeSelfTest();
         } else {
           await enterHome();
         }
@@ -1507,7 +1629,7 @@
     }
 
     function show(panel) {
-      ["auth-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel", "time-panel", "time-admin-panel", "time-settings-panel"].forEach((id) => {
+      ["auth-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel", "time-panel", "time-admin-panel", "time-settings-panel", "time-self-test-panel"].forEach((id) => {
         $(id).classList.toggle("hidden", id !== panel);
       });
     }
@@ -1543,6 +1665,7 @@
       if (href.includes("intake")) return openIntake();
       if (href.includes("eligibility")) return openEligibility();
       if (href.includes("onboarding")) return openOnboarding();
+      if (href.includes("time-self-test")) return openTimeSelfTest();
       if (href.includes("time-settings")) return openTimeSettings();
       if (href.includes("time-admin")) return openTimeAdmin();
       if (href.includes("#time")) return openTime();
@@ -2670,6 +2793,14 @@
     if (btnTimePreview) btnTimePreview.onclick = () => { previewTimeSummary(); };
     const btnTimeTestReminder = $("btn-time-test-reminder");
     if (btnTimeTestReminder) btnTimeTestReminder.onclick = () => { previewTimeReminders(); };
+    const btnTimeDirectory = $("btn-time-directory-refresh");
+    if (btnTimeDirectory) btnTimeDirectory.onclick = () => { refreshTimeDirectory(); };
+    const btnTimeSelfTest = $("btn-time-self-test");
+    if (btnTimeSelfTest) btnTimeSelfTest.onclick = () => { openTimeSelfTest(); };
+    const btnTimeSelfTestHome = $("btn-time-self-test-home");
+    if (btnTimeSelfTestHome) btnTimeSelfTestHome.onclick = () => enterHome();
+    const btnTimeSelfTestSave = $("btn-time-self-test-save");
+    if (btnTimeSelfTestSave) btnTimeSelfTestSave.onclick = () => { saveTimeSelfTest(); };
     const btnObCreate = $("btn-ob-create");
     if (btnObCreate) {
       btnObCreate.onclick = async () => {

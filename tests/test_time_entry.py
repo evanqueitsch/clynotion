@@ -809,6 +809,100 @@ def test_nav_enables_only_selected_people(client: TestClient) -> None:
     assert melissa_tile["href"] == "/#time-settings"
 
 
+def test_directory_refresh_preserves_selection_and_does_not_grant_admin(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _roster()
+    set_clock(WED)
+    _save_settings(client, participant_emails=["jordan@heart4change.org"])
+    saved = _enter(client, _jordan(), 4, 0)
+    assert saved.status_code == 200, saved.text
+    monkeypatch.setenv("ATTUNE_WORKSPACE_DIRECTORY", "mock")
+    monkeypatch.setenv("GOOGLE_ALLOWED_DOMAINS", "example.com")
+    refreshed = client.post("/hr/time/directory/refresh", headers=_alice())
+    assert refreshed.status_code == 200, refreshed.text
+    body = refreshed.json()
+    assert body["directory"]["complete"] is True
+    assert body["directory"]["status"] == "ok"
+    assert "jordan@heart4change.org" in body["participant_emails"]
+    selected = {row["email"] for row in body["roster"] if row["selected"]}
+    assert selected == {"jordan@heart4change.org"}
+    directory_emails = {row["email"] for row in body["roster"] if row["source"] == "directory"}
+    assert "jamie.clinician@example.com" in directory_emails
+    assert "jamie.clinician@example.com" not in selected
+    again = client.post("/hr/time/directory/refresh", headers=_alice()).json()
+    assert again["directory"]["listed"] == body["directory"]["listed"]
+    assert again["participant_emails"] == body["participant_emails"]
+    week = client.get(f"/hr/time/week?week_ending={WEEK}", headers=_alice()).json()
+    jordan = next(row for row in week["rows"] if row["email"] == "jordan@heart4change.org")
+    assert jordan["raw_minutes"] == 240
+    stranger = _named(
+        "user-stranger",
+        "Alex Supervisor",
+        "practice-a",
+        "alex.supervisor@example.com",
+    )
+    assert client.get("/hr/time/settings", headers=_auth(stranger)).status_code == 403
+
+
+def test_self_test_is_isolated_from_payroll_and_ignores_cutoff(
+    client: TestClient,
+) -> None:
+    from app.hr.time_mail import RecordingMailer, set_mailer_for_tests
+
+    _roster()
+    alice = user_store._users["alice"][1]
+    dana = clinician_store.get("practice-a", "clin-a-dana")
+    assert dana is not None
+    dana.email = "alice@example.com"
+    dana.display_name = "Alice Example"
+    set_clock(WED)
+    _save_settings(client, participant_emails=["alice@example.com", "jordan@heart4change.org"])
+    mailer = RecordingMailer(lambda _message: (_ for _ in ()).throw(AssertionError("send")))
+    set_mailer_for_tests(mailer)
+    set_clock(FRI_1130)
+    blocked = _enter(client, alice, 1, 0)
+    assert blocked.status_code == 403
+    denied = client.get("/hr/time/self-test", headers=_auth(_jordan()))
+    assert denied.status_code == 403
+    bob = user_store._users["bob"][1]
+    assert client.get("/hr/time/self-test", headers=_auth(bob)).status_code == 403
+    preview = client.get("/hr/time/self-test", headers=_auth(alice))
+    assert preview.status_code == 200, preview.text
+    opened = preview.json()
+    assert opened["sent"] is False
+    assert opened["thursday"]["to"] == "alice@example.com"
+    assert opened["thursday"]["subject"].startswith("[TEST] ")
+    assert opened["friday"]["subject"].startswith("[TEST] ")
+    assert opened["friday"]["to"] == "alice@example.com"
+    assert opened["summary"] is None
+    assert opened["summary_recipient"] == "msmith@heart4change.org"
+    saved = client.put(
+        "/hr/time/self-test",
+        headers=_auth(alice),
+        json={"hours": 5, "minutes": 1},
+    )
+    assert saved.status_code == 200, saved.text
+    body = saved.json()
+    assert body["sent"] is False
+    assert body["entry"]["raw_minutes"] == 301
+    assert body["entry"]["decimal_hours"] == "5.25"
+    assert body["friday"]["body"]
+    assert body["summary"]["to"] == "msmith@heart4change.org"
+    assert body["summary"]["sent"] is False
+    assert "Alice Example" in body["summary"]["body"]
+    assert "Jordan" not in body["summary"]["body"]
+    week = client.get(f"/hr/time/week?week_ending={WEEK}", headers=_alice()).json()
+    emails = {row["email"]: row for row in week["rows"]}
+    assert emails["alice@example.com"]["status"] == "missing"
+    assert emails["alice@example.com"]["raw_minutes"] is None
+    assert client.patch(
+        "/hr/time/entries/does-not-exist",
+        headers=_auth(alice),
+        json={"hours": 2, "minutes": 0},
+    ).status_code == 404
+
+
 def test_open_week_uses_live_roster_until_cutoff(client: TestClient) -> None:
     _roster()
     set_clock(WED)

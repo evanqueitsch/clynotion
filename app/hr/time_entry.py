@@ -40,6 +40,12 @@ DEFAULT_PATH = ".attune_data/hr_time.enc"
 
 MELISSA_EMAIL = "msmith@heart4change.org"
 TIME_ENTRY_URL = "https://clynotion.com/#time"
+TIME_SELF_TEST_URL = "https://clynotion.com/#time-self-test"
+SELF_TEST_BANNER = (
+    "THIS IS A SELF-TEST for your signed-in account only. "
+    "It is not a payroll submission, it does not change who is enabled, "
+    "and it does not change the practice cutoff. Nothing on this page is emailed."
+)
 CATEGORY_TOTAL = "total"
 KNOWN_CATEGORIES: dict[str, str] = {CATEGORY_TOTAL: "Weekly total"}
 
@@ -570,7 +576,9 @@ class TimeStore:
             if saved is not None:
                 self._apply_scope_locks(user.practice_id, saved, moment)
                 self._flush_if_dirty()
-            return self._settings_public(settings, moment, saved=saved is not None)
+            payload = self._settings_public(settings, moment, saved=saved is not None)
+            payload["can_self_test"] = self._is_self_tester(user)
+            return payload
 
     def save_settings(self, user: User, patch: dict[str, Any], now: Optional[datetime] = None) -> dict[str, Any]:
         self._require_manager(user)
@@ -586,7 +594,9 @@ class TimeStore:
             self._dirty = True
             self._apply_scope_locks(user.practice_id, updated, moment)
             self._flush_if_dirty()
-            return self._settings_public(updated, moment, saved=True)
+            payload = self._settings_public(updated, moment, saved=True)
+            payload["can_self_test"] = self._is_self_tester(user)
+            return payload
 
     def me_view(self, user: User, now: Optional[datetime] = None) -> dict[str, Any]:
         moment = now or utcnow()
@@ -611,6 +621,7 @@ class TimeStore:
                 "is_participant": participant,
                 "can_manage_settings": can_manage_time(user),
                 "can_correct_locked": is_melissa(user),
+                "can_self_test": self._is_self_tester(user),
                 "can_edit": self._can_write(user, email, week, moment, settings, state),
                 "helper_text": EXPECTED_FRIDAY_HOURS_TEXT,
                 "pay_week_note": "Pay week is Saturday through Friday and is paid that Friday. Times are America/New_York.",
@@ -776,6 +787,157 @@ class TimeStore:
             messages.append({"to": row["email"], "subject": subject, "body": body})
         return {"sent": False, "slot": slot, "messages": messages}
 
+    def _is_self_tester(self, user: User) -> bool:
+        """Enabled HR admin, own account only. Directory membership is not an admin grant."""
+        if not can_manage_time(user):
+            return False
+        email = _email(user.email)
+        settings = self._settings.get(user.practice_id)
+        if not email or settings is None:
+            return False
+        return any(row["email"] == email for row in self._active_participants(user.practice_id, settings))
+
+    def self_test_view(self, user: User, now: Optional[datetime] = None) -> dict[str, Any]:
+        moment = now or utcnow()
+        with self.exclusive():
+            self._require_self_tester(user)
+            return self._self_test_public(user, moment)
+
+    def save_self_test_hours(
+        self,
+        user: User,
+        *,
+        hours: int,
+        minutes: int,
+        now: Optional[datetime] = None,
+    ) -> dict[str, Any]:
+        """Store hours on the self-test only. Ignores the payroll-week cutoff."""
+        moment = now or utcnow()
+        raw = combine_hours_minutes(hours, minutes)
+        with self.exclusive():
+            self._require_self_tester(user)
+            email = _email(user.email)
+            display_name, _clinician_id = self._name_for_email(user.practice_id, email)
+            self._self_tests[(user.practice_id, user.user_id)] = {
+                "practice_id": user.practice_id,
+                "user_id": user.user_id,
+                "email": email,
+                "display_name": display_name or user.username or email,
+                "lines": total_line(raw),
+                "updated_at": _iso(moment),
+                "label": "self_test",
+            }
+            self._dirty = True
+            payload = self._self_test_public(user, moment)
+            self._flush_if_dirty()
+            return payload
+
+    def _require_self_tester(self, user: User) -> None:
+        if not self._is_self_tester(user):
+            raise TimeAuthzError(
+                "Test weekly hours is only for an HR admin who is enabled for time entry, and only for their own account."
+            )
+
+    def _self_test_public(self, user: User, now: datetime) -> dict[str, Any]:
+        from app.hr.time_mail import delivery_flags
+
+        email = _email(user.email)
+        settings = self._settings.get(user.practice_id) or default_settings(user.practice_id, now)
+        week = pay_week_ending(now)
+        state = self._weeks.get((user.practice_id, week.isoformat()))
+        header = self._week_header(settings, week, state)
+        deadline = _parse_iso(header["deadline"])
+        record = self._self_tests.get((user.practice_id, user.user_id))
+        display_name = email
+        lines: list[dict[str, Any]] = []
+        if record and _email(str(record.get("email") or "")) == email:
+            display_name = str(record.get("display_name") or email)
+            lines = list(record.get("lines") or [])
+        else:
+            record = None
+        thursday = _labelled_reminder("first", week, deadline)
+        friday = _labelled_reminder("due", week, deadline)
+        entry = None
+        summary = None
+        summary_note = "Enter your own hours in this test before the summary preview. Nothing is filled in for you."
+        if lines:
+            entry = self._entry_from_lines(
+                practice_id=user.practice_id,
+                week_ending=week.isoformat(),
+                email=email,
+                display_name=display_name,
+                lines=lines,
+                updated_at=str((record or {}).get("updated_at") or ""),
+            )
+            summary = _self_test_summary(entry, header)
+            summary_note = "Summary preview is for Melissa only. It was not sent."
+        flags = delivery_flags()
+        sender = str(flags.get("sender") or "")
+        return {
+            "label": "self_test",
+            "sent": False,
+            "banner": SELF_TEST_BANNER,
+            "email": email,
+            "display_name": display_name,
+            "mail_mode": flags.get("mail_mode") or "off",
+            "sender": sender,
+            "sender_note": (
+                f"Configured sender is {sender}."
+                if sender
+                else "No sender is configured. TIME_MAIL_MODE is off, so this page cannot send mail."
+            ),
+            "thursday": {
+                "to": email,
+                "subject": thursday[0],
+                "body": thursday[1],
+                "sent": False,
+            },
+            "friday": {
+                "to": email,
+                "subject": friday[0],
+                "body": friday[1],
+                "sent": False,
+                "note": "Shown even if you already entered test hours. The real Friday reminder still goes only to people who have not submitted.",
+            },
+            "entry": entry,
+            "summary": summary,
+            "summary_note": summary_note,
+            "summary_recipient": MELISSA_EMAIL,
+            "week": header,
+        }
+
+    def _entry_from_lines(
+        self,
+        *,
+        practice_id: str,
+        week_ending: str,
+        email: str,
+        display_name: str,
+        lines: list[dict[str, Any]],
+        updated_at: str,
+    ) -> dict[str, Any]:
+        normalized = normalize_lines(lines)
+        raw = line_minutes(normalized)
+        rounded = round_payable_minutes(raw)
+        hours, minutes = divmod(raw, 60)
+        return {
+            "submission_id": "",
+            "practice_id": practice_id,
+            "week_ending": week_ending,
+            "email": email,
+            "display_name": display_name,
+            "hours": hours,
+            "minutes": minutes,
+            "raw_minutes": raw,
+            "raw_display": clock_display(raw),
+            "rounded_minutes": rounded,
+            "rounded_display": clock_display(rounded),
+            "decimal_hours": decimal_hours(rounded),
+            "lines": normalized,
+            "updated_at": updated_at,
+            "label": "self_test",
+        }
+
     def apply_due_locks(self, now: Optional[datetime] = None) -> int:
         moment = now or utcnow()
         with self.exclusive():
@@ -836,6 +998,8 @@ class TimeStore:
         self._audits: list[dict[str, Any]] = []
         self._deliveries: dict[str, Delivery] = {}
         self._delivery_index: dict[tuple[str, str, str, str], str] = {}
+        self._directory: dict[str, dict[str, Any]] = {}
+        self._self_tests: dict[tuple[str, str], dict[str, Any]] = {}
         self._dirty = False
         self._memory_blob: Optional[bytes] = None
 
@@ -880,24 +1044,86 @@ class TimeStore:
         )
 
     def _validate_participants(self, practice_id: str, emails: list[str]) -> list[str]:
+        existing = set()
+        current = self._settings.get(practice_id)
+        if current is not None:
+            existing = set(current.participant_emails)
+        directory = self._directory_emails(practice_id)
         roster: dict[str, int] = {}
-        for clin in clinician_store.list_for_practice(practice_id):
-            email = _email(clin.email)
-            if email:
-                roster[email] = roster.get(email, 0) + 1
+        if directory is None:
+            for clin in clinician_store.list_for_practice(practice_id):
+                email = _email(clin.email)
+                if email:
+                    roster[email] = roster.get(email, 0) + 1
         cleaned: list[str] = []
         seen: set[str] = set()
         for raw in emails:
             email = _email(str(raw))
             if not email or email in seen:
                 continue
-            if email not in roster:
-                raise ValueError(f"{email} is not on this practice roster.")
-            if roster[email] > 1:
-                raise ValueError(f"The roster has more than one person with {email}.")
+            if email in existing:
+                seen.add(email)
+                cleaned.append(email)
+                continue
+            if directory is not None:
+                if email not in directory:
+                    raise ValueError(
+                        f"{email} is not in the latest complete Google Workspace directory list."
+                    )
+            else:
+                if email not in roster:
+                    raise ValueError(
+                        "Refresh Google Workspace before enabling someone who is not already saved. "
+                        f"{email} is not an existing selection."
+                    )
+                if roster[email] > 1:
+                    raise ValueError(f"The roster has more than one person with {email}.")
             seen.add(email)
             cleaned.append(email)
         return cleaned
+
+    def _directory_emails(self, practice_id: str) -> Optional[set[str]]:
+        snap = self._directory.get(practice_id) or {}
+        if not snap.get("last_complete_at"):
+            return None
+        return {_email(str(row.get("email") or "")) for row in snap.get("users") or [] if _email(str(row.get("email") or ""))}
+
+    def replace_directory_snapshot(
+        self,
+        practice_id: str,
+        users: list[dict[str, str]],
+        *,
+        complete: bool = True,
+    ) -> None:
+        """Test and refresh helper. Does not change who is enabled."""
+        deduped: list[dict[str, str]] = []
+        seen: set[str] = set()
+        for row in users:
+            email = _email(str(row.get("email") or ""))
+            if not email or email in seen:
+                continue
+            seen.add(email)
+            deduped.append(
+                {
+                    "email": email,
+                    "google_id": str(row.get("google_id") or ""),
+                    "display_name": str(row.get("display_name") or email),
+                }
+            )
+        deduped.sort(key=lambda item: (item["display_name"].casefold(), item["email"]))
+        self._directory[practice_id] = {
+            "practice_id": practice_id,
+            "status": "ok" if complete else "error",
+            "complete": complete,
+            "last_complete_at": _iso(utcnow()) if complete else "",
+            "last_attempt_at": _iso(utcnow()),
+            "error_code": "" if complete else "directory_incomplete",
+            "pages": 1,
+            "listed": len(deduped),
+            "skipped": {},
+            "users": deduped,
+        }
+        self._dirty = True
 
     def _settings_public(self, settings: TimeSettings, now: datetime, *, saved: bool) -> dict[str, Any]:
         from app.hr.time_mail import delivery_flags
@@ -926,7 +1152,8 @@ class TimeStore:
             "hours_cap_note": HOURS_CAP_NOTE,
             "helper_text": EXPECTED_FRIDAY_HOURS_TEXT,
             "current_week": self._week_header(settings, week, state),
-            "roster": _roster_options(settings.practice_id, set(settings.participant_emails)),
+            "roster": self._staff_choices(settings.practice_id, set(settings.participant_emails)),
+            "directory": self._directory_public(settings.practice_id),
             "delivery": delivery_flags(),
             "categories": [
                 {"id": key, "label": label} for key, label in KNOWN_CATEGORIES.items()
@@ -960,30 +1187,158 @@ class TimeStore:
         return True
 
     def _active_participants(self, practice_id: str, settings: TimeSettings) -> list[dict[str, str]]:
-        roster: dict[str, Any] = {}
-        dupes: set[str] = set()
-        for clin in clinician_store.list_for_practice(practice_id):
-            email = _email(clin.email)
-            if not email:
-                continue
-            if email in roster:
-                dupes.add(email)
-                continue
-            roster[email] = clin
         rows: list[dict[str, str]] = []
         for email in settings.participant_emails:
-            if email in dupes or email not in roster:
-                continue
-            clin = roster[email]
+            display_name, clinician_id = self._name_for_email(practice_id, email)
             rows.append(
                 {
                     "email": email,
-                    "display_name": clin.display_name,
-                    "clinician_id": clin.clinician_id,
+                    "display_name": display_name,
+                    "clinician_id": clinician_id,
                 }
             )
         rows.sort(key=lambda row: (row["display_name"].casefold(), row["email"]))
         return rows
+
+    def _name_for_email(self, practice_id: str, email: str) -> tuple[str, str]:
+        for row in (self._directory.get(practice_id) or {}).get("users") or []:
+            if _email(str(row.get("email") or "")) == email:
+                return str(row.get("display_name") or email), str(row.get("google_id") or "")
+        for clin in clinician_store.list_for_practice(practice_id):
+            if _email(clin.email) == email:
+                return clin.display_name, clin.clinician_id
+        return email, ""
+
+    def _staff_choices(self, practice_id: str, selected: set[str]) -> list[dict[str, Any]]:
+        """Directory people, plus already-enabled emails the last complete list no longer has."""
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        snap = self._directory.get(practice_id) or {}
+        if snap.get("last_complete_at"):
+            for person in snap.get("users") or []:
+                email = _email(str(person.get("email") or ""))
+                if not email or email in seen:
+                    continue
+                seen.add(email)
+                rows.append(
+                    {
+                        "email": email,
+                        "display_name": str(person.get("display_name") or email),
+                        "google_id": str(person.get("google_id") or ""),
+                        "clinician_id": "",
+                        "source": "directory",
+                        "selectable": True,
+                        "selected": email in selected,
+                    }
+                )
+        else:
+            for clin in clinician_store.list_for_practice(practice_id):
+                email = _email(clin.email)
+                if not email or email in seen:
+                    continue
+                seen.add(email)
+                rows.append(
+                    {
+                        "email": email,
+                        "display_name": clin.display_name,
+                        "google_id": clin.google_id,
+                        "clinician_id": clin.clinician_id,
+                        "source": "roster_until_directory_refresh",
+                        "selectable": True,
+                        "selected": email in selected,
+                    }
+                )
+        for email in sorted(selected):
+            if email in seen:
+                continue
+            display_name, clinician_id = self._name_for_email(practice_id, email)
+            rows.append(
+                {
+                    "email": email,
+                    "display_name": display_name,
+                    "google_id": "",
+                    "clinician_id": clinician_id,
+                    "source": "kept_selection",
+                    "selectable": True,
+                    "selected": True,
+                }
+            )
+        rows.sort(key=lambda row: (row["display_name"].casefold(), row["email"]))
+        return rows
+
+    def _directory_public(self, practice_id: str) -> dict[str, Any]:
+        from app.workspace_directory import DIRECTORY_SCOPE, directory_connection_status
+
+        snap = self._directory.get(practice_id) or {}
+        status = directory_connection_status(practice_id)
+        return {
+            "mode": status.get("mode") or "",
+            "connected": bool(status.get("connected")),
+            "domain": status.get("domain") or "",
+            "scope": DIRECTORY_SCOPE,
+            "connect_url": status.get("connect_url") or "",
+            "status": str(snap.get("status") or "never"),
+            "complete": bool(snap.get("complete")),
+            "last_complete_at": str(snap.get("last_complete_at") or ""),
+            "last_attempt_at": str(snap.get("last_attempt_at") or ""),
+            "error_code": str(snap.get("error_code") or ""),
+            "pages": int(snap.get("pages") or 0),
+            "listed": int(snap.get("listed") or 0),
+            "skipped": dict(snap.get("skipped") or {}),
+            "note": (
+                "The staff list is the last complete Google Workspace directory read for this practice domain. "
+                "A failed refresh keeps that list and is marked incomplete. "
+                "Being in the directory does not make someone an HR admin or enable time entry."
+            ),
+        }
+
+    def refresh_directory(self, user: User, now: Optional[datetime] = None) -> dict[str, Any]:
+        """Reload the selectable staff list. Does not enable anyone or change roles."""
+        self._require_manager(user)
+        moment = now or utcnow()
+        from app.workspace_directory import WorkspaceDirectoryError, list_directory_fetch
+
+        error_code = ""
+        fetched = None
+        try:
+            fetched = list_directory_fetch(user.practice_id)
+        except WorkspaceDirectoryError as exc:
+            error_code = exc.code
+        with self.exclusive():
+            snap = dict(self._directory.get(user.practice_id) or {})
+            snap.setdefault("users", [])
+            snap["practice_id"] = user.practice_id
+            snap["last_attempt_at"] = _iso(moment)
+            if fetched is not None and fetched.complete:
+                snap["users"] = [
+                    {
+                        "email": person.email,
+                        "google_id": person.google_id,
+                        "display_name": person.display_name,
+                    }
+                    for person in fetched.users
+                ]
+                snap["status"] = "ok"
+                snap["complete"] = True
+                snap["last_complete_at"] = _iso(moment)
+                snap["error_code"] = ""
+                snap["pages"] = fetched.pages
+                snap["listed"] = len(fetched.users)
+                snap["skipped"] = dict(fetched.skipped)
+            else:
+                snap["status"] = "error"
+                snap["complete"] = False
+                snap["error_code"] = error_code or (fetched.error_code if fetched else "directory_list_failed")
+                if fetched is not None:
+                    snap["pages"] = fetched.pages
+                    snap["skipped"] = dict(fetched.skipped)
+            self._directory[user.practice_id] = snap
+            self._dirty = True
+            settings = self._settings.get(user.practice_id) or default_settings(user.practice_id, moment)
+            payload = self._settings_public(settings, moment, saved=user.practice_id in self._settings)
+            payload["can_self_test"] = self._is_self_tester(user)
+            self._flush_if_dirty()
+            return payload
 
     def _people(self, practice_id: str, settings: Optional[TimeSettings], state: Optional[WeekState]) -> list[dict[str, str]]:
         if state and state.locked_at:
@@ -1579,6 +1934,16 @@ class TimeStore:
             self._delivery_index[
                 (delivery.practice_id, delivery.week_ending, delivery.kind, delivery.recipient)
             ] = delivery.delivery_id
+        for item in payload.get("directory") or []:
+            if isinstance(item, dict) and item.get("practice_id"):
+                self._directory[str(item["practice_id"])] = dict(item)
+        for item in payload.get("self_tests") or []:
+            if not isinstance(item, dict):
+                continue
+            practice_id = str(item.get("practice_id") or "")
+            user_id = str(item.get("user_id") or "")
+            if practice_id and user_id:
+                self._self_tests[(practice_id, user_id)] = dict(item)
         self._dirty = False
 
     def _dump(self) -> dict[str, Any]:
@@ -1589,6 +1954,8 @@ class TimeStore:
             "submissions": [item.to_dict() for item in self._submissions.values()],
             "audits": [dict(item) for item in self._audits],
             "deliveries": [item.to_dict() for item in self._deliveries.values()],
+            "directory": [dict(item) for item in self._directory.values()],
+            "self_tests": [dict(item) for item in self._self_tests.values()],
         }
 
     def _flush_unlocked(self) -> None:
@@ -1675,6 +2042,47 @@ def _can_reclaim(
         return False
     index = min(max(delivery.attempts - 1, 0), len(backoff) - 1)
     return now >= last + backoff[index]
+
+
+def _labelled_reminder(slot: str, week_ending: date, deadline: datetime) -> tuple[str, str]:
+    subject, body = render_reminder(slot=slot, week_ending=week_ending, deadline=deadline)
+    body = body.replace(TIME_ENTRY_URL, TIME_SELF_TEST_URL)
+    return f"[TEST] {subject}", f"{SELF_TEST_BANNER}\n\n{body}"
+
+
+def _self_test_summary(entry: dict[str, Any], header: dict[str, Any]) -> dict[str, Any]:
+    subject = "[TEST] Weekly hours summary — self-test only"
+    body = "\n".join(
+        [
+            SELF_TEST_BANNER,
+            "",
+            "Intended recipient when a send is approved later: " + MELISSA_EMAIL,
+            "This is one person. It is not the practice payroll summary and it does not include anyone else.",
+            "",
+            f"Pay week shown for context: {header.get('label')}",
+            f"Practice deadline shown for context: {header.get('deadline_label')}",
+            "",
+            f"- {entry['display_name']}: raw {entry['raw_display']}, payable {entry['rounded_display']} ({entry['decimal_hours']})",
+            "",
+            "Not sent.",
+        ]
+    )
+    row = {
+        "display_name": entry["display_name"],
+        "email": entry["email"],
+        "status": "submitted",
+        "raw_minutes": entry["raw_minutes"],
+        "rounded_minutes": entry["rounded_minutes"],
+        "decimal_hours": entry["decimal_hours"],
+    }
+    return {
+        "to": MELISSA_EMAIL,
+        "subject": subject,
+        "body": body,
+        "csv": rows_to_csv([row]),
+        "csv_filename": "weekly-hours-self-test.csv",
+        "sent": False,
+    }
 
 
 def render_reminder(*, slot: str, week_ending: date, deadline: datetime) -> tuple[str, str]:

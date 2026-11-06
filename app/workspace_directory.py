@@ -225,6 +225,119 @@ def _access_token_for_practice(practice_id: str) -> str:
     raise WorkspaceDirectoryError("directory_not_connected")
 
 
+_RESOURCE_OU_SEGMENTS = frozenset(
+    {
+        "resources",
+        "resource",
+        "rooms",
+        "room",
+        "calendars",
+        "conference rooms",
+        "shared",
+        "shared mailboxes",
+        "service accounts",
+    }
+)
+
+
+@dataclass
+class DirectoryFetch:
+    """One directory read. `complete` is true only when every page was read."""
+
+    users: list[WorkspaceUser]
+    skipped: dict[str, int]
+    pages: int
+    complete: bool
+    error_code: str
+    domain: str
+
+
+def _ou_segments(path: str) -> list[str]:
+    return [part.strip().lower() for part in (path or "").split("/") if part.strip()]
+
+
+def classify_directory_row(
+    row: dict[str, Any],
+    domains: list[str],
+    seen_emails: set[str],
+) -> tuple[Optional[WorkspaceUser], str]:
+    """Keep an active person, or a skip reason. Directory admin flags are ignored."""
+    if not isinstance(row, dict):
+        return None, "incomplete"
+    if row.get("suspended"):
+        return None, "suspended"
+    if row.get("archived"):
+        return None, "archived"
+    if row.get("deletionTime"):
+        return None, "deleted"
+    if any(part in _RESOURCE_OU_SEGMENTS for part in _ou_segments(str(row.get("orgUnitPath") or ""))):
+        return None, "shared_or_resource"
+    email = str(row.get("primaryEmail") or "").strip().lower()
+    google_id = str(row.get("id") or "").strip()
+    if not email or not google_id or "@" not in email:
+        return None, "incomplete"
+    domain = email.rsplit("@", 1)[-1]
+    if domains and domain not in domains:
+        return None, "out_of_domain"
+    if email in seen_emails:
+        return None, "duplicate"
+    name_obj = row.get("name") or {}
+    display = ""
+    if isinstance(name_obj, dict):
+        display = str(name_obj.get("fullName") or "").strip()
+    if not display:
+        display = email.split("@", 1)[0]
+    seen_emails.add(email)
+    return (
+        WorkspaceUser(
+            google_id=google_id,
+            email=email,
+            display_name=display,
+            suspended=False,
+            org_unit=str(row.get("orgUnitPath") or ""),
+        ),
+        "",
+    )
+
+
+def consume_directory_pages(
+    pages: list[dict[str, Any]],
+    domains: list[str],
+    *,
+    max_pages: int = 50,
+) -> DirectoryFetch:
+    """Fold API pages into one list. Stops incomplete if a page token remains."""
+    users: list[WorkspaceUser] = []
+    skipped: dict[str, int] = {}
+    seen: set[str] = set()
+    domain = domains[0] if domains else ""
+    consumed = 0
+    leftover = False
+    for page in pages:
+        if consumed >= max_pages:
+            leftover = True
+            break
+        consumed += 1
+        if not isinstance(page, dict):
+            return DirectoryFetch(users, skipped, consumed, False, "directory_list_failed", domain)
+        for row in page.get("users") or []:
+            person, reason = classify_directory_row(row if isinstance(row, dict) else {}, domains, seen)
+            if reason:
+                skipped[reason] = skipped.get(reason, 0) + 1
+                continue
+            if person is not None:
+                users.append(person)
+        if page.get("nextPageToken"):
+            leftover = True
+        else:
+            leftover = False
+            break
+    complete = consumed > 0 and not leftover
+    error = "" if complete else "directory_page_limit"
+    users.sort(key=lambda item: (item.display_name.casefold(), item.email))
+    return DirectoryFetch(users, skipped, consumed, complete, error, domain)
+
+
 def _mock_directory_users() -> list[WorkspaceUser]:
     domain = allowed_domains()[0] if allowed_domains() else "example.com"
     return [
@@ -246,35 +359,48 @@ def _mock_directory_users() -> list[WorkspaceUser]:
     ]
 
 
-def list_directory_users(practice_id: str) -> list[WorkspaceUser]:
+def list_directory_fetch(practice_id: str) -> DirectoryFetch:
+    """Read every Directory page for this practice's allowed domain.
+
+    Scope is admin.directory.user.readonly. A Workspace admin must connect
+    once; this does not use domain-wide delegation or Gmail contacts.
+    """
     mode = directory_mode()
+    domains = allowed_domains()
+    domain = domains[0] if domains else ""
     if mode == "off":
         raise WorkspaceDirectoryError("directory_off")
     if mode == "mock":
-        return _mock_directory_users()
+        users = [
+            user
+            for user in _mock_directory_users()
+            if not user.suspended and (not domains or user.email.rsplit("@", 1)[-1] in domains)
+        ]
+        users.sort(key=lambda item: (item.display_name.casefold(), item.email))
+        return DirectoryFetch(users, {}, 1, True, "", domain)
 
     access = _access_token_for_practice(practice_id)
-    domains = allowed_domains()
     params: dict[str, str] = {
         "maxResults": "200",
         "orderBy": "email",
-        "projection": "basic",
+        "projection": "full",
     }
     if domains:
         params["domain"] = domains[0]
     else:
         params["customer"] = "my_customer"
 
-    out: list[WorkspaceUser] = []
+    pages: list[dict[str, Any]] = []
     page_token: Optional[str] = None
+    seen_tokens: set[str] = set()
     with httpx.Client(timeout=30.0) as client:
-        while True:
-            q = dict(params)
+        while len(pages) < 50:
+            query = dict(params)
             if page_token:
-                q["pageToken"] = page_token
+                query["pageToken"] = page_token
             resp = client.get(
                 DIRECTORY_USERS_URL,
-                params=q,
+                params=query,
                 headers={"Authorization": f"Bearer {access}"},
             )
             if resp.status_code == 403:
@@ -288,35 +414,18 @@ def list_directory_users(practice_id: str) -> list[WorkspaceUser]:
                     detail=f"status_{resp.status_code}",
                 )
             payload = resp.json() or {}
-            for row in payload.get("users") or []:
-                if not isinstance(row, dict):
-                    continue
-                email = str(row.get("primaryEmail") or "").strip().lower()
-                google_id = str(row.get("id") or "").strip()
-                name_obj = row.get("name") or {}
-                display = ""
-                if isinstance(name_obj, dict):
-                    display = str(name_obj.get("fullName") or "").strip()
-                if not display:
-                    display = email.split("@", 1)[0] if email else google_id
-                if not email or not google_id:
-                    continue
-                # Domain allowlist defense in depth.
-                if domains and email.rsplit("@", 1)[-1] not in domains:
-                    continue
-                out.append(
-                    WorkspaceUser(
-                        google_id=google_id,
-                        email=email,
-                        display_name=display,
-                        suspended=bool(row.get("suspended")),
-                        org_unit=str(row.get("orgUnitPath") or ""),
-                    )
-                )
-            page_token = payload.get("nextPageToken")
-            if not page_token:
+            if not isinstance(payload, dict):
+                raise WorkspaceDirectoryError("directory_list_failed")
+            pages.append(payload)
+            page_token = str(payload.get("nextPageToken") or "")
+            if not page_token or page_token in seen_tokens:
                 break
-    return out
+            seen_tokens.add(page_token)
+    return consume_directory_pages(pages, domains)
+
+
+def list_directory_users(practice_id: str) -> list[WorkspaceUser]:
+    return list_directory_fetch(practice_id).users
 
 
 # Re-export helpers used by main for directory OAuth state cookies.
