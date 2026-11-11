@@ -16,31 +16,31 @@ BUSINESS_UNITS: tuple[dict[str, Any], ...] = (
     {
         "id": "clinical",
         "name": "Clinical Tools",
-        "description": "Supervision, compliance, intake, eligibility, and charting ops around SimplePractice.",
+        "description": "Notes, compliance, intake, and eligibility.",
         "order": 1,
     },
     {
         "id": "hr",
         "name": "HR",
-        "description": "People, time, hiring, and onboarding.",
+        "description": "Hours, hiring, and new-hire checklists.",
         "order": 2,
     },
     {
         "id": "marketing",
         "name": "Marketing",
-        "description": "Growth, outreach, and public intake surfaces.",
+        "description": "Outreach.",
         "order": 3,
     },
     {
         "id": "finance",
         "name": "Finance",
-        "description": "Books, claims aging context, and QuickBooks ops.",
+        "description": "Money and claims.",
         "order": 4,
     },
     {
         "id": "technology",
         "name": "Technology",
-        "description": "Platform pipes: ingest, identity, audit, telephony retention.",
+        "description": "Reports and the tools behind the practice.",
         "order": 5,
     },
 )
@@ -63,7 +63,7 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
         "kind": "tool",
         "status": "live",
         "href": "/#supervision",
-        "description": "Clinical supervision capture, review, and finalize.",
+        "description": "Write and finish supervision notes.",
         "legacy_ids": ["CLY-1"],
         "authorities": _auth(
             "HIPAA Security Rule (45 CFR 164.312) — PHI handling for transcription",
@@ -76,7 +76,7 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
         "kind": "tool",
         "status": "live",
         "href": "/#comply",
-        "description": "Recurring compliance calendar and credentialing clocks.",
+        "description": "Licenses, clearances, and the dates that keep the practice current.",
         "legacy_ids": ["OPS-2"],
         "authorities": _auth(
             "42 CFR 455.436",
@@ -96,7 +96,7 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
         "kind": "tool",
         "status": "live",
         "href": "/#intake",
-        "description": "First-contact timestamps and access-standard clocks (case codes only).",
+        "description": "Log a new request. Keep names off this list.",
         "legacy_ids": ["OPS-3"],
         "authorities": _auth(
             "PerformCare Provider Manual — routine outpatient access within 7 days of request",
@@ -109,7 +109,7 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
         "kind": "tool",
         "status": "live",
         "href": "/#eligibility",
-        "description": "Append-only eligibility verification records (mock/manual; live adapters deferred).",
+        "description": "Record that coverage was checked.",
         "legacy_ids": ["OPS-5"],
         "authorities": _auth(
             "Hard Gate — eligibility verified before every service",
@@ -124,7 +124,7 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
         "kind": "tool",
         "status": "live",
         "href": "/#ingest",
-        "description": "Batched SP CSV uploads (documentation reports). No scrape, no SP API.",
+        "description": "Bring in the weekly documentation report.",
         "legacy_ids": ["Platform · Ingest"],
         "authorities": _auth(
             "55 Pa. Code 1101.51(e)(1)(iii) — unsigned note aging (via documentation report)",
@@ -150,8 +150,7 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
         "status": "live",
         "href": "/#time",
         "description": (
-            "Hourly staff enter one total for the prior Monday–Friday. "
-            "Weekend hours after that Friday are included. Not a punch clock."
+            "Enter hours for last week. Weekend hours after Friday count in that week."
         ),
         "legacy_ids": ["OPS-6"],
         "authorities": _auth("FLSA — accurate hours worked for non-exempt employees"),
@@ -164,8 +163,7 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
         "status": "live",
         "href": "/#onboarding",
         "description": (
-            "New-hire checklist, PA clearances, license expiry, LSW supervision hours. "
-            "Status/dates/links only — no SSN, bank, or DOB."
+            "New-hire checklist, clearances, and license dates."
         ),
         "legacy_ids": ["OPS-2-onboarding", "OPS-7"],
         "authorities": _auth(

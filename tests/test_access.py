@@ -35,11 +35,28 @@ def _auth(user: User) -> dict[str, str]:
     return {"Authorization": f"Bearer {issue_token(user)}"}
 
 
+def test_home_page_is_not_cached(client: TestClient) -> None:
+    response = client.get("/")
+    assert response.status_code == 200
+    assert "no-store" in response.headers.get("cache-control", "")
+    assert 'id="btn-top-roles"' in response.text
+
+
+def test_operations_mailbox_is_admin() -> None:
+    from app.access.resolve import assigned_role_id, is_owner, permissions_for
+
+    user = User("google:ops", "Evan Queitsch", "practice-hfc", "operations@heart4change.org")
+    assert is_owner(user)
+    assert "capability:manage_roles" in permissions_for(user)
+    assert assigned_role_id(user) == "admin"
+
+
 def test_roles_screen_is_linked_from_home_chrome() -> None:
     text = Path("app/static/index.html").read_text(encoding="utf-8")
-    assert 'id="btn-top-roles"' in text
+    assert 'id="btn-top-roles" class="primary"' in text
+    assert "hidden" not in text.split('id="btn-top-roles"', 1)[1].split(">", 1)[0]
     assert "Roles &amp; access" in text
-    assert 'id="home-roles-card"' in text
+    assert 'id="home-roles-card" class="tool-card"' in text
     assert '"/#roles"' in text
 
 

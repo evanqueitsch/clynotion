@@ -144,6 +144,17 @@ def _build_pulse(practice_id: str) -> PulseOut:
     )
 
 
+def _home_note(user: CurrentUser, open_count: int) -> str:
+    raw = (user.username or "").strip()
+    if "@" in raw:
+        raw = ""
+    first = raw.split()[0] if raw else ""
+    hello = f"Hi, {first}." if first else "Hello."
+    if open_count == 0:
+        return f"{hello} Everything's caught up."
+    return f"{hello} Here's what needs you."
+
+
 def _home_payload(user: CurrentUser) -> HomeOut:
     from app.access.resolve import landing_for
 
@@ -218,6 +229,7 @@ def _home_payload(user: CurrentUser) -> HomeOut:
                 "description": item["description"],
             }
         )
+    pulse = _build_pulse(user.practice_id)
     return HomeOut(
         user_id=user.user_id,
         username=user.username,
@@ -227,11 +239,8 @@ def _home_payload(user: CurrentUser) -> HomeOut:
         units=units,
         bands=bands,
         attention=_build_attention(user.practice_id),
-        pulse=_build_pulse(user.practice_id),
-        note=(
-            "Clynotion home — organized by business unit. "
-            "Due items from every unit land above. Two-minute week: clear, act, close."
-        ),
+        pulse=pulse,
+        note=_home_note(user, pulse.open_obligations),
     )
 
 

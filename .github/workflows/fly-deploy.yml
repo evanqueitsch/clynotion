@@ -39,3 +39,21 @@ jobs:
         run: flyctl deploy --remote-only --config fly.toml
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Confirm Roles markup and the owner account
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          curl -fsS -D /tmp/headers.txt -o /tmp/index.html https://clynotion.com/
+          python3 - << 'PY'
+          headers = open("/tmp/headers.txt").read().lower()
+          html = open("/tmp/index.html").read()
+          assert "no-store" in headers, headers
+          assert 'id="btn-top-roles"' in html
+          assert "Roles &amp; access" in html
+          assert "Two-minute week" not in html
+          assert "Start with supervision notes" not in html
+          print("HTML roles button present and not cached")
+          PY
+          flyctl ssh console -a clynotion -C "/app/.venv/bin/python -c \"from app.access.resolve import is_owner, permissions_for; from app.auth import User; u=User('google:ops','Evan Queitsch','practice-hfc','operations@heart4change.org'); print('OWNER', is_owner(u)); print('MANAGE', 'capability:manage_roles' in permissions_for(u))\""

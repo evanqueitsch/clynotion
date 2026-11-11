@@ -61,10 +61,9 @@ SCHEDULE_V2 = 2  # Monday–Friday workweek, Thursday payroll
 REMINDER_FIRST_SUBJECT = "Weekly hours are due tomorrow"
 REMINDER_DUE_SUBJECT = "Enter your weekly hours today!"
 HOURS_HELPER_TEXT = (
-    "Enter one total for the completed Monday–Friday shown above. "
-    "If you worked the Saturday or Sunday right after that Friday, include those hours in this same total. "
-    "Do not enter them again next week, and do not include hours from the following week. "
-    "These are hours already worked."
+    "Enter the hours you already worked. "
+    "If you worked the Saturday or Sunday after that Friday, include them here. "
+    "Leave next week for next week."
 )
 HOURS_CAP_NOTE = (
     "Weekly totals are capped at 168:00 — every minute in the pay week. "
@@ -729,8 +728,8 @@ class TimeStore:
                 "can_edit": self._can_write(user, email, week, moment, settings, state),
                 "helper_text": HOURS_HELPER_TEXT,
                 "pay_week_note": (
-                    "Enter the completed Monday–Friday before Thursday payroll. "
-                    "The Saturday and Sunday after that Friday belong in this total. Times are America/New_York."
+                    "This total is for the Monday–Friday shown below. "
+                    "Saturday and Sunday after that Friday belong in it too."
                 ),
                 "hours_cap_note": HOURS_CAP_NOTE,
                 "categories": [
@@ -2692,34 +2691,27 @@ def nav_for_user(user: User) -> dict[str, Any]:
         return {
             "href": "/#time-settings",
             "status": "live",
-            "description": (
-                "Choose which staff may enter the prior Monday–Friday total. "
-                "Nobody is on by default, including you, until you select them. "
-                "Mail is off; nothing is emailed."
-            ),
+            "description": "Choose who can enter hours.",
             "open_label": "Weekly hours settings",
         }
     if access.get("can_view_payroll"):
         return {
             "href": "/#time-admin",
             "status": "live",
-            "description": "Open the payroll week. Post-cutoff corrections stay with Melissa.",
+            "description": "See this week's hours.",
             "open_label": "Payroll week",
         }
     if access["can_enter"]:
         return {
             "href": "/#time",
             "status": "live",
-            "description": (
-                "Enter one total for the prior Monday–Friday. "
-                "Weekend hours after that Friday are included."
-            ),
+            "description": "Enter your hours for last week.",
             "open_label": "Enter weekly hours",
         }
     return {
         "href": "",
         "status": "disabled",
-        "description": "Not enabled for your account. An admin selects who may enter weekly hours.",
+        "description": "Hours entry isn't turned on for you yet.",
         "open_label": "",
     }
 

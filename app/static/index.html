@@ -62,9 +62,9 @@
     }
     .topbar-user {
       display: flex;
-      flex-direction: column;
-      align-items: flex-end;
-      gap: 0.35rem;
+      flex-direction: row;
+      align-items: center;
+      gap: 0.5rem;
       margin-top: 0.35rem;
       flex: 0 0 auto;
     }
@@ -149,8 +149,12 @@
     body.staff-only #btn-time-self-test,
     body.staff-only .tagline,
     body.staff-only footer,
+    body.staff-only #btn-top-roles,
+    body.staff-only #home-roles-card,
     body.no-access .tagline,
-    body.no-access footer { display: none; }
+    body.no-access footer,
+    body.no-access #btn-top-roles,
+    body.no-access #home-roles-card { display: none; }
     .no-access {
       max-width: 28rem;
       margin: 4rem auto;
@@ -495,11 +499,10 @@
     <div class="topbar">
       <div>
         <h1 class="brand">Clynotion</h1>
-        <p class="tagline">Practice tools for clinical teams. Start with supervision notes.</p>
       </div>
       <div class="topbar-user hidden" id="topbar-user">
         <span class="who" id="signed-in-as"></span>
-        <button id="btn-top-roles" class="primary hidden" type="button">Roles &amp; access</button>
+        <button id="btn-top-roles" class="primary" type="button">Roles &amp; access</button>
         <button id="btn-logout" type="button">Sign out</button>
       </div>
     </div>
@@ -547,9 +550,9 @@
     <section id="home-panel" class="panel hidden">
       <h2 id="home-practice-name">Your practice</h2>
       <p class="meta" id="home-blurb">Clynotion is the practice product. Open a tool to continue.</p>
-      <div id="home-roles-card" class="tool-card hidden">
+      <div id="home-roles-card" class="tool-card">
         <h3 style="font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;">Roles &amp; access</h3>
-        <p class="meta" style="margin-bottom:0.85rem;">Choose what each person can see. Direct link: /#roles</p>
+        <p class="meta" style="margin-bottom:0.85rem;">Decide what each person can open.</p>
         <button class="primary" id="btn-home-roles" type="button">Open roles</button>
       </div>
 
@@ -568,9 +571,9 @@
         <span class="section-label">This week</span>
         <div class="due-list" id="home-week"></div>
       </div>
-      <p class="meta hidden" id="home-due-empty">Nothing due. Open a tool when you’re ready.</p>
+      <p class="meta hidden" id="home-due-empty">Everything's caught up.</p>
 
-      <span class="section-label" style="margin-top:1rem;">Business units</span>
+      <span class="section-label" style="margin-top:1rem;">Open a tool</span>
       <div id="home-units"></div>
       <p class="status" id="home-status"></p>
     </section>
@@ -645,7 +648,7 @@
         <h2 style="margin:0;">Eligibility</h2>
         <button class="ghost" id="btn-eligibility-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
       </div>
-      <p class="meta">Append-only checks. Mock backend is offline; Availity/EVS need BAAs (B-21–23).</p>
+      <p class="meta">Record that coverage was checked. This does not bill anyone.</p>
       <label for="elig-case">Case code</label>
       <input id="elig-case" type="text" placeholder="HFC-1042" />
       <label for="elig-date">Service date (YYYY-MM-DD)</label>
@@ -701,7 +704,7 @@
       <p class="meta" id="time-week-label"></p>
       <div class="time-links" id="time-nav"></div>
       <div id="time-entry-block" class="time-entry">
-        <p class="meta">One weekly total. Client time and supervision splits are not collected here.</p>
+        <p class="meta">One total for the week.</p>
         <label for="time-hours">Hours (whole number)</label>
         <input id="time-hours" type="number" min="0" max="168" step="1" inputmode="numeric" />
         <label for="time-minutes">Minutes (0–59)</label>
@@ -895,7 +898,7 @@
       <p class="status" id="review-status"></p>
     </section>
 
-    <footer>Clynotion · Supervision notes · audio deleted on finalize</footer>
+    <footer>Clynotion</footer>
   </main>
   <script>
     const state = {
@@ -1845,7 +1848,6 @@
         state.access = access;
         document.body.classList.toggle("staff-only", access.landing === "time");
         document.body.classList.toggle("no-access", access.landing === "none");
-        showRolesEntry(!!access.can_manage_roles);
         if (access.landing === "none") {
           show("no-access-panel");
           return;
@@ -1937,7 +1939,6 @@
         renderAttention(home.attention || []);
         renderHomeBands(home.bands || { overdue: [], this_week: [] });
         renderHomeUnits(home.units || []);
-        showRolesEntry(!!(state.access && state.access.can_manage_roles));
         show("home-panel");
         window.history.replaceState({}, "", "/");
       } catch (e) {
@@ -1976,8 +1977,9 @@
         block.appendChild(h);
         block.appendChild(desc);
         (unit.tools || []).forEach((tool) => {
+          if (tool.status === "planned") return;
           const card = document.createElement("div");
-          card.className = "tool-card" + ((tool.status === "planned" || tool.status === "disabled") ? " planned" : "");
+          card.className = "tool-card" + (tool.status === "disabled" ? " planned" : "");
           const title = document.createElement("h3");
           title.style.cssText = "font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;";
           title.textContent = tool.name;
@@ -1989,7 +1991,7 @@
           if (tool.status === "planned" || tool.status === "disabled") {
             const tag = document.createElement("div");
             tag.className = "planned-tag";
-            tag.textContent = tool.status === "disabled" ? "Not enabled for you" : "Coming soon";
+            tag.textContent = "Not ready for you";
             card.appendChild(tag);
           }
           card.appendChild(meta);
@@ -2003,7 +2005,7 @@
           }
           block.appendChild(card);
         });
-        root.appendChild(block);
+        if (block.querySelector(".tool-card")) root.appendChild(block);
       });
     }
 
@@ -2013,7 +2015,7 @@
       const chips = [
         ["Open", pulse.open_obligations],
         ["Overdue", pulse.overdue_count],
-        ["Unsigned aging", pulse.unsigned_aging_rows],
+        ["Unsigned notes", pulse.unsigned_aging_rows],
         ["Roster", pulse.open_headcount],
         ["Access %", pulse.access_pct_met == null ? "—" : pulse.access_pct_met],
         ["Elig 30d", pulse.eligibility_checks_30d],
@@ -3051,12 +3053,6 @@
     if (btnOnboardingHome) btnOnboardingHome.onclick = () => enterHome();
     const btnTimeHome = $("btn-time-home");
     if (btnTimeHome) btnTimeHome.onclick = () => enterHome();
-    function showRolesEntry(show) {
-      ["btn-top-roles", "home-roles-card"].forEach((id) => {
-        const el = $(id);
-        if (el) el.classList.toggle("hidden", !show);
-      });
-    }
     const btnHomeRoles = $("btn-home-roles");
     if (btnHomeRoles) btnHomeRoles.onclick = () => { openAccess(); };
     const btnTopRoles = $("btn-top-roles");
