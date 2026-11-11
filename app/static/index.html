@@ -505,7 +505,9 @@
     .cg-grid th:first-child, .cg-grid td:first-child { text-align: left; min-width: 10rem; position: sticky; left: 0; background: #fff; }
     .cg-cell { width: 100%; border: 0; background: transparent; font: inherit; cursor: pointer; min-height: 2rem; }
     .cg-y { background: #e5f4ec; color: var(--ok); font-weight: 600; }
-    .cg-x, .cg-suggested { background: #f8e6e6; color: var(--danger); font-weight: 600; }
+    .cg-x { background: #f3d0d0; color: var(--danger); font-weight: 700; }
+    .cg-suggested { background: #fdeeee; color: #a15a5a; font-weight: 600; box-shadow: inset 0 0 0 2px #e3a3a3; }
+    .cg-warn { display: inline-block; margin-left: 0.2rem; color: var(--warn); font-weight: 700; }
     .cg-pending { background: #fff1e0; color: var(--warn); font-weight: 600; }
     .cg-review { background: #e7eef8; color: #1d3f6e; font-weight: 600; }
     .cg-filters, .cg-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; margin: 0.5rem 0; }
@@ -513,6 +515,9 @@
     .cg-secret { font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
     #cg-drawer, .cg-form { border: 1px solid var(--line); border-radius: 12px; padding: 0.85rem; margin: 0.75rem 0; background: rgba(255,255,255,0.7); }
     .cg-history { font-size: 0.82rem; color: var(--muted); white-space: pre-wrap; }
+    .cg-confirm { margin-top: 0.5rem; padding: 0.6rem 0.7rem; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
+    .cg-confirm p { margin: 0 0 0.5rem; }
+    details > summary { cursor: pointer; margin: 0.6rem 0; }
   </style>
 </head>
 <body>
@@ -990,7 +995,7 @@
 
     <footer>Clynotion</footer>
   </main>
-  <script src="/static/credentialing.js?v=0.17.1"></script>
+  <script src="/static/credentialing.js?v=0.17.2"></script>
   <script>
     const state = {
       token: null,
@@ -1852,12 +1857,17 @@
           title.textContent = role.name;
           card.appendChild(title);
           const list = document.createElement("div");
-          list.className = "perm-list";
-          (data.permissions || []).filter((perm) => perm.grantable).forEach((perm) => {
+          list.className = "perm-list hidden";
+          const toggle = document.createElement("button");
+          toggle.type = "button";
+          toggle.className = "ghost";
+          toggle.setAttribute("aria-expanded", "false");
+          const grantable = (data.permissions || []).filter((perm) => perm.grantable);
+          grantable.forEach((perm) => {
             const label = document.createElement("label");
             const box = document.createElement("input");
             box.type = "checkbox";
-            box.checked = (role.permissions || []).includes(perm.id);
+            box.checked = role.locked ? true : (role.permissions || []).includes(perm.id);
             box.disabled = !!role.locked;
             box.dataset.permission = perm.id;
             label.appendChild(box);
@@ -1874,6 +1884,19 @@
             }
             list.appendChild(label);
           });
+          const checkedCount = () => list.querySelectorAll("input:checked").length;
+          const refreshCount = () => {
+            toggle.textContent = "Permissions (" + checkedCount() + " checked)";
+          };
+          refreshCount();
+          toggle.addEventListener("click", () => {
+            const collapsed = list.classList.toggle("hidden");
+            toggle.setAttribute("aria-expanded", collapsed ? "false" : "true");
+          });
+          list.querySelectorAll("input").forEach((box) => {
+            box.addEventListener("change", refreshCount);
+          });
+          card.appendChild(toggle);
           card.appendChild(list);
           if (!role.locked) {
             const save = document.createElement("button");

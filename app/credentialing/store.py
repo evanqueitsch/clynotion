@@ -188,7 +188,7 @@ class CredentialingStore:
         subjects = [
             _public_subject(item)
             for item in row["subjects"].values()
-            if isinstance(item, dict) and not item.get("archived")
+            if isinstance(item, dict)
         ]
         subjects.sort(key=lambda item: (0 if item["kind"] == "practice" else 1, item["name"].casefold()))
         payers = [_public_payer(item) for item in row["payers"].values() if isinstance(item, dict)]
@@ -357,6 +357,17 @@ class CredentialingStore:
         self._save(payload)
         return _public_subject(current)
 
+    def restore_subject(self, practice_id: str, subject_id: str, *, actor: str) -> dict[str, Any]:
+        payload, row = self._load_practice(practice_id)
+        current = row["subjects"].get(subject_id)
+        if not isinstance(current, dict):
+            raise KeyError(subject_id)
+        current["archived"] = False
+        current["updated_by"] = actor
+        current["updated_at"] = _now()
+        self._save(payload)
+        return _public_subject(current)
+
     def archive_payer(self, practice_id: str, payer_id: str, *, actor: str) -> dict[str, Any]:
         payload, row = self._load_practice(practice_id)
         current = row["payers"].get(payer_id)
@@ -367,6 +378,40 @@ class CredentialingStore:
         current["updated_at"] = _now()
         self._save(payload)
         return _public_payer(current)
+
+    def restore_payer(self, practice_id: str, payer_id: str, *, actor: str) -> dict[str, Any]:
+        payload, row = self._load_practice(practice_id)
+        current = row["payers"].get(payer_id)
+        if not isinstance(current, dict):
+            raise KeyError(payer_id)
+        current["archived"] = False
+        current["updated_by"] = actor
+        current["updated_at"] = _now()
+        self._save(payload)
+        return _public_payer(current)
+
+    def record_people_export(self, practice_id: str, *, actor: str) -> None:
+        """Log a sensitive people.csv export. The values themselves are not stored."""
+        payload, row = self._load_practice(practice_id)
+        audit = row.setdefault("reveal_audit", [])
+        now = _now()
+        actor_email = (actor or "").strip().lower()
+        for subject in row["subjects"].values():
+            if not isinstance(subject, dict) or subject.get("archived"):
+                continue
+            audit.append(
+                {
+                    "at": now,
+                    "actor": actor_email,
+                    "subject_id": subject.get("id") or "",
+                    "payer_id": "",
+                    "field": "people.csv",
+                    "action": "export",
+                }
+            )
+        if len(audit) > 500:
+            del audit[:-500]
+        self._save(payload)
 
     def save_enrollment(self, practice_id: str, body: dict[str, Any], *, actor: str) -> dict[str, Any]:
         payload, row = self._load_practice(practice_id)
@@ -553,11 +598,16 @@ class CredentialingStore:
                 )
             )
         people_header = "subject,kind,license_type,npi,tin,license_number,caqh_id,hire_date,device"
-        people_lines = [people_header]
+        people_lines = []
+        if not include_secrets:
+            people_lines.append(
+                "# npi, tin, license_number, and caqh_id were withheld"
+            )
+        people_lines.append(people_header)
         for subject in subjects:
-            def secret(field: str) -> str:
-                raw = str(subject.get(field) or "")
-                return raw if include_secrets else mask_secret(raw)
+            def secret(field: str, person: dict[str, Any] = subject) -> str:
+                raw = str(person.get(field) or "")
+                return raw if include_secrets else ""
 
             people_lines.append(
                 ",".join(
@@ -678,6 +728,14 @@ def _public_cell(row: dict[str, Any], subject: dict[str, Any], payer: dict[str, 
     enrollment = row["enrollments"].get(key) or {}
     reason = license_conflict(payer, subject)
     status = str(enrollment.get("status") or "unknown")
+    blank = status in {"", "unknown"}
+    confirmed = status == "not_eligible"
+    if reason and blank:
+        display = "suggested"
+    elif reason and not confirmed:
+        display = "warning"
+    else:
+        display = "plain"
     return {
         "subject_id": subject["id"],
         "payer_id": payer["id"],
@@ -689,8 +747,9 @@ def _public_cell(row: dict[str, Any], subject: dict[str, Any], payer: dict[str, 
         "payer_provider_id_masked": mask_secret(str(enrollment.get("payer_provider_id") or "")),
         "updated_by": enrollment.get("updated_by") or "",
         "updated_at": enrollment.get("updated_at") or "",
-        "suggestion_reason": reason if status in {"", "unknown"} else "",
-        "license_warning": reason if reason and status not in {"", "unknown", "not_eligible"} else "",
+        "suggestion_reason": reason if blank else "",
+        "license_warning": reason if reason and not blank and not confirmed else "",
+        "display": display,
         "history": _public_history(enrollment.get("history") or []),
     }
 

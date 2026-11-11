@@ -137,6 +137,17 @@ def archive_subject(subject_id: str, user: CurrentUser) -> dict[str, Any]:
         raise HTTPException(status_code=404, detail="Subject not found.") from exc
 
 
+@router.post("/subjects/{subject_id}/restore")
+def restore_subject(subject_id: str, user: CurrentUser) -> dict[str, Any]:
+    _need(user, CREDENTIALING_MANAGE)
+    try:
+        return credentialing_store.restore_subject(
+            user.practice_id, subject_id, actor=user.email or user.username
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Subject not found.") from exc
+
+
 @router.post("/payers")
 def post_payer(body: PayerBody, user: CurrentUser) -> dict[str, Any]:
     _need(user, CREDENTIALING_MANAGE)
@@ -171,6 +182,18 @@ def archive_payer(payer_id: str, user: CurrentUser) -> dict[str, Any]:
     _need(user, CREDENTIALING_PAYERS)
     try:
         return credentialing_store.archive_payer(
+            user.practice_id, payer_id, actor=user.email or user.username
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Payer not found.") from exc
+
+
+@router.post("/payers/{payer_id}/restore")
+def restore_payer(payer_id: str, user: CurrentUser) -> dict[str, Any]:
+    _need(user, CREDENTIALING_MANAGE)
+    _need(user, CREDENTIALING_PAYERS)
+    try:
+        return credentialing_store.restore_payer(
             user.practice_id, payer_id, actor=user.email or user.username
         )
     except KeyError as exc:
@@ -249,8 +272,13 @@ async def import_commit(
 @router.get("/export/{kind}")
 def export_csv(kind: str, user: CurrentUser) -> PlainTextResponse:
     _need(user, CREDENTIALING_MANAGE)
+    include_secrets = _can(user, CREDENTIALING_SENSITIVE)
+    if kind == "people" and include_secrets:
+        credentialing_store.record_people_export(
+            user.practice_id, actor=user.email or user.username
+        )
     texts = credentialing_store.export_texts(
-        user.practice_id, include_secrets=_can(user, CREDENTIALING_SENSITIVE)
+        user.practice_id, include_secrets=include_secrets
     )
     if kind not in texts:
         raise HTTPException(status_code=404, detail="Unknown export.")
