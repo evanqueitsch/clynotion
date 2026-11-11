@@ -242,8 +242,14 @@ def _parse_present_form(present_json: Optional[str]) -> list[PresentMember]:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    from app.hr.time_entry import scheduled_mail_status
+    from app.hr.time_entry import scheduled_mail_status, time_store
 
+    # File mode loads the hours checkbox only inside the store lock.
+    if time_store._mode == "file":
+        with time_store.exclusive():
+            scheduled = scheduled_mail_status()
+    else:
+        scheduled = scheduled_mail_status()
     modes = provider_modes()
     data_path = os.environ.get("ATTUNE_CLINICIAN_DATA_PATH", "")
     return {
@@ -265,7 +271,7 @@ def health() -> dict[str, Any]:
         "time_data_path": os.environ.get("ATTUNE_HR_TIME_DATA_PATH", ""),
         "time_mail_mode": _public_time_mail_mode(),
         "cron_configured": bool((os.environ.get("CRON_SECRET") or "").strip()),
-        "scheduled_mail": scheduled_mail_status(),
+        "scheduled_mail": scheduled,
     }
 
 
