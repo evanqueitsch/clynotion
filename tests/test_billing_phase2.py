@@ -294,6 +294,155 @@ def test_clock_migration_adds_missing_dates_and_keeps_the_source() -> None:
     )
 
 
+def test_clock_fields_save_on_the_clinician_and_survive_reload() -> None:
+    due_engine.reset()
+    credentialing_store.reset()
+    client = _client()
+    practice = credentialing_store.save_subject(
+        "practice-a",
+        {"name": "QA Test Practice", "kind": "practice"},
+        actor="qa",
+    )
+    clinician = credentialing_store.save_subject(
+        "practice-a",
+        {"name": "QA Test Clinician", "kind": "clinician", "license_type": "LCSW"},
+        actor="qa",
+    )
+    saved = client.put(
+        "/credentialing/subjects",
+        headers=_alice(),
+        json={
+            "id": clinician["id"],
+            "name": "QA Test Clinician",
+            "kind": "clinician",
+            "license_type": "LCSW",
+            "license_expires_on": "2026-12-01",
+            "caqh_attested_on": "2026-08-01",
+            "clocks": {
+                "license_renewal": "2026-01-15",
+                "caqh_reattestation": "2026-08-01",
+                "malpractice_rider": "2026-12-01",
+                "recredentialing": "2026-06-01",
+                "ma_revalidation": "2026-03-01",
+                "clinician_exclusion_screening": "2026-11-01",
+            },
+        },
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["id"] == clinician["id"]
+    reloaded = client.get("/credentialing/grid", headers=_alice()).json()
+    again = next(row for row in reloaded["subjects"] if row["id"] == clinician["id"])
+    other = next(row for row in reloaded["subjects"] if row["id"] == practice["id"])
+    assert again["license_expires_on"] == "2026-12-01"
+    assert again["caqh_attested_on"] == "2026-08-01"
+    assert again["clocks"]["malpractice_rider"] == "2026-12-01"
+    assert again["clocks"]["license_renewal"] == "2026-01-15"
+    assert "malpractice_rider" not in (other.get("clocks") or {})
+    script = open("app/static/credentialing.js", encoding="utf-8").read()
+    assert 'type === "date"' in script
+    assert "cg-profile-pick" in script and "previous" in script
+
+
+def test_drawer_follow_up_matches_the_home_due_date() -> None:
+    from zoneinfo import ZoneInfo
+
+    due_engine.reset()
+    credentialing_store.reset()
+    client = _client()
+    subject_id, payer_id = _seed_pair(status="pending", submitted="2026-10-30")
+    grid = client.get("/credentialing/grid", headers=_alice()).json()
+    cell = next(
+        row
+        for row in grid["cells"]
+        if row["subject_id"] == subject_id and row["payer_id"] == payer_id
+    )
+    assert cell["follow_up_on"] == "2026-11-13"
+    sync_reminders("practice-a", "qa-user", now=datetime(2026, 11, 11, 15, tzinfo=timezone.utc))
+    item = next(ob for ob in due_engine.list_open("practice-a") if ob.source_ref.startswith("follow_up|"))
+    shown = datetime.fromisoformat(item.due_at).astimezone(ZoneInfo("America/New_York")).date().isoformat()
+    assert shown == cell["follow_up_on"]
+    past_id, past_payer = _seed_pair(status="pending", submitted="2026-09-01")
+    past = client.get("/credentialing/grid", headers=_alice()).json()
+    past_cell = next(
+        row
+        for row in past["cells"]
+        if row["subject_id"] == past_id and row["payer_id"] == past_payer
+    )
+    assert past_cell["follow_up_on"] == "2026-09-15"
+    assert past_cell["follow_up_overdue"] is True
+
+
+def test_open_counter_matches_the_listed_bands() -> None:
+    from app.platform.routes import _build_pulse
+
+    due_engine.reset()
+    now = datetime.now(timezone.utc)
+    due_engine.upsert(
+        practice_id="practice-a",
+        domain="credentialing",
+        source="credentialing",
+        title="Later QA item",
+        owner_user_id="qa-user",
+        due_at=(now + timedelta(days=30)).isoformat(),
+        href="/#credentialing",
+        source_ref="later-qa",
+    )
+    due_engine.upsert(
+        practice_id="practice-a",
+        domain="credentialing",
+        source="credentialing",
+        title="Overdue QA item",
+        owner_user_id="qa-user",
+        due_at=(now - timedelta(days=2)).isoformat(),
+        href="/#credentialing",
+        source_ref="overdue-qa",
+    )
+    pulse = _build_pulse("practice-a")
+    bands = due_engine.bands("practice-a")
+    listed = len(bands["overdue"]) + len(bands["this_week"])
+    assert pulse.open_obligations == listed
+    assert pulse.open_obligations < len(due_engine.list_open("practice-a"))
+
+
+def test_reminder_due_instant_stays_on_that_eastern_date() -> None:
+    from datetime import date
+    from zoneinfo import ZoneInfo
+
+    from app.credentialing.reminders import _due
+
+    shown = datetime.fromisoformat(_due(date(2026, 11, 13))).astimezone(ZoneInfo("America/New_York"))
+    assert shown.date().isoformat() == "2026-11-13"
+    assert shown.hour == 12
+
+
+def test_short_roster_name_migrates_one_clock_date() -> None:
+    credentialing_store.reset()
+    credential_store.reset()
+    from app.clinicians import clinician_store
+
+    clinician = next(iter(clinician_store.list_for_practice("practice-a")))
+    credential_store._data.setdefault("practice-a", {}).setdefault(clinician.clinician_id, {})[
+        "malpractice_rider"
+    ] = "2025-06-01T00:00:00+00:00"
+    credentialing_store.save_subject(
+        "practice-a",
+        {"name": clinician.display_name.split()[0], "kind": "clinician", "license_type": "LCSW"},
+        actor="qa",
+    )
+    added_before = __import__("app.credentialing.store", fromlist=["clocks_migrated_total"]).clocks_migrated_total()
+    credentialing_store.migrate_clock_fields("practice-a")
+    _payload, row = credentialing_store._load_practice("practice-a")
+    copied = next(
+        item
+        for item in row["subjects"].values()
+        if item.get("name") == clinician.display_name.split()[0]
+    )
+    assert copied["clocks"]["malpractice_rider"] == "2025-06-01"
+    from app.credentialing.store import clocks_migrated_total
+
+    assert clocks_migrated_total() == added_before + 1
+
+
 def test_workflow_rules_are_local_and_jev_is_off() -> None:
     assert isinstance(workflow_engine(), RulesEngine)
     assert workflow_engine().suggest("which stalled file is next")["source"] == "rules"

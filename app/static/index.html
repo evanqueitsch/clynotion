@@ -1013,8 +1013,8 @@
 
     <footer>Clynotion</footer>
   </main>
-  <script src="/static/credentialing.js?v=0.18.0"></script>
-  <script src="/static/billing.js?v=0.18.0"></script>
+  <script src="/static/credentialing.js?v=0.18.1"></script>
+  <script src="/static/billing.js?v=0.18.1"></script>
   <script>
     const state = {
       token: null,
@@ -2105,6 +2105,7 @@
         const wantSupervision =
           hash === "#supervision" || hash === "#clynotion" || dirOk;
         const wantComply = hash === "#comply";
+        const wantComplianceRedirect = hash === "#compliance";
         const wantIngest = hash === "#ingest";
         const wantIntake = hash === "#intake";
         const wantElig = hash === "#eligibility";
@@ -2134,6 +2135,8 @@
               setStatus($("workspace-status"), workspaceErrorMessage(e.message), "error");
             }
           }
+        } else if (wantComplianceRedirect) {
+          await openCredentialing();
         } else if (wantComply) {
           await openComply();
         } else if (wantIngest) {
@@ -2343,11 +2346,19 @@
       wrap.classList.toggle("hidden", !(items && items.length));
     }
 
-    function formatDue(iso) {
+    function formatDue(iso, domain) {
       if (!iso) return "";
       try {
         const d = new Date(iso);
         if (Number.isNaN(d.getTime())) return "";
+        if (domain === "credentialing") {
+          return d.toLocaleDateString("en-US", {
+            timeZone: "America/New_York",
+            month: "short",
+            day: "numeric",
+            year: "numeric",
+          });
+        }
         return d.toLocaleString(undefined, {
           month: "short",
           day: "numeric",
@@ -2368,7 +2379,7 @@
       title.textContent = ob.title || "Open item";
       const meta = document.createElement("span");
       meta.className = "due-meta";
-      const dueLabel = formatDue(ob.due_at);
+      const dueLabel = formatDue(ob.due_at, ob.domain);
       meta.textContent = dueLabel
         ? `${ob.domain || "people"} · due ${dueLabel}`
         : (ob.domain || "people");
@@ -2497,54 +2508,17 @@
     async function refreshCredentialMatrix() {
       const root = $("credential-matrix");
       if (!root) return;
-      const rows = await api("/comply/credentials");
       root.innerHTML = "";
-      if (!rows.length) {
-        root.innerHTML = `<p class="meta">No clinicians on the roster yet — import from Workspace, then clocks appear here.</p>`;
-        return;
-      }
-      rows.forEach((clin) => {
-        const box = document.createElement("div");
-        box.className = "cred-clinician";
-        const h = document.createElement("h4");
-        h.textContent = clin.display_name;
-        box.appendChild(h);
-        (clin.clocks || []).forEach((clock) => {
-          const row = document.createElement("div");
-          row.className = "cred-clock" + (clock.overdue ? " overdue" : "");
-          const left = document.createElement("div");
-          const name = document.createElement("div");
-          name.className = "cred-name";
-          name.textContent = clock.name;
-          const meta = document.createElement("div");
-          meta.className = "due-meta";
-          meta.textContent = clock.last_completed
-            ? `last ${formatDue(clock.last_completed)} · due ${formatDue(clock.due_at)}`
-            : `no date set · due ${formatDue(clock.due_at)}`;
-          left.appendChild(name);
-          left.appendChild(meta);
-          const btn = document.createElement("button");
-          btn.type = "button";
-          btn.className = clock.overdue ? "primary" : "ghost";
-          btn.textContent = "Done";
-          btn.onclick = async () => {
-            try {
-              await api(
-                `/comply/credentials/${clin.clinician_id}/${clock.clock_id}/complete`,
-                { method: "POST", json: {} },
-              );
-              await refreshCredentialMatrix();
-              setStatus($("comply-status"), `Recorded ${clock.name} for ${clin.display_name}`, "ok");
-            } catch (e) {
-              setStatus($("comply-status"), e.message, "error");
-            }
-          };
-          row.appendChild(left);
-          row.appendChild(btn);
-          box.appendChild(row);
-        });
-        root.appendChild(box);
-      });
+      const note = document.createElement("p");
+      note.className = "meta";
+      note.textContent = "Clinician credential clocks are on each Credentialing profile.";
+      const open = document.createElement("button");
+      open.type = "button";
+      open.className = "primary";
+      open.textContent = "Open Credentialing";
+      open.addEventListener("click", () => openCredentialing());
+      root.appendChild(note);
+      root.appendChild(open);
     }
 
     async function openIngest() {
@@ -3822,6 +3796,7 @@
       else if (route.path === "time-admin") openTimeAdmin(route.params.get("week") || "");
       else if (route.path === "time") openTime();
       else if (route.path === "time-self-test") openTimeSelfTest();
+      else if (route.path === "compliance") openCredentialing();
       else if (route.path === "comply") openComply();
       else if (route.path === "ingest") openIngest();
       else if (route.path === "intake") openIntake();

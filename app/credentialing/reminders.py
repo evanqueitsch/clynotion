@@ -3,6 +3,9 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta, timezone
+from zoneinfo import ZoneInfo
+
+EASTERN = ZoneInfo("America/New_York")
 from typing import Any, Optional
 
 from app.credentialing.backup import backup_once
@@ -46,7 +49,9 @@ def _parse_day(value: str) -> Optional[date]:
 
 
 def _due(day: date) -> str:
-    return datetime(day.year, day.month, day.day, tzinfo=timezone.utc).isoformat()
+    """Noon Eastern so the calendar date does not shift when shown in New York."""
+    local = datetime(day.year, day.month, day.day, 12, 0, tzinfo=EASTERN)
+    return local.astimezone(timezone.utc).isoformat()
 
 
 def _days(payer: dict[str, Any], key: str, default: int) -> int:
@@ -261,3 +266,6 @@ def sync_stored_practices() -> None:
             print("credentialing_reminder_sync_failed")
             continue
         print("credentialing_reminder_counts " + json.dumps(counts, sort_keys=True))
+    from app.credentialing.store import clocks_migrated_total
+
+    print("credentialing_clocks_migrated " + str(clocks_migrated_total()))

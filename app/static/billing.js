@@ -35,8 +35,19 @@
       (data.action_items || []).forEach((item) => {
         const row = document.createElement("div");
         row.className = "due-row";
-        const label = document.createElement("span");
-        label.textContent = item.band + ": " + item.title;
+        const badge = document.createElement("span");
+        badge.className = "meta";
+        badge.textContent = item.band === "overdue" ? "Overdue" : "This week";
+        const label = document.createElement("button");
+        label.type = "button";
+        label.className = "ghost";
+        label.textContent = item.title;
+        label.addEventListener("click", () => {
+          const href = item.href || "";
+          const hash = href.indexOf("#");
+          if (hash !== -1) window.location.hash = href.slice(hash);
+        });
+        row.appendChild(badge);
         row.appendChild(label);
         actions.appendChild(row);
       });
@@ -49,7 +60,7 @@
         const row = document.createElement("div");
         row.className = "due-row";
         const label = document.createElement("span");
-        label.textContent = item.code + " " + item.title;
+        label.textContent = item.title;
         const done = document.createElement("button");
         done.type = "button";
         done.className = "ghost";
