@@ -58,8 +58,8 @@ MAX_WEEK_MINUTES = 7 * 24 * 60
 SCHEDULE_V1 = 1  # legacy Saturday–Friday week, Friday cutoff
 SCHEDULE_V2 = 2  # Monday–Friday workweek, Thursday payroll
 
-REMINDER_FIRST_SUBJECT = "Weekly hours are due tomorrow"
-REMINDER_DUE_SUBJECT = "Enter your weekly hours today!"
+_WEEKDAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+_MONTH_ABBR = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
 HOURS_HELPER_TEXT = (
     "Enter the hours you already worked. "
     "If you worked the Saturday or Sunday after that Friday, include them here. "
@@ -70,10 +70,7 @@ HOURS_CAP_NOTE = (
     "That is a physical limit so a typo cannot store an impossible week. "
     "It is not an overtime or payroll-policy cap; totals through 168:00 are accepted, including hours past 80."
 )
-CORRECTOR_NOTE = (
-    "After cutoff, only msmith@heart4change.org can enter missing hours or correct entries. "
-    "Changing the summary recipient does not change who may edit."
-)
+CORRECTOR_NOTE_TAIL = "Changing the summary recipient does not change who may edit."
 SCHEDULE_NOTE = (
     "Times use America/New_York, including daylight saving, and are honored to the minute. "
     "The scheduler must run every minute. A 15-minute poll would miss other minutes."
@@ -88,6 +85,33 @@ DEFAULT_RETRY_BACKOFF = (
 )
 
 _HHMM = re.compile(r"^([01]\d|2[0-3]):([0-5]\d)$")
+
+
+def reminder_due_phrase(weekday: int, hhmm: str) -> str:
+    """Sentence used in the settings helper and in the reminder email."""
+    match = _HHMM.fullmatch((hhmm or "").strip())
+    if not match:
+        raise ValueError("Time must be HH:MM in 24-hour form (any minute).")
+    hour, minute = int(match.group(1)), int(match.group(2))
+    clock_hour = hour % 12 or 12
+    suffix = "AM" if hour < 12 else "PM"
+    day = _WEEKDAY_NAMES[int(weekday)]
+    return f"Weekly hours are due by {day} at {clock_hour}:{minute:02d} {suffix}."
+
+
+def directory_updated_label(iso: str) -> str:
+    """Human time in America/New_York, such as 'Nov 6, 2026, 2:00 PM ET'."""
+    if not (iso or "").strip():
+        return "not yet"
+    local = _parse_iso(iso).astimezone(ET)
+    hour = local.hour % 12 or 12
+    suffix = "AM" if local.hour < 12 else "PM"
+    month = _MONTH_ABBR[local.month - 1]
+    return f"{month} {local.day}, {local.year}, {hour}:{local.minute:02d} {suffix} ET"
+
+
+REMINDER_FIRST_SUBJECT = reminder_due_phrase(2, "09:00")
+REMINDER_DUE_SUBJECT = reminder_due_phrase(3, "08:00")
 _EMAIL = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
 _now_override: Optional[datetime] = None
 
@@ -892,6 +916,8 @@ class TimeStore:
                 slot=slot,
                 week_ending=week,
                 deadline=_parse_iso(report["deadline"]),
+                weekday=settings.reminder_first_weekday if slot == "first" else settings.reminder_due_weekday,
+                at_time=settings.reminder_first_time if slot == "first" else settings.reminder_due_time,
             )
             messages.append({"to": row["email"], "subject": subject, "body": body})
         return {"sent": False, "slot": slot, "messages": messages}
@@ -1123,8 +1149,12 @@ class TimeStore:
             lines = list(record.get("lines") or [])
         else:
             record = None
-        thursday = _labelled_reminder("first", week, deadline)
-        friday = _labelled_reminder("due", week, deadline)
+        thursday = _labelled_reminder(
+            "first", week, deadline, settings.reminder_first_weekday, settings.reminder_first_time
+        )
+        friday = _labelled_reminder(
+            "due", week, deadline, settings.reminder_due_weekday, settings.reminder_due_time
+        )
         entry = None
         summary = None
         summary_note = "Enter your own hours in this test before the summary preview. Nothing is filled in for you."
@@ -1437,15 +1467,19 @@ class TimeStore:
             "participant_emails": list(settings.participant_emails),
             "reminder_first_weekday": settings.reminder_first_weekday,
             "reminder_first_time": settings.reminder_first_time,
-            "reminder_first_subject": REMINDER_FIRST_SUBJECT,
+            "reminder_first_subject": reminder_due_phrase(
+                settings.reminder_first_weekday, settings.reminder_first_time
+            ),
             "reminder_due_weekday": settings.reminder_due_weekday,
             "reminder_due_time": settings.reminder_due_time,
-            "reminder_due_subject": REMINDER_DUE_SUBJECT,
+            "reminder_due_subject": reminder_due_phrase(
+                settings.reminder_due_weekday, settings.reminder_due_time
+            ),
             "summary_weekday": settings.summary_weekday,
             "summary_time": settings.summary_time,
             "summary_recipient": settings.summary_recipient,
             "corrector_email": MELISSA_EMAIL,
-            "corrector_note": CORRECTOR_NOTE,
+            "corrector_note": self._corrector_note(settings.practice_id),
             "active_from_week": settings.active_from_week,
             "timezone": "America/New_York",
             "schedule_note": SCHEDULE_NOTE,
@@ -1513,6 +1547,15 @@ class TimeStore:
             )
         rows.sort(key=lambda row: (row["display_name"].casefold(), row["email"]))
         return rows
+
+    def _corrector_note(self, practice_id: str) -> str:
+        name, _clinician_id = self._name_for_email(practice_id, MELISSA_EMAIL)
+        if not name or name.strip().lower() == MELISSA_EMAIL:
+            name = "Melissa Smith"
+        return (
+            f"After cutoff, only {name} can enter missing hours or correct entries. "
+            f"{CORRECTOR_NOTE_TAIL}"
+        )
 
     def _name_for_email(self, practice_id: str, email: str) -> tuple[str, str]:
         for row in (self._directory.get(practice_id) or {}).get("users") or []:
@@ -1594,6 +1637,7 @@ class TimeStore:
             "status": str(snap.get("status") or "never"),
             "complete": bool(snap.get("complete")),
             "last_complete_at": str(snap.get("last_complete_at") or ""),
+            "updated_label": directory_updated_label(str(snap.get("last_complete_at") or "")),
             "last_attempt_at": str(snap.get("last_attempt_at") or ""),
             "error_code": str(snap.get("error_code") or ""),
             "pages": int(snap.get("pages") or 0),
@@ -1997,7 +2041,13 @@ class TimeStore:
                     lease=lease,
                     backoff=backoff,
                     max_attempts=max_attempts,
-                    subject_body=lambda: render_reminder(slot="first", week_ending=week, deadline=report_deadline),
+                    subject_body=lambda: render_reminder(
+                        slot="first",
+                        week_ending=week,
+                        deadline=report_deadline,
+                        weekday=settings.reminder_first_weekday,
+                        at_time=settings.reminder_first_time,
+                    ),
                     allow_create=_on_schedule_minute(now, first_at),
                 )
                 if job:
@@ -2015,7 +2065,13 @@ class TimeStore:
                     lease=lease,
                     backoff=backoff,
                     max_attempts=max_attempts,
-                    subject_body=lambda: render_reminder(slot="due", week_ending=week, deadline=report_deadline),
+                    subject_body=lambda: render_reminder(
+                        slot="due",
+                        week_ending=week,
+                        deadline=report_deadline,
+                        weekday=settings.reminder_due_weekday,
+                        at_time=settings.reminder_due_time,
+                    ),
                     allow_create=_on_schedule_minute(now, due_at),
                 )
                 if job:
@@ -2245,6 +2301,8 @@ class TimeStore:
                 slot=slot,
                 week_ending=week,
                 deadline=_parse_iso(report["deadline"]),
+                weekday=settings.reminder_first_weekday if slot == "first" else settings.reminder_due_weekday,
+                at_time=settings.reminder_first_time if slot == "first" else settings.reminder_due_time,
             )
             return ClaimedJob(
                 delivery_id=delivery.delivery_id,
@@ -2498,8 +2556,12 @@ def _send_state(slot: Optional[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
-def _labelled_reminder(slot: str, week_ending: date, deadline: datetime) -> tuple[str, str]:
-    subject, body = render_reminder(slot=slot, week_ending=week_ending, deadline=deadline)
+def _labelled_reminder(
+    slot: str, week_ending: date, deadline: datetime, weekday: int, at_time: str
+) -> tuple[str, str]:
+    subject, body = render_reminder(
+        slot=slot, week_ending=week_ending, deadline=deadline, weekday=weekday, at_time=at_time
+    )
     body = body.replace(TIME_ENTRY_URL, TIME_SELF_TEST_URL)
     return f"[TEST] {subject}", f"{SELF_TEST_BANNER}\n\n{body}"
 
@@ -2539,8 +2601,11 @@ def _self_test_summary(entry: dict[str, Any], header: dict[str, Any]) -> dict[st
     }
 
 
-def render_reminder(*, slot: str, week_ending: date, deadline: datetime) -> tuple[str, str]:
-    subject = REMINDER_FIRST_SUBJECT if slot == "first" else REMINDER_DUE_SUBJECT
+def render_reminder(
+    *, slot: str, week_ending: date, deadline: datetime, weekday: int, at_time: str
+) -> tuple[str, str]:
+    _ = slot
+    subject = reminder_due_phrase(weekday, at_time)
     weekend = coverage_end(week_ending)
     saturday = week_ending + timedelta(days=1)
     body = "\n".join(

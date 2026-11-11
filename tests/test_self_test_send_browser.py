@@ -38,7 +38,7 @@ VIEW = {
     },
     "friday": {
         "to": "operations@heart4change.org",
-        "subject": "[TEST] Enter your weekly hours today!",
+        "subject": "[TEST] Weekly hours are due by Thursday at 8:00 AM.",
         "body": "Friday body",
         "sent": False,
         "delivery": {
