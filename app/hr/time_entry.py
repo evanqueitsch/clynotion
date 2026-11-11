@@ -2801,5 +2801,5 @@ def scheduled_mail_status(practice_id: str = "") -> str:
 
 def scheduled_mail_sentence(practice_id: str = "") -> str:
     if scheduled_mail_status(practice_id) == "on":
-        return "Scheduled reminders and the Thursday payroll link use this mailbox."
+        return "Scheduled reminders and payroll links use this mailbox."
     return "Scheduled payroll mail stays off."

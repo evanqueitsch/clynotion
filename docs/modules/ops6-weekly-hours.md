@@ -153,7 +153,7 @@ With dev login (`alice` / `alice-pass`) and no Google, Gmail, or cron secret:
 
 - Settings, the employee form, history, the admin week, CSV, preview, and reminder preview all work.
 - Cutoff, Melissa-only correction, rounding, and practice isolation are enforced.
-- Nothing is emailed until an admin checks **Send scheduled reminders and the Thursday payroll link**. `/internal/time/tick` returns 503 until `CRON_SECRET` is set. The tick sends through the connected mailbox, not `TIME_MAIL_MODE`. A passed reminder minute is not sent later.
+- Nothing is emailed until an admin checks **Send scheduled reminders and payroll links**. `/internal/time/tick` returns 503 until `CRON_SECRET` is set. The tick sends through the connected mailbox, not `TIME_MAIL_MODE`. A passed reminder minute is not sent later.
 
 Synthetic roster fixtures exist only in tests. A real dev roster starts empty until Workspace import (mock directory in dev auth).
 
