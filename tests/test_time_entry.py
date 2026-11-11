@@ -227,8 +227,11 @@ def test_health_shows_scheduled_mail_only_when_the_checkbox_and_cron_are_on(
     health = client.get("/health").json()
     assert health["scheduled_mail"] == "off"
     assert health["time_mail_mode"] == "off"
+    assert health["cron_configured"] is False
     monkeypatch.setenv("CRON_SECRET", "present-not-a-real-secret")
-    assert client.get("/health").json()["scheduled_mail"] == "off"
+    armed = client.get("/health").json()
+    assert armed["scheduled_mail"] == "off"
+    assert armed["cron_configured"] is True
     _roster()
     set_clock(WED)
     time_store.save_settings(_alice_user(), _settings(automation_enabled=True), WED)
