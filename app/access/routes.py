@@ -59,7 +59,9 @@ def list_roles(user: CurrentUser) -> dict[str, Any]:
 def update_role(role_id: str, body: RolePermissionsBody, user: CurrentUser) -> dict[str, Any]:
     _admin(user)
     try:
-        return access_store.update_role_permissions(user.practice_id, role_id, body.permissions)
+        return access_store.update_role_permissions(
+            user.practice_id, role_id, body.permissions, actor_email=user.email
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
 

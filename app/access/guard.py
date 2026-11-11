@@ -31,6 +31,8 @@ def required_permission(path: str) -> str | None:
         return MANAGE_ROLES
     if path.startswith("/access/me"):
         return None
+    if path.startswith("/credentialing"):
+        return "tool:credentialing"
     if path.startswith("/hr/"):
         return "tool:onboarding_compliance"
     if path.startswith("/sessions") or path.startswith("/draft") or path.startswith("/finalize") or path.startswith("/clinicians") or path.startswith("/capture"):

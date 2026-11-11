@@ -66,7 +66,11 @@ def test_home_catalog_follows_role_and_marks_unbuilt_modules(client: TestClient)
     admin = client.get("/home", headers=_alice()).json()
     assert admin["full_catalog"] is True
     seen = {tool["id"]: tool for unit in admin["units"] for tool in unit["tools"]}
-    catalog_tools = [item for item in CATALOG_ITEMS if item.get("kind") == "tool"]
+    catalog_tools = [
+        item
+        for item in CATALOG_ITEMS
+        if item.get("kind") == "tool" and item.get("status") != "retired"
+    ]
     assert set(seen) == {item["id"] for item in catalog_tools}
     planned = [item["id"] for item in catalog_tools if item.get("status") == "planned"]
     assert planned
@@ -108,10 +112,26 @@ def test_home_catalog_follows_role_and_marks_unbuilt_modules(client: TestClient)
 def test_seeded_roles_grant_only_time_entry_and_admin_is_separate(client: TestClient) -> None:
     roles = client.get("/access/roles", headers=_alice()).json()["roles"]
     by_id = {row["id"]: row for row in roles}
-    for role_id in ("intake", "billing", "clinician", "clinical_supervisor"):
+    for role_id in ("intake", "clinician", "clinical_supervisor"):
         assert by_id[role_id]["permissions"] == ["tool:time_entry"]
+    billing = by_id["billing"]["permissions"]
+    assert "tool:time_entry" in billing
+    for permission in (
+        "tool:credentialing",
+        "capability:credentialing_manage",
+        "capability:credentialing_payers",
+        "capability:credentialing_sensitive",
+        "tool:billing",
+    ):
+        assert permission in billing
+    assert "capability:quickbooks_money" not in billing
+    assert "capability:payroll_quickbooks_push" not in billing
     assert "capability:manage_roles" in by_id["admin"]["permissions"]
     assert "capability:payroll_correct" not in by_id["admin"]["permissions"]
+    assert "capability:quickbooks_money" not in by_id["admin"]["permissions"]
+    assert "capability:payroll_quickbooks_push" not in by_id["admin"]["permissions"]
+    assert "tool:credentialing" in by_id["admin"]["permissions"]
+    assert "tool:onboarding_compliance" not in by_id["admin"]["permissions"]
     assert "tool:time_entry" in by_id["admin"]["permissions"]
 
 

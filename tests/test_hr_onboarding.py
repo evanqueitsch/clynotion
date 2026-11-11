@@ -169,13 +169,18 @@ def test_lsw_supervision_hours(client: TestClient) -> None:
     assert hours["hours_to_date"] == 1.5
 
 
-def test_catalog_onboarding_live(client: TestClient) -> None:
+def test_catalog_onboarding_retired(client: TestClient) -> None:
     units = client.get("/catalog", headers=_auth("alice")).json()
-    hr = next(u for u in units if u["name"] == "HR")
-    tools = {t["id"]: t for t in hr["tools"]}
-    assert tools["onboarding_compliance"]["status"] == "live"
-    assert tools["onboarding_compliance"]["href"] == "/#onboarding"
+    hr = next(u for u in units if u["id"] == "hr")
+    assert hr["name"] == "HR & Credentialing"
+    assert [tool["id"] for tool in hr["tools"]] == [
+        "employee_view",
+        "time_entry",
+        "credentialing",
+        "hiring_onboarding",
+    ]
+    assert all(tool["id"] != "onboarding_compliance" for unit in units for tool in unit["tools"])
 
 
 def test_health_version_014(client: TestClient) -> None:
-    assert client.get("/health").json()["version"] == "0.16.1"
+    assert client.get("/health").json()["version"] == "0.17.0"

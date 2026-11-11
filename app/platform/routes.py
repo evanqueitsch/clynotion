@@ -201,7 +201,12 @@ def _visible_units(user: CurrentUser) -> list[dict]:
                 tool["coming_soon"] = True
                 kept.append(tool)
                 continue
-            granted = full or f"tool:{tool.get('id')}" in perms or f"unit:{unit.get('id')}" in perms
+            tool_perm = f"tool:{tool.get('id')}"
+            unit_perm = f"unit:{unit.get('id')}"
+            if tool.get("requires_explicit_grant"):
+                granted = full or tool_perm in perms
+            else:
+                granted = full or tool_perm in perms or unit_perm in perms
             if granted:
                 kept.append(tool)
         if kept:

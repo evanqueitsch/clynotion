@@ -14,6 +14,25 @@ PAYROLL_CORRECT = "capability:payroll_correct"
 PAYROLL_DASHBOARD = "capability:payroll_dashboard"
 MANAGE_ROLES = "capability:manage_roles"
 TIME_ENTRY = "tool:time_entry"
+CREDENTIALING_TOOL = "tool:credentialing"
+CREDENTIALING_MANAGE = "capability:credentialing_manage"
+CREDENTIALING_PAYERS = "capability:credentialing_payers"
+CREDENTIALING_SENSITIVE = "capability:credentialing_sensitive"
+BILLING_TOOL = "tool:billing"
+QUICKBOOKS_MONEY = "capability:quickbooks_money"
+PAYROLL_QUICKBOOKS_PUSH = "capability:payroll_quickbooks_push"
+
+# Grantable by name. No role receives these unless an Admin saves the grant.
+SENSITIVE_GRANT_IDS = frozenset({QUICKBOOKS_MONEY, PAYROLL_QUICKBOOKS_PUSH})
+
+# Added to the Billing role by the one-time grants migration. Never removed.
+NEW_BILLING_GRANTS = (
+    CREDENTIALING_TOOL,
+    CREDENTIALING_MANAGE,
+    CREDENTIALING_PAYERS,
+    CREDENTIALING_SENSITIVE,
+    BILLING_TOOL,
+)
 
 
 def _tool_permission(item_id: str) -> str:
@@ -37,7 +56,7 @@ def permission_registry() -> list[dict[str, Any]]:
             }
         )
     for item in CATALOG_ITEMS:
-        if item.get("kind") != "tool":
+        if item.get("kind") != "tool" or item.get("status") == "retired":
             continue
         rows.append(
             {
@@ -69,6 +88,40 @@ def permission_registry() -> list[dict[str, Any]]:
                 "grantable": False,
                 "note": "Bound to Melissa's account. Not granted by a role.",
             },
+            {
+                "id": CREDENTIALING_MANAGE,
+                "name": "Credentialing changes",
+                "group": "capability",
+                "grantable": True,
+            },
+            {
+                "id": CREDENTIALING_PAYERS,
+                "name": "Credentialing payers",
+                "group": "capability",
+                "grantable": True,
+            },
+            {
+                "id": CREDENTIALING_SENSITIVE,
+                "name": "Credentialing sensitive IDs",
+                "group": "capability",
+                "grantable": True,
+            },
+            {
+                "id": QUICKBOOKS_MONEY,
+                "name": "QuickBooks money movement",
+                "group": "capability",
+                "grantable": True,
+                "sensitive": True,
+                "note": "No route uses this yet. Grant it by name.",
+            },
+            {
+                "id": PAYROLL_QUICKBOOKS_PUSH,
+                "name": "Send payroll hours to QuickBooks",
+                "group": "capability",
+                "grantable": True,
+                "sensitive": True,
+                "note": "No route uses this yet. Grant it by name.",
+            },
         ]
     )
     return rows
@@ -78,6 +131,15 @@ def grantable_ids() -> list[str]:
     return [row["id"] for row in permission_registry() if row.get("grantable")]
 
 
+def billing_role_permissions() -> list[str]:
+    """Built-in Billing role. Does not include money-movement capabilities."""
+    return [TIME_ENTRY, *NEW_BILLING_GRANTS]
+
+
 def admin_permissions() -> list[str]:
-    """Admin sees and controls the product, except Melissa-only corrections."""
-    return [item for item in grantable_ids() if item != PAYROLL_CORRECT]
+    """Admin sees and controls the product, except Melissa-only corrections and sensitive grants."""
+    return [
+        item
+        for item in grantable_ids()
+        if item != PAYROLL_CORRECT and item not in SENSITIVE_GRANT_IDS
+    ]

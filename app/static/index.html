@@ -498,6 +498,21 @@
       color: var(--muted);
       animation: rise 0.7s ease-out 0.2s both;
     }
+    body.credentialing-open main { max-width: 1120px; }
+    .cg-scroll { overflow-x: auto; margin: 0.75rem 0 1rem; }
+    .cg-grid { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
+    .cg-grid th, .cg-grid td { border: 1px solid var(--line); padding: 0.35rem; text-align: center; min-width: 5.5rem; }
+    .cg-grid th:first-child, .cg-grid td:first-child { text-align: left; min-width: 10rem; position: sticky; left: 0; background: #fff; }
+    .cg-cell { width: 100%; border: 0; background: transparent; font: inherit; cursor: pointer; min-height: 2rem; }
+    .cg-y { background: #e5f4ec; color: var(--ok); font-weight: 600; }
+    .cg-x, .cg-suggested { background: #f8e6e6; color: var(--danger); font-weight: 600; }
+    .cg-pending { background: #fff1e0; color: var(--warn); font-weight: 600; }
+    .cg-review { background: #e7eef8; color: #1d3f6e; font-weight: 600; }
+    .cg-filters, .cg-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; align-items: end; margin: 0.5rem 0; }
+    .cg-filters label, .cg-form label { font-size: 0.82rem; color: var(--muted); display: block; }
+    .cg-secret { font-variant-numeric: tabular-nums; letter-spacing: 0.04em; }
+    #cg-drawer, .cg-form { border: 1px solid var(--line); border-radius: 12px; padding: 0.85rem; margin: 0.75rem 0; background: rgba(255,255,255,0.7); }
+    .cg-history { font-size: 0.82rem; color: var(--muted); white-space: pre-wrap; }
   </style>
 </head>
 <body>
@@ -667,6 +682,72 @@
       </div>
       <p class="status" id="elig-status"></p>
       <div class="due-list" id="elig-list"></div>
+    </section>
+
+    <section id="credentialing-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">Credentialing</h2>
+        <button class="ghost" id="btn-credentialing-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <p class="meta">Payer enrollment for the practice and each clinician. Test records only until the real sheet is imported.</p>
+      <div class="cg-actions">
+        <button type="button" id="cg-tab-grid" class="primary">Grid</button>
+        <button type="button" id="cg-tab-profiles" class="ghost">Profiles</button>
+        <button type="button" id="cg-tab-payers" class="ghost">Payers</button>
+        <button type="button" id="cg-tab-import" class="ghost">Import / export</button>
+      </div>
+      <p class="status" id="cg-status"></p>
+      <div id="cg-grid-section">
+        <div class="cg-filters">
+          <label>Search<input id="cg-search" type="search" placeholder="Payer" /></label>
+          <label>Type
+            <select id="cg-type">
+              <option value="">All types</option>
+              <option value="commercial">Commercial</option>
+              <option value="medicaid_mco">Medicaid MCO</option>
+              <option value="chip">CHIP</option>
+              <option value="medicare">Medicare</option>
+              <option value="tricare">Tricare</option>
+              <option value="eap">EAP</option>
+            </select>
+          </label>
+          <label>Status
+            <select id="cg-status-filter">
+              <option value="">All statuses</option>
+              <option value="in_network">In network</option>
+              <option value="not_eligible">Not eligible</option>
+              <option value="pending">Pending</option>
+              <option value="needs_review">Needs review</option>
+              <option value="unknown">Unknown</option>
+              <option value="suggested">Suggested not eligible</option>
+            </select>
+          </label>
+          <label>Column
+            <select id="cg-focus"></select>
+          </label>
+          <label>Needs action<input id="cg-needs" type="checkbox" /></label>
+        </div>
+        <div class="cg-scroll" id="cg-grid"></div>
+        <div id="cg-drawer" class="hidden"></div>
+      </div>
+      <div id="cg-profiles-section" class="hidden"></div>
+      <div id="cg-payers-section" class="hidden"></div>
+      <div id="cg-import-section" class="hidden">
+        <p class="meta">Upload payers.csv, people.csv, and grid.csv. Nothing is saved until you confirm. The encrypted file is backed up first.</p>
+        <label>payers.csv<input id="cg-file-payers" type="file" accept=".csv,text/csv" /></label>
+        <label>people.csv<input id="cg-file-people" type="file" accept=".csv,text/csv" /></label>
+        <label>grid.csv<input id="cg-file-grid" type="file" accept=".csv,text/csv" /></label>
+        <div class="cg-actions">
+          <button type="button" id="cg-preview" class="ghost">Preview import</button>
+          <button type="button" id="cg-commit" class="primary" disabled>Confirm import</button>
+        </div>
+        <div id="cg-import-preview"></div>
+        <div class="cg-actions">
+          <button type="button" id="cg-export-payers" class="ghost">Export payers.csv</button>
+          <button type="button" id="cg-export-people" class="ghost">Export people.csv</button>
+          <button type="button" id="cg-export-grid" class="ghost">Export grid.csv</button>
+        </div>
+      </div>
     </section>
 
     <section id="onboarding-panel" class="panel hidden">
@@ -909,6 +990,7 @@
 
     <footer>Clynotion</footer>
   </main>
+  <script src="/static/credentialing.js?v=0.17.0"></script>
   <script>
     const state = {
       token: null,
@@ -1779,7 +1861,17 @@
             box.disabled = !!role.locked;
             box.dataset.permission = perm.id;
             label.appendChild(box);
-            label.appendChild(document.createTextNode(" " + perm.name));
+            label.appendChild(document.createTextNode(" " + perm.name + " "));
+            const permId = document.createElement("span");
+            permId.className = "meta";
+            permId.textContent = perm.id;
+            label.appendChild(permId);
+            if (perm.sensitive) {
+              const warn = document.createElement("span");
+              warn.className = "meta";
+              warn.textContent = " Sensitive. Saving a new grant asks you to confirm.";
+              label.appendChild(warn);
+            }
             list.appendChild(label);
           });
           card.appendChild(list);
@@ -1808,6 +1900,21 @@
             });
             save.onclick = async () => {
               const permissions = Array.from(currentSet());
+              const sensitiveAdded = permissions.filter((id) => {
+                const perm = (data.permissions || []).find((row) => row.id === id);
+                return perm && perm.sensitive && !savedSet.has(id);
+              });
+              if (sensitiveAdded.length) {
+                const proceed = window.confirm(
+                  "Grant " + sensitiveAdded.join(", ") + "? These permissions can move money or send payroll. Only grant them on purpose."
+                );
+                if (!proceed) {
+                  save.disabled = false;
+                  note.textContent = "Not saved";
+                  note.className = "role-row-status role-save-note warn";
+                  return;
+                }
+              }
               save.disabled = true;
               note.textContent = "Saving…";
               note.className = "role-row-status role-save-note";
@@ -1960,6 +2067,7 @@
         const wantIntake = hash === "#intake";
         const wantElig = hash === "#eligibility";
         const wantOnboarding = hash === "#onboarding";
+        const wantCredentialing = hash === "#credentialing";
         const timeRoute = hashRoute();
         if (timeRoute.path === "time-admin" && timeRoute.params.get("v") && $("time-admin-version")) {
           $("time-admin-version").value = timeRoute.params.get("v");
@@ -1991,6 +2099,8 @@
           await openIntake();
         } else if (wantElig) {
           await openEligibility();
+        } else if (wantCredentialing) {
+          await openCredentialing();
         } else if (wantOnboarding) {
           await openOnboarding();
         } else if (wantTime) {
@@ -2013,9 +2123,11 @@
     }
 
     function show(panel) {
-      ["auth-panel", "no-access-panel", "access-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel", "time-panel", "time-admin-panel", "time-settings-panel", "time-self-test-panel"].forEach((id) => {
+      ["auth-panel", "no-access-panel", "access-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel", "credentialing-panel", "time-panel", "time-admin-panel", "time-settings-panel", "time-self-test-panel"].forEach((id) => {
         $(id).classList.toggle("hidden", id !== panel);
       });
+      document.body.classList.toggle("credentialing-open", panel === "credentialing-panel");
+      if (panel !== "credentialing-panel" && window.credentialingMask) window.credentialingMask();
     }
 
     async function enterHome() {
@@ -2060,6 +2172,7 @@
       if (href.includes("ingest")) return openIngest();
       if (href.includes("intake")) return openIntake();
       if (href.includes("eligibility")) return openEligibility();
+      if (href.includes("credentialing")) return window.openCredentialing();
       if (href.includes("onboarding")) return openOnboarding();
       if (href.includes("time-self-test")) return openTimeSelfTest();
       if (href.includes("time-settings")) return openTimeSettings();
@@ -2513,9 +2626,12 @@
     }
 
     async function openOnboarding() {
-      show("onboarding-panel");
-      window.history.replaceState({}, "", "/#onboarding");
-      await refreshOnboarding();
+      const access = state.access || {};
+      const perms = access.permissions || [];
+      if ((access.can_manage_roles || perms.indexOf("tool:credentialing") !== -1) && typeof window.openCredentialing === "function") {
+        return window.openCredentialing();
+      }
+      return enterHome();
     }
 
     async function refreshOnboarding() {
@@ -3649,9 +3765,12 @@
       show("capture-panel");
     };
 
+    window.clynotion = { api, show, setStatus, $, state };
+
     window.addEventListener("hashchange", () => {
-      if (!state.user || !state.access || state.access.landing === "none" || state.access.landing === "time") return;
+      if (!state.user || !state.access || state.access.landing === "none") return;
       const route = hashRoute();
+      if (state.access.landing === "time" && route.path !== "time" && route.path !== "onboarding" && route.path !== "credentialing") return;
       if (route.path === "roles") openAccess();
       else if (route.path === "time-settings") openTimeSettings();
       else if (route.path === "time-admin") openTimeAdmin(route.params.get("week") || "");
@@ -3661,6 +3780,7 @@
       else if (route.path === "ingest") openIngest();
       else if (route.path === "intake") openIntake();
       else if (route.path === "eligibility") openEligibility();
+      else if (route.path === "credentialing") openCredentialing();
       else if (route.path === "onboarding") openOnboarding();
       else if (route.path === "supervision" || route.path === "clynotion") openSupervision();
       else if (!route.path) enterHome();

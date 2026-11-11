@@ -37,6 +37,8 @@ ENV PYTHONUNBUFFERED=1 \
     ATTUNE_HR_TIME_DATA_PATH=/data/hr_time.enc \
     ATTUNE_ACCESS_PERSISTENCE=file \
     ATTUNE_ACCESS_DATA_PATH=/data/access_roles.enc \
+    ATTUNE_CREDENTIALING_PERSISTENCE=file \
+    ATTUNE_CREDENTIALING_DATA_PATH=/data/credentialing.enc \
     TIME_MAIL_MODE=off
 WORKDIR /app
 
