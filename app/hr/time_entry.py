@@ -128,8 +128,15 @@ def is_melissa(user: User) -> bool:
 
 
 def can_manage_time(user: User) -> bool:
-    """HR admins (including Evan) and Melissa. Melissa is not implied by HR admin."""
-    return is_hr_admin(user) or is_melissa(user)
+    """Settings and self-test. Admin or break-glass owner. Not Melissa's payroll right."""
+    return is_hr_admin(user)
+
+
+def can_view_payroll(user: User) -> bool:
+    """Payroll dashboard. Admin, or Melissa without making her an Admin."""
+    from app.access.resolve import has_permission
+
+    return is_hr_admin(user) or has_permission(user, "capability:payroll_dashboard")
 
 
 def pay_week_ending(moment: datetime) -> date:
@@ -716,6 +723,7 @@ class TimeStore:
                 "email": email,
                 "is_participant": participant,
                 "can_manage_settings": can_manage_time(user),
+                "can_view_payroll": can_view_payroll(user),
                 "can_correct_locked": is_melissa(user),
                 "can_self_test": self._is_self_tester(user),
                 "can_edit": self._can_write(user, email, week, moment, settings, state),
@@ -827,7 +835,7 @@ class TimeStore:
     def week_view(
         self, user: User, week_ending: str, now: Optional[datetime] = None, version: Optional[int] = None
     ) -> dict[str, Any]:
-        self._require_manager(user)
+        self._require_payroll_viewer(user)
         moment = now or utcnow()
         week = parse_week_ending(week_ending)
         with self.exclusive():
@@ -1289,8 +1297,12 @@ class TimeStore:
     def _require_manager(self, user: User) -> None:
         if not can_manage_time(user):
             raise TimeAuthzError(
-                "Weekly hours settings are limited to HR admins and Melissa."
+                "Weekly hours settings are limited to an Admin."
             )
+
+    def _require_payroll_viewer(self, user: User) -> None:
+        if not can_view_payroll(user):
+            raise TimeAuthzError("The payroll week is limited to Melissa and an Admin.")
 
     def _merge_settings(
         self,
@@ -2057,6 +2069,7 @@ class TimeStore:
             )
         return {
             "can_manage": can_manage_time(user),
+            "can_view_payroll": can_view_payroll(user),
             "can_enter": selected,
             "can_correct_locked": is_melissa(user),
         }
@@ -2609,18 +2622,26 @@ def nav_for_user(user: User) -> dict[str, Any]:
             "href": "/#time-settings",
             "status": "live",
             "description": (
-                "Choose which roster staff may enter a Saturday–Friday total. "
+                "Choose which staff may enter the prior Monday–Friday total. "
                 "Nobody is on by default, including you, until you select them. "
                 "Mail is off; nothing is emailed."
             ),
             "open_label": "Weekly hours settings",
+        }
+    if access.get("can_view_payroll"):
+        return {
+            "href": "/#time-admin",
+            "status": "live",
+            "description": "Open the payroll week. Post-cutoff corrections stay with Melissa.",
+            "open_label": "Payroll week",
         }
     if access["can_enter"]:
         return {
             "href": "/#time",
             "status": "live",
             "description": (
-                "Enter your Saturday–Friday hours, including the Friday afternoon you expect to work."
+                "Enter one total for the prior Monday–Friday. "
+                "Weekend hours after that Friday are included."
             ),
             "open_label": "Enter weekly hours",
         }
