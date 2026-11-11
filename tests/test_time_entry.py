@@ -1094,6 +1094,8 @@ def test_settings_copy_uses_names_dates_and_the_selected_reminder_time(client: T
     assert "today!" not in page
     assert "Weekly hours are due by" in page
     assert "All times are Eastern." in page
+    assert "Send scheduled reminders and payroll links" in page
+    assert "the Thursday payroll link" not in page
     assert "A 15-minute poll" not in page
     assert "168:00 —" not in page
     assert "Weekly total cannot exceed 168:00" in Path("app/hr/time_entry.py").read_text(encoding="utf-8")
