@@ -1155,14 +1155,18 @@ class TimeStore:
             "banner": SELF_TEST_BANNER,
             "email": email,
             "display_name": display_name,
-            "scheduled_mail": "off",
+            "scheduled_mail": scheduled_mail_status(user.practice_id),
             "mailbox": mailbox,
             "sender": sender,
             "sender_note": str(mailbox.get("status_detail") or "")
             or (
-                f"Verified sending mailbox: {sender}. Scheduled payroll mail stays off."
-                if sender
-                else "No sending mailbox is connected. Scheduled payroll mail stays off. Connect a heart4change.org mailbox, then press Send."
+                (
+                    f"Verified sending mailbox: {sender}. {scheduled_mail_sentence(user.practice_id)}"
+                    if sender
+                    else "No sending mailbox is connected. "
+                    + scheduled_mail_sentence(user.practice_id)
+                    + " Connect a heart4change.org mailbox, then press Send."
+                )
             ),
             "thursday": {
                 "to": email,
@@ -2052,6 +2056,13 @@ class TimeStore:
             delivery.updated_at = _iso(now)
             self._dirty = True
 
+    def automation_is_on(self, practice_id: str = "") -> bool:
+        """Checkbox state already loaded. Does not take the store lock or send mail."""
+        if practice_id:
+            settings = self._settings.get(practice_id)
+            return bool(settings and settings.automation_enabled)
+        return any(item.automation_enabled for item in self._settings.values())
+
     def access_summary(self, user: User) -> dict[str, Any]:
         """Whether this user may enter hours. Does not enable anyone."""
         email = _email(user.email)
@@ -2359,6 +2370,66 @@ def _on_schedule_minute(now: datetime, scheduled: datetime) -> bool:
     return scheduled <= now < scheduled + timedelta(minutes=2)
 
 
+def preview_new_sends(settings: TimeSettings, now: datetime, *, locked: bool = False) -> list[dict[str, str]]:
+    """Sends a tick would create at ``now`` if none exist yet. Does not write or send."""
+    planned: list[dict[str, str]] = []
+    for week in _scope_weeks(settings, now):
+        reminders = _reminder_kinds(now, settings, week, locked)
+        deadline = deadline_instant(week, settings)
+        first_at = at_local(
+            date_for_weekday(week, settings.reminder_first_weekday),
+            settings.reminder_first_time,
+        )
+        due_at = at_local(
+            date_for_weekday(week, settings.reminder_due_weekday),
+            settings.reminder_due_time,
+        )
+        if "reminder_first" in reminders and _on_schedule_minute(now, first_at):
+            planned.append(
+                {"week_ending": week.isoformat(), "kind": "reminder_first", "at": first_at.isoformat(), "audience": "enabled"}
+            )
+        if "reminder_due" in reminders and _on_schedule_minute(now, due_at):
+            planned.append(
+                {"week_ending": week.isoformat(), "kind": "reminder_due", "at": due_at.isoformat(), "audience": "missing"}
+            )
+        if (
+            settings.automation_enabled
+            and deadline <= now < deadline + timedelta(hours=3)
+            and _on_schedule_minute(now, deadline)
+        ):
+            planned.append(
+                {"week_ending": week.isoformat(), "kind": "summary", "at": deadline.isoformat(), "audience": "summary_recipient"}
+            )
+    return planned
+
+
+def upcoming_slots(settings: TimeSettings, now: datetime) -> list[dict[str, str]]:
+    """Scheduled minutes that have not already closed, including the open one."""
+    slots: list[dict[str, str]] = []
+    for week in _scope_weeks(settings, now):
+        deadline = deadline_instant(week, settings)
+        first_at = at_local(
+            date_for_weekday(week, settings.reminder_first_weekday),
+            settings.reminder_first_time,
+        )
+        due_at = at_local(
+            date_for_weekday(week, settings.reminder_due_weekday),
+            settings.reminder_due_time,
+        )
+        candidates = (
+            ("reminder_first", first_at, "enabled"),
+            ("reminder_due", due_at, "missing"),
+            ("summary", deadline, "summary_recipient"),
+        )
+        for kind, at, audience in candidates:
+            if now < at + timedelta(minutes=2):
+                slots.append(
+                    {"week_ending": week.isoformat(), "kind": kind, "at": at.isoformat(), "audience": audience}
+                )
+    slots.sort(key=lambda row: row["at"])
+    return slots
+
+
 def _reminder_kinds(now: datetime, settings: TimeSettings, week: date, locked: bool) -> set[str]:
     """Kinds that may still be retried. A brand-new send is a separate minute check."""
     if not settings.automation_enabled or locked or now >= deadline_instant(week, settings):
@@ -2654,3 +2725,19 @@ def nav_for_user(user: User) -> dict[str, Any]:
 
 
 time_store = TimeStore()
+
+
+def scheduled_mail_status(practice_id: str = "") -> str:
+    """On only when the tick secret is set and the practice checkbox is on.
+
+    ``TIME_MAIL_MODE`` is the retired service-account switch and is not consulted.
+    """
+    if not (os.environ.get("CRON_SECRET") or "").strip():
+        return "off"
+    return "on" if time_store.automation_is_on(practice_id) else "off"
+
+
+def scheduled_mail_sentence(practice_id: str = "") -> str:
+    if scheduled_mail_status(practice_id) == "on":
+        return "Scheduled reminders and the Thursday payroll link use this mailbox."
+    return "Scheduled payroll mail stays off."

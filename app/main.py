@@ -242,6 +242,8 @@ def _parse_present_form(present_json: Optional[str]) -> list[PresentMember]:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
+    from app.hr.time_entry import scheduled_mail_status
+
     modes = provider_modes()
     data_path = os.environ.get("ATTUNE_CLINICIAN_DATA_PATH", "")
     return {
@@ -262,7 +264,7 @@ def health() -> dict[str, Any]:
         "time_persistence": os.environ.get("ATTUNE_HR_TIME_PERSISTENCE", "memory"),
         "time_data_path": os.environ.get("ATTUNE_HR_TIME_DATA_PATH", ""),
         "time_mail_mode": _public_time_mail_mode(),
-        "scheduled_mail": "off" if _public_time_mail_mode() != "gmail" else "gmail",
+        "scheduled_mail": scheduled_mail_status(),
     }
 
 

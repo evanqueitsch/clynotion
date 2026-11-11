@@ -153,7 +153,7 @@ With dev login (`alice` / `alice-pass`) and no Google, Gmail, or cron secret:
 
 - Settings, the employee form, history, the admin week, CSV, preview, and reminder preview all work.
 - Cutoff, Melissa-only correction, rounding, and practice isolation are enforced.
-- Nothing is emailed. `/internal/time/tick` returns 503 until `CRON_SECRET` is set, and even then sends nothing until `TIME_MAIL_MODE=gmail`.
+- Nothing is emailed until an admin checks **Send scheduled reminders and the Thursday payroll link**. `/internal/time/tick` returns 503 until `CRON_SECRET` is set. The tick sends through the connected mailbox, not `TIME_MAIL_MODE`. A passed reminder minute is not sent later.
 
 Synthetic roster fixtures exist only in tests. A real dev roster starts empty until Workspace import (mock directory in dev auth).
 
@@ -168,7 +168,7 @@ Do this only when you intend to send mail. Do not put the secret values in git, 
 | `ATTUNE_HR_TIME_PERSISTENCE` | Production: set `file` | Keeps hours across restarts. | — |
 | `ATTUNE_HR_TIME_DATA_PATH` | Optional | Encrypted file path. On Fly, a path under `/data`. | — |
 | `ATTUNE_DATA_ENCRYPTION_KEY` | Required in real mode (existing) | Encrypts this file. | `python -c "from app.crypto import generate_key; print(generate_key())"` — store it in the host secret manager. Do not commit it. Losing it makes the file unreadable. |
-| `TIME_MAIL_MODE` | Optional, default `off` | `gmail` is the only mode that sends. | — |
+| `TIME_MAIL_MODE` | Optional, default `off` | Leave `off`. This is the retired service-account path. Scheduled mail uses the connected mailbox when the settings checkbox is on. | — |
 | `TIME_MAIL_SENDER` | Required only for `gmail` | Mailbox the service account impersonates. Use `operations@heart4change.org`. | Google Admin → Directory → Users. The address must be a real Workspace user. |
 | `GOOGLE_SA_JSON` | Required only for `gmail` | Service-account JSON, either a file path or the JSON string. | Google Cloud Console → IAM → Service accounts → Keys → Add key → JSON. Enable the Gmail API on that project. In Google Admin → Security → Access and data control → API controls → Domain-wide delegation, authorize the service account’s client id for `https://www.googleapis.com/auth/gmail.send` only. |
 | `CRON_SECRET` | Required only to enable the tick | Shared bearer secret for `POST /internal/time/tick`. | Generate it yourself, for example `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Set the same value on the app and on the Worker. It is not a vendor key. |
