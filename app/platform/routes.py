@@ -108,7 +108,7 @@ def _build_attention(practice_id: str) -> list[AttentionItemOut]:
 
 def _build_pulse(practice_id: str) -> PulseOut:
     bands = due_engine.bands(practice_id)
-    open_count = len(due_engine.list_open(practice_id))
+    open_count = len(bands["overdue"]) + len(bands["this_week"])
     latest = ingest_store.latest_ok(practice_id, "documentation")
     age_days = None
     unsigned_rows = 0

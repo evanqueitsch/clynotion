@@ -64,7 +64,10 @@
   }
 
   function cellLabel(cell) {
-    const warn = cell && cell.display === "warning" ? (cell.license_warning || "License does not match this payer.") : "";
+    let warn = cell && cell.display === "warning" ? (cell.license_warning || "") : "";
+    if (cell && cell.follow_up_overdue) {
+      warn = (warn ? warn + " " : "") + "Follow-up due " + (cell.follow_up_on || "");
+    }
     if (!cell || cell.status === "unknown" || cell.display === "suggested") {
       if (cell && (cell.display === "suggested" || cell.suggestion_reason)) {
         return { text: "X", cls: "cg-suggested", title: cell.suggestion_reason || "Suggested not eligible", warn: "" };
@@ -320,7 +323,7 @@
     status.value = (cell && cell.status) || "unknown";
     const submitted = field("Submitted on", (cell && cell.submitted_on) || "");
     const effective = field("Effective on", (cell && cell.effective_on) || "");
-    const follow = field("Next follow-up", (cell && cell.next_follow_up) || "");
+    const follow = fieldDate("Next follow-up", (cell && (cell.next_follow_up || cell.follow_up_on)) || "", "");
     const provider = field("Payer provider ID", "");
     provider.input.placeholder = (cell && cell.payer_provider_id_masked) || "Leave blank to keep";
     const note = document.createElement("textarea");
@@ -381,11 +384,31 @@
     drawer.appendChild(historyBlock(cell && cell.history));
   }
 
-  function field(label, value) {
+  function field(label, value, type) {
     const input = document.createElement("input");
-    input.type = "text";
-    input.value = value || "";
+    input.type = type || "text";
+    input.value = type === "date" ? String(value || "").slice(0, 10) : (value || "");
     return { wrap: labeled(label, input), input: input };
+  }
+
+  function addDays(iso, days) {
+    const parts = String(iso || "").slice(0, 10).split("-");
+    if (parts.length !== 3) return "";
+    const dt = new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])));
+    if (Number.isNaN(dt.getTime())) return "";
+    dt.setUTCDate(dt.getUTCDate() + days);
+    return dt.toISOString().slice(0, 10);
+  }
+
+  function fieldDate(label, value, dueOn) {
+    const made = field(label, value, "date");
+    if (dueOn) {
+      const note = document.createElement("span");
+      note.className = "meta";
+      note.textContent = " Due " + dueOn;
+      made.wrap.appendChild(note);
+    }
+    return made;
   }
 
   function labeled(text, control) {
@@ -407,6 +430,7 @@
 
   function renderProfiles() {
     const root = $("cg-profiles-section");
+    const previous = ($("cg-profile-pick") && $("cg-profile-pick").value) || "";
     root.innerHTML = "";
     const picker = document.createElement("select");
     picker.id = "cg-profile-pick";
@@ -451,22 +475,26 @@
       const license = field("License type", subject.license_type);
       const hire = field("Hire date", subject.hire_date);
       const device = field("Device", subject.device);
-      const expires = field("License expires on", subject.license_expires_on);
-      const caqhDate = field("CAQH last attested", subject.caqh_attested_on);
+      const expires = fieldDate("License expires on", subject.license_expires_on, (subject.license_expires_on || "").slice(0, 10));
+      const caqhDate = fieldDate(
+        "CAQH last attested",
+        subject.caqh_attested_on,
+        subject.caqh_attested_on ? addDays(subject.caqh_attested_on, 120) : ""
+      );
       const legal = field("Legal name", subject.legal_name);
       const address = field("Service address", subject.service_address);
       const clockInputs = {};
       const clockNames = [
-        ["license_renewal", "License renewal"],
-        ["caqh_reattestation", "CAQH re-attestation"],
-        ["malpractice_rider", "Malpractice rider"],
-        ["recredentialing", "Recredentialing"],
-        ["ma_revalidation", "MA revalidation"],
-        ["clinician_exclusion_screening", "Exclusion screening"],
+        ["license_renewal", "License renewal", 730],
+        ["caqh_reattestation", "CAQH re-attestation", 120],
+        ["malpractice_rider", "Malpractice rider", 365],
+        ["recredentialing", "Recredentialing", 1095],
+        ["ma_revalidation", "MA revalidation", 1825],
+        ["clinician_exclusion_screening", "Exclusion screening", 30],
       ];
       clockNames.forEach((pair) => {
         const current = (subject.clocks && subject.clocks[pair[0]]) || "";
-        clockInputs[pair[0]] = field(pair[1], current);
+        clockInputs[pair[0]] = fieldDate(pair[1], current, current ? addDays(current, pair[2]) : "");
       });
       const npi = field("Replace NPI", "");
       const tin = field("Replace TIN", "");
@@ -558,6 +586,9 @@
         refreshAudit(subject.id);
       }
     };
+    if (previous && Array.from(picker.options).some((option) => option.value === previous)) {
+      picker.value = previous;
+    }
     picker.addEventListener("change", draw);
     if (picker.options.length) draw();
     const removed = (payload.subjects || []).filter((item) => item.archived);

@@ -29,6 +29,40 @@ SECRET_FIELDS = (
     "payer_provider_id",
 )
 MASTERS = {"lcsw", "lsw", "lpc", "lapc", "lmft"}
+_CLOCKS_MIGRATED = 0
+
+
+def clocks_migrated_total() -> int:
+    return _CLOCKS_MIGRATED
+
+
+def _name_tokens(value: str) -> list[str]:
+    return [part for part in "".join(ch if ch.isalnum() else " " for ch in value.casefold()).split() if part]
+
+
+def _match_roster_person(subject_name: str, matrix: list[dict[str, Any]]) -> Optional[dict[str, Any]]:
+    """Match a credentialing clinician to one roster person. Ambiguous names do not match."""
+    tokens = _name_tokens(subject_name)
+    if not tokens:
+        return None
+    exact = " ".join(tokens)
+    by_exact = []
+    loose = []
+    for person in matrix:
+        person_tokens = _name_tokens(str(person.get("display_name") or ""))
+        if not person_tokens:
+            continue
+        if " ".join(person_tokens) == exact:
+            by_exact.append(person)
+            continue
+        shorter, longer = (tokens, person_tokens) if len(tokens) <= len(person_tokens) else (person_tokens, tokens)
+        if set(shorter) <= set(longer) and all(len(part) >= 3 for part in shorter):
+            loose.append(person)
+    if len(by_exact) == 1:
+        return by_exact[0]
+    if len(loose) == 1:
+        return loose[0]
+    return None
 
 
 def mask_secret(value: str) -> str:
@@ -238,16 +272,10 @@ class CredentialingStore:
             matrix = credential_store.matrix(practice_id)
         except Exception:
             return
-        by_name: dict[str, dict[str, Any]] = {}
-        for person in matrix:
-            key = " ".join(str(person.get("display_name") or "").casefold().split())
-            if key:
-                by_name[key] = person
         for subject in subjects:
             if subject.get("kind") != "clinician":
                 continue
-            key = " ".join(str(subject.get("name") or "").casefold().split())
-            match = by_name.get(key)
+            match = _match_roster_person(str(subject.get("name") or ""), matrix)
             if not match:
                 continue
             clocks = dict(subject.get("clocks") or {})
@@ -265,21 +293,16 @@ class CredentialingStore:
         from app.comply.credentials import credential_store
 
         payload, row = self._load_practice(practice_id)
-        by_name: dict[str, dict[str, Any]] = {}
         try:
             matrix = credential_store.matrix(practice_id)
         except Exception:
             matrix = []
-        for person in matrix:
-            key = " ".join(str(person.get("display_name") or "").casefold().split())
-            if key:
-                by_name[key] = person
         changed = False
+        added = 0
         for subject in row["subjects"].values():
             if not isinstance(subject, dict) or subject.get("kind") != "clinician":
                 continue
-            key = " ".join(str(subject.get("name") or "").casefold().split())
-            match = by_name.get(key)
+            match = _match_roster_person(str(subject.get("name") or ""), matrix)
             if not match:
                 continue
             if not subject.get("clinician_id") and match.get("clinician_id"):
@@ -295,6 +318,7 @@ class CredentialingStore:
                 if clock_id and last and not clocks.get(clock_id):
                     clocks[clock_id] = last[:10]
                     changed = True
+                    added += 1
         if not changed:
             return []
         backups: list[str] = []
@@ -306,6 +330,8 @@ class CredentialingStore:
                 if name:
                     backups.append(name)
         self._save(payload)
+        global _CLOCKS_MIGRATED
+        _CLOCKS_MIGRATED += added
         return backups
 
     def digest_enabled(self, practice_id: str) -> bool:
@@ -888,11 +914,46 @@ def _public_history(events: list[Any]) -> list[dict[str, Any]]:
     return out
 
 
+def _follow_up_on(enrollment: dict[str, Any], payer: dict[str, Any]) -> str:
+    saved = str(enrollment.get("next_follow_up") or "").strip()
+    if len(saved) >= 10:
+        return saved[:10]
+    status = str(enrollment.get("status") or "")
+    submitted = str(enrollment.get("submitted_on") or "").strip()[:10]
+    if status not in {"pending", "submitted"} or len(submitted) < 10:
+        return ""
+    try:
+        day = datetime.strptime(submitted, "%Y-%m-%d").date()
+        interval = int(payer.get("follow_up_days") or 14)
+    except (TypeError, ValueError):
+        return ""
+    if interval <= 0:
+        interval = 14
+    from datetime import timedelta
+
+    return (day + timedelta(days=interval)).isoformat()
+
+
+def _follow_up_is_overdue(day: str) -> bool:
+    if len(day) < 10:
+        return False
+    try:
+        from zoneinfo import ZoneInfo
+
+        due = datetime.strptime(day[:10], "%Y-%m-%d").date()
+        today = datetime.now(ZoneInfo("America/New_York")).date()
+    except ValueError:
+        return False
+    return due < today
+
+
 def _public_cell(row: dict[str, Any], subject: dict[str, Any], payer: dict[str, Any]) -> dict[str, Any]:
     key = f"{subject['id']}|{payer['id']}"
     enrollment = row["enrollments"].get(key) or {}
     reason = license_conflict(payer, subject)
     status = str(enrollment.get("status") or "unknown")
+    follow_on = _follow_up_on(enrollment, payer)
+    follow_overdue = _follow_up_is_overdue(follow_on)
     blank = status in {"", "unknown"}
     confirmed = status == "not_eligible"
     if reason and blank:
@@ -914,7 +975,9 @@ def _public_cell(row: dict[str, Any], subject: dict[str, Any], payer: dict[str, 
         "updated_at": enrollment.get("updated_at") or "",
         "suggestion_reason": reason if blank else "",
         "license_warning": reason if reason and not blank and not confirmed else "",
-        "display": display,
+        "display": "warning" if follow_overdue and display == "plain" else display,
+        "follow_up_on": follow_on,
+        "follow_up_overdue": follow_overdue,
         "history": _public_history(enrollment.get("history") or []),
     }
 

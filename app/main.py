@@ -283,7 +283,17 @@ def health() -> dict[str, Any]:
         "time_mail_mode": _public_time_mail_mode(),
         "cron_configured": bool((os.environ.get("CRON_SECRET") or "").strip()),
         "scheduled_mail": scheduled,
+        "clocks_migrated": _clocks_migrated(),
     }
+
+
+def _clocks_migrated() -> int:
+    try:
+        from app.credentialing.store import clocks_migrated_total
+
+        return clocks_migrated_total()
+    except Exception:
+        return 0
 
 
 def _public_time_mail_mode() -> str:
