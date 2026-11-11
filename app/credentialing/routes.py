@@ -41,7 +41,7 @@ class SubjectBody(BaseModel):
     caqh_id: Optional[str] = None
     taxonomy: Optional[str] = None
     promise_id: Optional[str] = None
-    clocks: dict[str, str] = Field(default_factory=dict)
+    clocks: dict[str, Optional[str]] = Field(default_factory=dict)
 
 
 class PayerBody(BaseModel):

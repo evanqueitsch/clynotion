@@ -343,6 +343,46 @@ def test_clock_fields_save_on_the_clinician_and_survive_reload() -> None:
     assert "cg-profile-pick" in script and "previous" in script
 
 
+def test_empty_clock_date_clears_the_saved_value() -> None:
+    credentialing_store.reset()
+    client = _client()
+    clinician = credentialing_store.save_subject(
+        "practice-a",
+        {"name": "QA Test Clinician", "kind": "clinician", "license_type": "LCSW"},
+        actor="qa",
+    )
+    payload = {
+        "id": clinician["id"],
+        "name": "QA Test Clinician",
+        "kind": "clinician",
+        "license_type": "LCSW",
+        "license_expires_on": "2027-01-01",
+        "clocks": {"malpractice_rider": "2026-12-01"},
+    }
+    saved = client.put("/credentialing/subjects", headers=_alice(), json=payload)
+    assert saved.status_code == 200, saved.text
+    stored = client.get("/credentialing/grid", headers=_alice()).json()
+    row = next(item for item in stored["subjects"] if item["id"] == clinician["id"])
+    assert row["clocks"]["malpractice_rider"] == "2026-12-01"
+    assert row["license_expires_on"] == "2027-01-01"
+    payload["clocks"] = {"malpractice_rider": ""}
+    payload["license_expires_on"] = ""
+    cleared = client.put("/credentialing/subjects", headers=_alice(), json=payload)
+    assert cleared.status_code == 200, cleared.text
+    again = client.get("/credentialing/grid", headers=_alice()).json()
+    row = next(item for item in again["subjects"] if item["id"] == clinician["id"])
+    assert not (row.get("clocks") or {}).get("malpractice_rider")
+    assert row["license_expires_on"] == ""
+    payload["clocks"] = {"malpractice_rider": None}
+    nulled = client.put("/credentialing/subjects", headers=_alice(), json=payload)
+    assert nulled.status_code == 200, nulled.text
+    final = client.get("/credentialing/grid", headers=_alice()).json()
+    row = next(item for item in final["subjects"] if item["id"] == clinician["id"])
+    assert not (row.get("clocks") or {}).get("malpractice_rider")
+    script = open("app/static/credentialing.js", encoding="utf-8").read()
+    assert "Due one year after this date." in script
+
+
 def test_drawer_follow_up_matches_the_home_due_date() -> None:
     from zoneinfo import ZoneInfo
 

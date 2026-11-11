@@ -400,8 +400,14 @@
     return dt.toISOString().slice(0, 10);
   }
 
-  function fieldDate(label, value, dueOn) {
+  function fieldDate(label, value, dueOn, helper) {
     const made = field(label, value, "date");
+    if (helper) {
+      const help = document.createElement("span");
+      help.className = "meta";
+      help.textContent = " " + helper;
+      made.wrap.appendChild(help);
+    }
     if (dueOn) {
       const note = document.createElement("span");
       note.className = "meta";
@@ -409,6 +415,14 @@
       made.wrap.appendChild(note);
     }
     return made;
+  }
+
+  function cycleHelp(days) {
+    if (days === 365) return "Due one year after this date.";
+    if (days === 730) return "Due two years after this date.";
+    if (days === 1095) return "Due 3 years after this date.";
+    if (days === 1825) return "Due 5 years after this date.";
+    return "Due " + days + " days after this date.";
   }
 
   function labeled(text, control) {
@@ -475,11 +489,17 @@
       const license = field("License type", subject.license_type);
       const hire = field("Hire date", subject.hire_date);
       const device = field("Device", subject.device);
-      const expires = fieldDate("License expires on", subject.license_expires_on, (subject.license_expires_on || "").slice(0, 10));
+      const expires = fieldDate(
+        "License expires on",
+        subject.license_expires_on,
+        (subject.license_expires_on || "").slice(0, 10),
+        "This is the expiration date."
+      );
       const caqhDate = fieldDate(
         "CAQH last attested",
         subject.caqh_attested_on,
-        subject.caqh_attested_on ? addDays(subject.caqh_attested_on, 120) : ""
+        subject.caqh_attested_on ? addDays(subject.caqh_attested_on, 120) : "",
+        "Due 120 days after this date."
       );
       const legal = field("Legal name", subject.legal_name);
       const address = field("Service address", subject.service_address);
@@ -494,7 +514,7 @@
       ];
       clockNames.forEach((pair) => {
         const current = (subject.clocks && subject.clocks[pair[0]]) || "";
-        clockInputs[pair[0]] = fieldDate(pair[1], current, current ? addDays(current, pair[2]) : "");
+        clockInputs[pair[0]] = fieldDate(pair[1], current, current ? addDays(current, pair[2]) : "", cycleHelp(pair[2]));
       });
       const npi = field("Replace NPI", "");
       const tin = field("Replace TIN", "");
@@ -542,8 +562,7 @@
           active: true,
         };
         Object.keys(clockInputs).forEach((key) => {
-          const value = clockInputs[key].input.value.trim();
-          if (value) body.clocks[key] = value;
+          body.clocks[key] = clockInputs[key].input.value.trim();
         });
         if (npi.input.value.trim()) body.npi = npi.input.value.trim();
         if (tin.input.value.trim()) body.tin = tin.input.value.trim();

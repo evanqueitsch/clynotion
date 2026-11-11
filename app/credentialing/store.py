@@ -282,7 +282,7 @@ class CredentialingStore:
             for clock in match.get("clocks") or []:
                 clock_id = str(clock.get("clock_id") or "")
                 last = str(clock.get("last_completed") or "")
-                if clock_id and last and not clocks.get(clock_id):
+                if clock_id and last and clock_id not in clocks:
                     clocks[clock_id] = last[:10]
             subject["clocks"] = clocks
             if not subject.get("clinician_id") and match.get("clinician_id"):
@@ -315,7 +315,7 @@ class CredentialingStore:
             for clock in match.get("clocks") or []:
                 clock_id = str(clock.get("clock_id") or "")
                 last = str(clock.get("last_completed") or "")
-                if clock_id and last and not clocks.get(clock_id):
+                if clock_id and last and clock_id not in clocks:
                     clocks[clock_id] = last[:10]
                     changed = True
                     added += 1
@@ -480,8 +480,11 @@ class CredentialingStore:
             for key, value in incoming_clocks.items():
                 if key not in allowed:
                     continue
-                text = str(value or "").strip()
+                text = "" if value is None else str(value).strip()
                 if not text:
+                    if clocks.get(key):
+                        changes[key] = {"old": clocks.get(key) or "", "new": ""}
+                    clocks[key] = ""
                     continue
                 saved = _date_or_blank(text)
                 if clocks.get(key) != saved:
