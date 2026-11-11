@@ -22,6 +22,12 @@ from app.access.permissions import (
 from app.access.store import access_store
 
 
+# The production Google user for Evan. ATTUNE_HR_ADMIN_EMAILS is empty on
+# the live app, and the roster also has a shared hr@ admin mailbox that
+# must not inherit this.
+BREAK_GLASS_OWNER_EMAILS = frozenset({"operations@heart4change.org"})
+
+
 def _owner_emails() -> set[str]:
     raw = ",".join(
         [
@@ -37,7 +43,7 @@ def is_owner(user: User) -> bool:
     if (user.username or "").strip() == "alice":
         return True
     email = (user.email or "").strip().lower()
-    return bool(email) and email in _owner_emails()
+    return bool(email) and (email in _owner_emails() or email in BREAK_GLASS_OWNER_EMAILS)
 
 
 def assigned_role_id(user: User) -> str:

@@ -88,7 +88,11 @@ class AccessStore:
             else:
                 current.setdefault("name", seed["name"])
                 current.setdefault("permissions", list(seed["permissions"]))
-        row.setdefault("assignments", {})
+        assignments = row.setdefault("assignments", {})
+        # First creation only. Clearing this later stays cleared; break-glass
+        # in resolve.is_owner still unlocks the owner mailbox.
+        if practice_id == "practice-hfc" and not assignments:
+            assignments["operations@heart4change.org"] = "admin"
         return row
 
     def ensure(self, practice_id: str) -> dict[str, Any]:

@@ -195,13 +195,6 @@ def main() -> None:
                     enrolled += 1
                 if person.get("default_role") == "admin":
                     admins += 1
-                    rows.append(
-                        {
-                            "practice_id": practice_id,
-                            "admin_email": person.get("email") or "",
-                            "admin_name": person.get("display_name") or "",
-                        }
-                    )
             rows.append(
                 {
                     "practice_id": practice_id,

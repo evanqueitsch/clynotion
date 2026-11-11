@@ -26,7 +26,7 @@ Historical name “Attune” referred to the same product before the domain deci
 - Tests/smoke: `ATTUNE_MODE=mock`
 - Local voice enroll/match (no third-party biometrics network)
 - Meeting bot: stubbed / deferred
-- HR onboarding: owner/back-office only (`alice` in dev; Google users with roster **Admin** role, or `ATTUNE_HR_ADMIN_EMAILS`)
+- HR onboarding and role management: break-glass owner (`alice` in dev, `ATTUNE_HR_ADMIN_EMAILS`, `ATTUNE_OWNER_EMAILS`, or `operations@heart4change.org`) or the Admin role. A roster `default_role` of admin does not grant it.
 
 ## Commands
 

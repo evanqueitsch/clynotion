@@ -143,6 +143,16 @@ def test_reload_shows_rejected_sends_and_click_stays_beside_the_button(tmp_path)
             page.route("**/auth/me", lambda route: route.fulfill(
                 json={"user_id": "user-alice", "username": "alice", "practice_id": "practice-a", "email": "operations@heart4change.org"}
             ))
+            page.route("**/access/me", lambda route: route.fulfill(
+                json={
+                    "landing": "home",
+                    "role_id": "admin",
+                    "permissions": ["capability:manage_roles"],
+                    "can_manage_roles": True,
+                    "can_payroll_dashboard": True,
+                    "can_correct_payroll": False,
+                }
+            ))
             page.route("**/hr/time/self-test**", fulfill_time)
             page.goto(f"http://127.0.0.1:{port}/#time-self-test", wait_until="networkidle")
             thursday = page.locator("#time-self-test-thursday-status")

@@ -108,6 +108,19 @@ def test_melissa_keeps_payroll_without_admin_and_admin_cannot_correct(client: Te
     assert admin["can_correct_payroll"] is False
 
 
+def test_operations_mailbox_is_owner_and_the_shared_hr_mailbox_is_not(client: TestClient) -> None:
+    owner = User("user-ops", "Evan Queitsch", "practice-hfc", "operations@heart4change.org")
+    shared = User("user-hr", "Human Resources", "practice-hfc", "hr@heart4change.org")
+    assert is_owner(owner)
+    assert is_owner(shared) is False
+    assert client.get("/access/me", headers=_auth(owner)).json()["can_manage_roles"] is True
+    shared_me = client.get("/access/me", headers=_auth(shared)).json()
+    assert shared_me["landing"] == "none"
+    assert shared_me["can_manage_roles"] is False
+    assert access_store.role_id_for("practice-hfc", "operations@heart4change.org") == "admin"
+    assert access_store.role_id_for("practice-hfc", "hr@heart4change.org") == ""
+
+
 def test_owner_email_is_break_glass_and_assignments_stay_in_practice(
     client: TestClient, monkeypatch
 ) -> None:
