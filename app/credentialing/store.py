@@ -185,7 +185,11 @@ class CredentialingStore:
 
     def public_grid(self, practice_id: str) -> dict[str, Any]:
         _, row = self._load_practice(practice_id)
-        subjects = [_public_subject(item) for item in row["subjects"].values() if isinstance(item, dict)]
+        subjects = [
+            _public_subject(item)
+            for item in row["subjects"].values()
+            if isinstance(item, dict) and not item.get("archived")
+        ]
         subjects.sort(key=lambda item: (0 if item["kind"] == "practice" else 1, item["name"].casefold()))
         payers = [_public_payer(item) for item in row["payers"].values() if isinstance(item, dict)]
         payers.sort(key=lambda item: item["name"].casefold())
@@ -341,6 +345,17 @@ class CredentialingStore:
         )
         self._save(payload)
         return _public_payer(current)
+
+    def archive_subject(self, practice_id: str, subject_id: str, *, actor: str) -> dict[str, Any]:
+        payload, row = self._load_practice(practice_id)
+        current = row["subjects"].get(subject_id)
+        if not isinstance(current, dict):
+            raise KeyError(subject_id)
+        current["archived"] = True
+        current["updated_by"] = actor
+        current["updated_at"] = _now()
+        self._save(payload)
+        return _public_subject(current)
 
     def archive_payer(self, practice_id: str, payer_id: str, *, actor: str) -> dict[str, Any]:
         payload, row = self._load_practice(practice_id)
@@ -617,6 +632,7 @@ def _public_subject(row: dict[str, Any]) -> dict[str, Any]:
         "legal_name": row.get("legal_name") or "",
         "service_address": row.get("service_address") or "",
         "active": bool(row.get("active", True)),
+        "archived": bool(row.get("archived")),
         "npi_masked": mask_secret(str(row.get("npi") or "")),
         "tin_masked": mask_secret(str(row.get("tin") or "")),
         "license_number_masked": mask_secret(str(row.get("license_number") or "")),
