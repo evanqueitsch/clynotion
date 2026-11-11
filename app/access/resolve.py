@@ -70,7 +70,23 @@ def permissions_for(user: User) -> set[str]:
 def has_permission(user: User, permission: str) -> bool:
     if permission == PAYROLL_CORRECT:
         return is_melissa(user)
-    return permission in permissions_for(user)
+    perms = permissions_for(user)
+    if permission in perms:
+        return True
+    if permission.startswith("tool:"):
+        from app.platform.catalog import CATALOG_ITEMS
+
+        tool_id = permission.split(":", 1)[1]
+        item = next((row for row in CATALOG_ITEMS if row.get("id") == tool_id), None)
+        unit_id = str(item.get("unit") or "") if item else ""
+        if item and item.get("status") == "live" and unit_id and f"unit:{unit_id}" in perms:
+            return True
+    return False
+
+
+def sees_every_module(user: User) -> bool:
+    """Admin and break-glass owners see built and unbuilt modules."""
+    return is_owner(user) or assigned_role_id(user) == "admin"
 
 
 def landing_for(user: User) -> str:

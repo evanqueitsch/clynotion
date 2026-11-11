@@ -143,7 +143,6 @@
       border: 1px solid var(--line);
     }
     button:disabled { opacity: 0.45; cursor: not-allowed; }
-    body.staff-only #btn-time-home,
     body.staff-only #btn-time-admin,
     body.staff-only #btn-time-settings,
     body.staff-only #btn-time-self-test,
@@ -729,7 +728,7 @@
 
     <section id="time-admin-panel" class="panel hidden">
       <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
-        <h2 style="margin:0;">Weekly hours admin</h2>
+        <h2 style="margin:0;">Payroll week</h2>
         <button class="ghost" id="btn-time-admin-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
       </div>
       <div class="time-links">
@@ -1925,8 +1924,10 @@
         setSignedInChrome(me);
         setStatus($("auth-status"), `Signed in as ${me.email || me.username}`, "ok");
         let access = { landing: "home", can_manage_roles: false };
+        state.accessLoaded = false;
         try {
           access = await api("/access/me");
+          state.accessLoaded = true;
         } catch {
           access = { landing: "none", can_manage_roles: false };
         }
@@ -1938,7 +1939,7 @@
           return;
         }
         if (access.landing === "time") {
-          await openTime();
+          await enterHome();
           return;
         }
         const params = new URLSearchParams(window.location.search);
@@ -2020,9 +2021,21 @@
             home.note ||
             "Clynotion is the practice product. Due items from every domain land here.";
         }
-        renderPulse(home.pulse || {});
-        renderAttention(home.attention || []);
-        renderHomeBands(home.bands || { overdue: [], this_week: [] });
+        const fullCatalog = home.full_catalog === true;
+        const rolesCard = $("home-roles-card");
+        if (rolesCard) rolesCard.classList.toggle("hidden", !fullCatalog);
+        const topRoles = $("btn-top-roles");
+        if (topRoles && state.accessLoaded) topRoles.classList.toggle("hidden", !fullCatalog);
+        if (fullCatalog) {
+          renderPulse(home.pulse || {});
+          renderAttention(home.attention || []);
+          renderHomeBands(home.bands || { overdue: [], this_week: [] });
+        } else {
+          ["home-pulse", "home-attention-wrap", "home-overdue-wrap", "home-week-wrap", "home-due-empty"].forEach((id) => {
+            const el = $(id);
+            if (el) el.classList.add("hidden");
+          });
+        }
         renderHomeUnits(home.units || []);
         show("home-panel");
         window.history.replaceState({}, "", "/");
@@ -2062,9 +2075,9 @@
         block.appendChild(h);
         block.appendChild(desc);
         (unit.tools || []).forEach((tool) => {
-          if (tool.status === "planned") return;
+          const comingSoon = tool.coming_soon === true || tool.status === "planned";
           const card = document.createElement("div");
-          card.className = "tool-card" + (tool.status === "disabled" ? " planned" : "");
+          card.className = "tool-card" + (comingSoon || tool.status === "disabled" ? " planned" : "");
           const title = document.createElement("h3");
           title.style.cssText = "font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;";
           title.textContent = tool.name;
@@ -2073,14 +2086,23 @@
           meta.style.marginBottom = "0.85rem";
           meta.textContent = tool.description || "";
           card.appendChild(title);
-          if (tool.status === "planned" || tool.status === "disabled") {
+          if (comingSoon || tool.status === "disabled") {
             const tag = document.createElement("div");
             tag.className = "planned-tag";
-            tag.textContent = "Not ready for you";
+            tag.textContent = comingSoon ? "Coming Soon" : "Not ready for you";
             card.appendChild(tag);
           }
           card.appendChild(meta);
-          if (tool.status === "live" && tool.href) {
+          if (comingSoon) {
+            const btn = document.createElement("button");
+            btn.type = "button";
+            btn.className = "ghost";
+            btn.textContent = "Coming soon";
+            btn.onclick = () => {
+              setStatus($("home-status"), tool.name + " is coming soon.", "ok");
+            };
+            card.appendChild(btn);
+          } else if (tool.status === "live" && tool.href) {
             const btn = document.createElement("button");
             btn.type = "button";
             btn.className = "primary";
