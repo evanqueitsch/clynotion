@@ -145,10 +145,39 @@ def _build_pulse(practice_id: str) -> PulseOut:
 
 
 def _home_payload(user: CurrentUser) -> HomeOut:
+    from app.access.resolve import landing_for
+
     practice = practice_store.ensure(
         user.practice_id,
         display_name=user.practice_id,
     )
+    landing = landing_for(user)
+    if landing == "none":
+        return HomeOut(
+            user_id=user.user_id,
+            username=user.username,
+            email=user.email,
+            practice=PracticeOut.model_validate(practice.to_public_dict()),
+            tools=[],
+            units=[],
+            bands=HomeBandsOut(),
+            attention=[],
+            pulse=PulseOut(),
+            note="You do not have access yet. Contact Evan.",
+        )
+    if landing == "time":
+        return HomeOut(
+            user_id=user.user_id,
+            username=user.username,
+            email=user.email,
+            practice=PracticeOut.model_validate(practice.to_public_dict()),
+            tools=[{"id": "time_entry", "name": "Time entry", "href": "/#time", "description": "Weekly hours"}],
+            units=[],
+            bands=HomeBandsOut(),
+            attention=[],
+            pulse=PulseOut(),
+            note="Time entry",
+        )
     # Tier-0 / Tier-1 feeds into due engine
     ensure_seeded_clocks(practice_id=user.practice_id, owner_user_id=user.user_id)
     credential_store.reconcile(

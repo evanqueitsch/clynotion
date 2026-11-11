@@ -19,6 +19,7 @@ os.environ["ATTUNE_ELIGIBILITY_PERSISTENCE"] = "memory"
 os.environ["ATTUNE_CREDENTIAL_PERSISTENCE"] = "memory"
 os.environ["ATTUNE_AUTH"] = "dev"
 os.environ["ATTUNE_HR_TIME_PERSISTENCE"] = "memory"
+os.environ["ATTUNE_ACCESS_PERSISTENCE"] = "memory"
 os.environ["TIME_MAIL_MODE"] = "off"
 os.environ.pop("CRON_SECRET", None)
 os.environ.pop("GOOGLE_SA_JSON", None)
@@ -37,10 +38,27 @@ def _reset_clinician_store():
     clinician_store.reset()
     install_test_fixtures()
     time_store.reset()
+    from app.access.store import access_store
+
+    access_store.reset()
+    access_store.set_assignment("practice-b", "bob@example.com", "clinician")
+    access_store.update_role_permissions(
+        "practice-b",
+        "clinician",
+        [
+            "tool:supervision_notes",
+            "tool:compliance_registry",
+            "tool:sp_ingest",
+            "tool:intake_log",
+            "tool:eligibility",
+            "tool:time_entry",
+        ],
+    )
     set_clock(None)
     clear_mailer_for_tests()
     yield
     time_store.reset()
+    access_store.reset()
     set_clock(None)
     clear_mailer_for_tests()
     clinician_store.reset()

@@ -143,6 +143,26 @@
       border: 1px solid var(--line);
     }
     button:disabled { opacity: 0.45; cursor: not-allowed; }
+    body.staff-only #btn-time-home,
+    body.staff-only #btn-time-admin,
+    body.staff-only #btn-time-settings,
+    body.staff-only #btn-time-self-test,
+    body.staff-only .tagline,
+    body.staff-only footer,
+    body.no-access .tagline,
+    body.no-access footer { display: none; }
+    .no-access {
+      max-width: 28rem;
+      margin: 4rem auto;
+      text-align: center;
+    }
+    .role-grid { display: grid; gap: 0.75rem; }
+    .perm-list { display: grid; gap: 0.25rem; margin-top: 0.4rem; }
+      @media (max-width: 640px) {
+      #time-entry-block input[type="number"] { font-size: 1.4rem; padding: 0.7rem; }
+      #time-entry-block button { width: 100%; }
+      .wrap { padding: 1rem 0.75rem 2rem; }
+    }
     .file-btn {
       display: inline-block;
       background: #fff;
@@ -503,9 +523,30 @@
       <p class="status" id="auth-status"></p>
     </section>
 
+    <section id="no-access-panel" class="panel hidden">
+      <div class="no-access">
+        <h1>No access yet</h1>
+        <p class="lead">Your account is signed in, and it does not have a role. Contact Evan to be assigned one.</p>
+      </div>
+    </section>
+
+    <section id="access-panel" class="panel hidden">
+      <div class="topbar">
+        <h1>Roles</h1>
+        <button type="button" class="ghost" id="btn-access-home">Home</button>
+      </div>
+      <p class="lead">Each role is a list of sections and tools. Admin always has the full product, except Melissa’s post-cutoff corrections.</p>
+      <div id="role-editor" class="role-grid"></div>
+      <h2>Staff assignments</h2>
+      <p class="hint">From the Google Workspace staff list when Directory is connected, otherwise the roster. A person with no role sees no product content.</p>
+      <div id="role-assignments"></div>
+      <div id="access-status" class="status" role="status"></div>
+    </section>
+
     <section id="home-panel" class="panel hidden">
       <h2 id="home-practice-name">Your practice</h2>
       <p class="meta" id="home-blurb">Clynotion is the practice product. Open a tool to continue.</p>
+      <button type="button" class="ghost hidden" id="btn-home-roles">Roles</button>
 
       <div id="home-pulse" class="pulse-row hidden"></div>
 
@@ -654,7 +695,7 @@
       <p class="warn" id="time-helper"></p>
       <p class="meta" id="time-week-label"></p>
       <div class="time-links" id="time-nav"></div>
-      <div id="time-entry-block">
+      <div id="time-entry-block" class="time-entry">
         <p class="meta">One weekly total. Client time and supervision splits are not collected here.</p>
         <label for="time-hours">Hours (whole number)</label>
         <input id="time-hours" type="number" min="0" max="168" step="1" inputmode="numeric" />
@@ -1089,7 +1130,15 @@
           : "";
         const nav = $("time-nav");
         nav.innerHTML = "";
-        nav.classList.toggle("hidden", !data.can_manage_settings);
+        nav.classList.toggle("hidden", !(data.can_manage_settings || data.can_view_payroll));
+        if (data.can_view_payroll && !data.can_manage_settings) {
+          const dash = document.createElement("button");
+          dash.type = "button";
+          dash.className = "ghost";
+          dash.textContent = "Payroll week";
+          dash.onclick = () => openTimeAdmin(week.week_ending || "");
+          nav.appendChild(dash);
+        }
         if (data.can_manage_settings) {
           const adminBtn = document.createElement("button");
           adminBtn.type = "button";
@@ -1111,7 +1160,7 @@
             $("time-status"),
             data.can_manage_settings
               ? "You are not enabled to submit hours. Open Settings and select yourself or other roster staff. Nobody is enabled until you do."
-              : "Time entry is not enabled for your account.",
+              : "Time entry is not enabled for your account yet. Contact Evan.",
             "ok",
           );
         } else {
@@ -1120,13 +1169,20 @@
           $("time-hours").value = entry ? String(entry.hours) : "";
           $("time-minutes").value = entry ? String(entry.minutes) : "";
           $("time-payable").textContent = entry
-            ? `Saved raw ${entry.raw_display}. Payable (rounded up to 15 minutes) ${entry.rounded_display} (${entry.decimal_hours}).`
-            : "Nothing saved for this week yet. Blank is missing, not zero. Save 0 hours and 0 minutes if you did not work.";
+            ? `Submitted. Raw ${entry.raw_display}. Payable (rounded up to 15 minutes) ${entry.rounded_display} (${entry.decimal_hours}).`
+            : "Missing for this week. Blank is missing, not zero. Save 0 hours and 0 minutes if you did not work.";
           const editable = !!data.can_edit;
           $("time-hours").disabled = !editable;
           $("time-minutes").disabled = !editable;
           $("btn-time-save").disabled = !editable;
-          setStatus($("time-status"), editable ? "" : "This week is locked. Ask Melissa to correct it.", editable ? "" : "ok");
+          $("btn-time-save").textContent = editable ? "Save hours" : "Locked";
+          setStatus(
+            $("time-status"),
+            editable
+              ? (entry ? "Submitted. You can still edit before the cutoff." : "Missing. Enter hours and minutes, then save.")
+              : "Read-only. This week is past the cutoff. Ask Melissa if a correction is needed.",
+            editable ? "ok" : "ok",
+          );
         }
         renderTimeHistory(data.history || []);
       } catch (e) {
@@ -1673,6 +1729,87 @@
       return { text: map[err] || "Workspace directory connect failed.", kind: "error" };
     }
 
+    async function openAccess() {
+      show("access-panel");
+      window.history.replaceState({}, "", "/#roles");
+      const status = $("access-status");
+      setStatus(status, "Loading…");
+      try {
+        const data = await api("/access/roles");
+        const staff = await api("/access/staff");
+        const editor = $("role-editor");
+        editor.innerHTML = "";
+        (data.roles || []).forEach((role) => {
+          const card = document.createElement("div");
+          card.className = "tool-card";
+          const title = document.createElement("h3");
+          title.textContent = role.name;
+          card.appendChild(title);
+          const list = document.createElement("div");
+          list.className = "perm-list";
+          (data.permissions || []).filter((perm) => perm.grantable).forEach((perm) => {
+            const label = document.createElement("label");
+            const box = document.createElement("input");
+            box.type = "checkbox";
+            box.checked = (role.permissions || []).includes(perm.id);
+            box.disabled = !!role.locked;
+            box.dataset.permission = perm.id;
+            label.appendChild(box);
+            label.appendChild(document.createTextNode(" " + perm.name));
+            list.appendChild(label);
+          });
+          card.appendChild(list);
+          if (!role.locked) {
+            const save = document.createElement("button");
+            save.type = "button";
+            save.className = "primary";
+            save.textContent = "Save " + role.name;
+            save.onclick = async () => {
+              const permissions = Array.from(list.querySelectorAll("input:checked")).map((el) => el.dataset.permission);
+              await api("/access/roles/" + role.id, { method: "PUT", body: JSON.stringify({ permissions }) });
+              setStatus(status, role.name + " saved.", "ok");
+            };
+            card.appendChild(save);
+          }
+          editor.appendChild(card);
+        });
+        const assign = $("role-assignments");
+        assign.innerHTML = "";
+        (staff || []).forEach((person) => {
+          const row = document.createElement("div");
+          row.className = "due-row";
+          const label = document.createElement("span");
+          label.className = "due-title";
+          label.textContent = person.display_name + " (" + person.email + ")";
+          const select = document.createElement("select");
+          const empty = document.createElement("option");
+          empty.value = "";
+          empty.textContent = "No role";
+          select.appendChild(empty);
+          (data.roles || []).forEach((role) => {
+            const option = document.createElement("option");
+            option.value = role.id;
+            option.textContent = role.name;
+            if (person.role_id === role.id) option.selected = true;
+            select.appendChild(option);
+          });
+          select.onchange = async () => {
+            await api("/access/assignments", {
+              method: "PUT",
+              body: JSON.stringify({ email: person.email, role_id: select.value }),
+            });
+            setStatus(status, "Saved " + person.email + ".", "ok");
+          };
+          row.appendChild(label);
+          row.appendChild(select);
+          assign.appendChild(row);
+        });
+        setStatus(status, "");
+      } catch (e) {
+        setStatus(status, e.message, "error");
+      }
+    }
+
     async function bootstrapAuth() {
       const err = authErrorMessage();
       if (err) setStatus($("auth-status"), err, "error");
@@ -1694,6 +1831,23 @@
         state.user = me;
         setSignedInChrome(me);
         setStatus($("auth-status"), `Signed in as ${me.email || me.username}`, "ok");
+        let access = { landing: "home", can_manage_roles: false };
+        try {
+          access = await api("/access/me");
+        } catch {
+          access = { landing: "none", can_manage_roles: false };
+        }
+        state.access = access;
+        document.body.classList.toggle("staff-only", access.landing === "time");
+        document.body.classList.toggle("no-access", access.landing === "none");
+        if (access.landing === "none") {
+          show("no-access-panel");
+          return;
+        }
+        if (access.landing === "time") {
+          await openTime();
+          return;
+        }
         const params = new URLSearchParams(window.location.search);
         const dirOk = params.get("directory") === "connected" || params.get("directory") === "mock_ready";
         const hash = window.location.hash;
@@ -1712,6 +1866,7 @@
         const wantTimeAdmin = timeRoute.path === "time-admin";
         const wantTimeSettings = timeRoute.path === "time-settings";
         const wantTimeSelfTest = timeRoute.path === "time-self-test";
+        const wantRoles = hash === "#roles";
         if (window.location.search.includes("auth_error=") || window.location.search.includes("directory")) {
           window.history.replaceState({}, "", wantSupervision ? "/#supervision" : "/");
         }
@@ -1744,6 +1899,8 @@
           await openTimeSettings();
         } else if (wantTimeSelfTest) {
           await openTimeSelfTest();
+        } else if (wantRoles) {
+          await openAccess();
         } else {
           await enterHome();
         }
@@ -1754,7 +1911,7 @@
     }
 
     function show(panel) {
-      ["auth-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel", "time-panel", "time-admin-panel", "time-settings-panel", "time-self-test-panel"].forEach((id) => {
+      ["auth-panel", "no-access-panel", "access-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel", "time-panel", "time-admin-panel", "time-settings-panel", "time-self-test-panel"].forEach((id) => {
         $(id).classList.toggle("hidden", id !== panel);
       });
     }
@@ -1774,6 +1931,8 @@
         renderAttention(home.attention || []);
         renderHomeBands(home.bands || { overdue: [], this_week: [] });
         renderHomeUnits(home.units || []);
+        const rolesBtn = $("btn-home-roles");
+        if (rolesBtn) rolesBtn.classList.toggle("hidden", !(state.access && state.access.can_manage_roles));
         show("home-panel");
         window.history.replaceState({}, "", "/");
       } catch (e) {
@@ -2887,6 +3046,10 @@
     if (btnOnboardingHome) btnOnboardingHome.onclick = () => enterHome();
     const btnTimeHome = $("btn-time-home");
     if (btnTimeHome) btnTimeHome.onclick = () => enterHome();
+    const btnHomeRoles = $("btn-home-roles");
+    if (btnHomeRoles) btnHomeRoles.onclick = () => { openAccess(); };
+    const btnAccessHome = $("btn-access-home");
+    if (btnAccessHome) btnAccessHome.onclick = () => enterHome();
     const btnTimeSave = $("btn-time-save");
     if (btnTimeSave) btnTimeSave.onclick = () => { saveTimeEntry(); };
     const btnTimeAdminHome = $("btn-time-admin-home");

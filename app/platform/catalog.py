@@ -150,8 +150,8 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
         "status": "live",
         "href": "/#time",
         "description": (
-            "Hourly staff enter one Saturday–Friday total. Payable time rounds up "
-            "to 15 minutes. Not a punch clock, and not client time."
+            "Hourly staff enter one total for the prior Monday–Friday. "
+            "Weekend hours after that Friday are included. Not a punch clock."
         ),
         "legacy_ids": ["OPS-6"],
         "authorities": _auth("FLSA — accurate hours worked for non-exempt employees"),

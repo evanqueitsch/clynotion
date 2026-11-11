@@ -14,6 +14,8 @@ from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from app.access.guard import access_middleware
+from app.access.routes import router as access_router
 from app.platform.routes import legacy as attune_legacy_router
 from app.platform.routes import router as platform_router
 from app.platform.due import (
@@ -91,6 +93,8 @@ app = FastAPI(
 )
 app.include_router(platform_router)
 app.include_router(attune_legacy_router)
+app.include_router(access_router)
+app.middleware("http")(access_middleware)
 
 _UPLOAD_ROOT = Path(tempfile.gettempdir()) / "clynotion_uploads"
 _UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)

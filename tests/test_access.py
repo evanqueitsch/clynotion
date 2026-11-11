@@ -1,0 +1,141 @@
+"""Role grants are data. No role sees nothing. Melissa is not an Admin."""
+
+from __future__ import annotations
+
+from datetime import datetime, timezone
+
+import pytest
+from fastapi.testclient import TestClient
+
+from app.access.resolve import is_owner
+from app.main import app
+from app.access.store import access_store
+from app.auth import User, issue_token, user_store
+from app.hr.time_entry import set_clock
+from tests.test_time_entry import (
+    FRI_1130,
+    WEEK,
+    _alice,
+    _enter,
+    _jordan,
+    _melissa,
+    _roster,
+    _save_settings,
+    _settings,
+)
+
+
+@pytest.fixture
+def client() -> TestClient:
+    return TestClient(app)
+
+
+def _auth(user: User) -> dict[str, str]:
+    return {"Authorization": f"Bearer {issue_token(user)}"}
+
+
+def test_seeded_roles_grant_only_time_entry_and_admin_is_separate(client: TestClient) -> None:
+    roles = client.get("/access/roles", headers=_alice()).json()["roles"]
+    by_id = {row["id"]: row for row in roles}
+    for role_id in ("intake", "billing", "clinician", "clinical_supervisor"):
+        assert by_id[role_id]["permissions"] == ["tool:time_entry"]
+    assert "capability:manage_roles" in by_id["admin"]["permissions"]
+    assert "capability:payroll_correct" not in by_id["admin"]["permissions"]
+    assert "tool:time_entry" in by_id["admin"]["permissions"]
+
+
+def test_no_role_sees_no_product_and_cannot_call_apis(client: TestClient) -> None:
+    person = User("user-new", "New Hire", "practice-a", "new@heart4change.org")
+    home = client.get("/home", headers=_auth(person))
+    assert home.status_code == 200
+    assert home.json()["tools"] == []
+    assert "Contact Evan" in (home.json()["note"] or "")
+    me = client.get("/access/me", headers=_auth(person)).json()
+    assert me["landing"] == "none"
+    assert me["permissions"] == []
+    assert client.get("/hr/time/me", headers=_auth(person)).status_code == 403
+    assert client.get("/clinicians", headers=_auth(person)).status_code == 403
+    assert client.get("/hr/roster", headers=_auth(person)).status_code == 403
+
+
+def test_time_entry_role_still_requires_the_hours_checklist(client: TestClient) -> None:
+    _roster()
+    set_clock(datetime(2026, 3, 18, 14, 0, tzinfo=timezone.utc))
+    _save_settings(client, participant_emails=["sam@heart4change.org"])
+    blocked = _enter(client, _jordan(), 2, 0)
+    assert blocked.status_code == 403
+    allowed = client.post(
+        "/hr/time/entries",
+        headers=_auth(User("user-sam", "Sam Rivera", "practice-a", "sam@heart4change.org")),
+        json={"hours": 2, "minutes": 0, "week_ending": WEEK},
+    )
+    assert allowed.status_code == 200, allowed.text
+    assert client.get("/clinicians", headers=_auth(_jordan())).status_code == 403
+    assert client.get("/hr/time/week?week_ending=" + WEEK, headers=_auth(_jordan())).status_code == 403
+    home = client.get("/home", headers=_auth(_jordan())).json()
+    assert home["note"] == "Time entry"
+    assert [tool["id"] for tool in home["tools"]] == ["time_entry"]
+    assert home["bands"]["overdue"] == []
+
+
+def test_melissa_keeps_payroll_without_admin_and_admin_cannot_correct(client: TestClient) -> None:
+    _roster()
+    set_clock(datetime(2026, 3, 18, 14, 0, tzinfo=timezone.utc))
+    _save_settings(client, participant_emails=["jordan@heart4change.org"])
+    submission = _enter(client, _jordan(), 3, 0).json()["submission_id"]
+    set_clock(FRI_1130)
+    client.get(f"/hr/time/week?week_ending={WEEK}", headers=_alice())
+    admin_fix = client.patch(
+        f"/hr/time/entries/{submission}",
+        headers=_alice(),
+        json={"hours": 1, "minutes": 0},
+    )
+    assert admin_fix.status_code == 403
+    assert client.get("/hr/time/settings", headers=_auth(_melissa())).status_code == 403
+    week = client.get(f"/hr/time/week?week_ending={WEEK}", headers=_auth(_melissa()))
+    assert week.status_code == 200, week.text
+    fixed = client.patch(
+        f"/hr/time/entries/{submission}",
+        headers=_auth(_melissa()),
+        json={"hours": 4, "minutes": 0},
+    )
+    assert fixed.status_code == 200, fixed.text
+    me = client.get("/access/me", headers=_auth(_melissa())).json()
+    assert me["can_correct_payroll"] is True
+    assert me["can_manage_roles"] is False
+    admin = client.get("/access/me", headers=_alice()).json()
+    assert admin["can_manage_roles"] is True
+    assert admin["can_correct_payroll"] is False
+
+
+def test_owner_email_is_break_glass_and_assignments_stay_in_practice(
+    client: TestClient, monkeypatch
+) -> None:
+    monkeypatch.setenv("ATTUNE_HR_ADMIN_EMAILS", "evan@heart4change.org")
+    evan = User("user-evan", "Evan", "practice-a", "evan@heart4change.org")
+    assert is_owner(evan)
+    assert client.get("/access/roles", headers=_auth(evan)).status_code == 200
+    saved = client.put(
+        "/access/assignments",
+        headers=_auth(evan),
+        json={"email": "jordan@heart4change.org", "role_id": "billing"},
+    )
+    assert saved.status_code == 200
+    other = User("user-admin-b", "Admin B", "practice-b", "adminb@example.com")
+    access_store.set_assignment("practice-b", "adminb@example.com", "admin")
+    theirs = client.get("/access/assignments", headers=_auth(other)).json()["assignments"]
+    assert all(row["email"] != "jordan@heart4change.org" for row in theirs)
+    changed = client.put(
+        "/access/roles/clinician",
+        headers=_auth(evan),
+        json={"permissions": ["tool:time_entry", "tool:intake_log", "capability:payroll_correct"]},
+    )
+    assert changed.status_code == 200
+    assert "capability:payroll_correct" not in changed.json()["permissions"]
+    assert "tool:intake_log" in changed.json()["permissions"]
+    locked = client.put(
+        "/access/roles/admin",
+        headers=_auth(evan),
+        json={"permissions": ["tool:time_entry"]},
+    )
+    assert locked.status_code == 422

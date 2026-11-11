@@ -79,6 +79,10 @@ def _roster() -> None:
     dana.email = "evan@heart4change.org"
     dana.display_name = "Evan Admin"
     dana.default_role = "admin"
+    from app.access.store import access_store
+
+    access_store.set_assignment("practice-a", "jordan@heart4change.org", "clinician")
+    access_store.set_assignment("practice-a", "sam@heart4change.org", "clinician")
 
 
 def _jordan() -> User:
@@ -421,6 +425,9 @@ def test_cross_practice_week_csv_and_entry_are_isolated(client: TestClient) -> N
     morgan.email = "adminb@example.com"
     morgan.default_role = "admin"
     admin_b = _named("user-admin-b", "Admin B", "practice-b", "adminb@example.com")
+    from app.access.store import access_store
+
+    access_store.set_assignment("practice-b", "adminb@example.com", "admin")
     set_clock(WED)
     _save_settings(client)
     submission_id = _enter(client, _jordan(), 3, 0).json()["submission_id"]
@@ -466,7 +473,7 @@ def test_preview_and_test_reminder_never_send(client: TestClient) -> None:
     assert "Friday, March 13, 2026" in body["body"]
     reminder = client.post(
         "/hr/time/settings/test-reminder",
-        headers=_auth(_melissa()),
+        headers=_alice(),
         json={"slot": "due", "week_ending": WEEK},
     )
     assert reminder.status_code == 200, reminder.text
@@ -533,6 +540,9 @@ def test_summary_is_practice_isolated_and_melissa_edits_do_not_send_mail(client:
     morgan.email = "adminb@example.com"
     morgan.default_role = "admin"
     admin_b = _named("user-admin-b", "Admin B", "practice-b", "adminb@example.com")
+    from app.access.store import access_store
+
+    access_store.set_assignment("practice-b", "adminb@example.com", "admin")
     set_clock(WED)
     _save_settings(client)
     time_store.save_settings(admin_b, _settings(participant_emails=["riley@example.com"]), WED)
@@ -881,7 +891,7 @@ def test_nav_enables_only_selected_people(client: TestClient) -> None:
     assert denied.status_code == 403
     melissa = client.get("/catalog", headers=_auth(_melissa())).json()
     melissa_tile = next(tool for unit in melissa if unit["id"] == "hr" for tool in unit["tools"] if tool["id"] == "time_entry")
-    assert melissa_tile["href"] == "/#time-settings"
+    assert melissa_tile["href"] == "/#time-admin"
 
 
 def test_directory_refresh_preserves_selection_and_does_not_grant_admin(
