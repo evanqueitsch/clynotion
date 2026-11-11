@@ -319,7 +319,7 @@ _STATUS_DETAIL = {
 
 
 def connect_status(practice_id: str) -> dict[str, Any]:
-    """Public mailbox status. Scheduled mail stays off even when this is connected."""
+    """Public mailbox status. The schedule follows the practice checkbox, not this grant."""
     status = gmail_send_status(practice_id)
     email = str(status.get("sender_email") or "")
     if status.get("connected") and not sender_email_allowed(email):
@@ -332,9 +332,12 @@ def connect_status(practice_id: str) -> dict[str, Any]:
         warning = ""
         if not status.get("refresh_saved"):
             warning = " Connected with a short-lived grant. If Send fails, connect the mailbox again."
+        from app.hr.time_entry import scheduled_mail_sentence
+
         status["status_detail"] = (
             f"Verified From address: {status.get('sender_email')}. "
-            "Scheduled payroll mail stays off." + warning
+            + scheduled_mail_sentence(practice_id)
+            + warning
         )
     else:
         status["status_detail"] = _STATUS_DETAIL.get(
@@ -342,7 +345,9 @@ def connect_status(practice_id: str) -> dict[str, Any]:
             "Sending mailbox is not connected. Choose the heart4change.org mailbox in the Google prompt. "
             "operations@heart4change.org is the intended mailbox only if that is the account you authorize.",
         )
-    status["scheduled_mail"] = "off"
+    from app.hr.time_entry import scheduled_mail_status
+
+    status["scheduled_mail"] = scheduled_mail_status(practice_id)
     return status
 
 

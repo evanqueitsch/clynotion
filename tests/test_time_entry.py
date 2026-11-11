@@ -221,6 +221,63 @@ def test_old_default_schedule_migrates_and_custom_times_stay(client: TestClient)
     assert custom.automation_enabled is False
 
 
+def test_health_shows_scheduled_mail_only_when_the_checkbox_and_cron_are_on(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    health = client.get("/health").json()
+    assert health["scheduled_mail"] == "off"
+    assert health["time_mail_mode"] == "off"
+    monkeypatch.setenv("CRON_SECRET", "present-not-a-real-secret")
+    assert client.get("/health").json()["scheduled_mail"] == "off"
+    _roster()
+    set_clock(WED)
+    time_store.save_settings(_alice_user(), _settings(automation_enabled=True), WED)
+    health = client.get("/health").json()
+    assert health["scheduled_mail"] == "on"
+    assert health["time_mail_mode"] == "off"
+    assert "present-not-a-real-secret" not in client.get("/health").text
+
+
+def test_november_payroll_does_not_backfill_and_thursday_goes_to_the_right_people() -> None:
+    """Wed Nov 11 after 9:00 ET creates nothing. Thu Nov 12 8:00 and 11:30 are the first sends."""
+    from app.hr.time_entry import preview_new_sends, upcoming_slots
+
+    _roster()
+    late_morning = datetime(2026, 11, 11, 15, 30, tzinfo=timezone.utc)  # 10:30 AM EST
+    thursday_eight = datetime(2026, 11, 12, 13, 0, tzinfo=timezone.utc)  # 8:00 AM EST
+    thursday_cutoff = datetime(2026, 11, 12, 16, 30, tzinfo=timezone.utc)  # 11:30 AM EST
+    time_store.save_settings(
+        _alice_user(),
+        _settings(participant_emails=["jordan@heart4change.org"], automation_enabled=True),
+        late_morning,
+    )
+    settings = time_store._settings["practice-a"]
+    assert preview_new_sends(settings, late_morning) == []
+    upcoming = upcoming_slots(settings, late_morning)
+    assert [row["kind"] for row in upcoming] == ["reminder_due", "summary"]
+    assert upcoming[0]["at"].startswith("2026-11-12T08:00:00")
+    assert upcoming[1]["at"].startswith("2026-11-12T11:30:00")
+    mailer = RecordingMailer()
+    assert run_tick(mailer=mailer, now=late_morning)["sent"] == 0
+    assert mailer.sent == []
+
+    due = run_tick(mailer=mailer, now=thursday_eight)
+    assert due["sent"] == 1
+    assert [message.to for message in mailer.sent] == ["jordan@heart4change.org"]
+    assert MELISSA_EMAIL not in [message.to for message in mailer.sent]
+    again = run_tick(mailer=mailer, now=thursday_eight + timedelta(seconds=30))
+    assert again["sent"] == 0
+    assert len(mailer.sent) == 1
+
+    mailer.sent.clear()
+    summary = run_tick(mailer=mailer, now=thursday_cutoff)
+    assert summary["sent"] == 1
+    assert [message.to for message in mailer.sent] == [MELISSA_EMAIL]
+    repeat = run_tick(mailer=mailer, now=thursday_cutoff + timedelta(seconds=20))
+    assert repeat["sent"] == 0
+    assert len(mailer.sent) == 1
+
+
 def test_turning_automation_on_does_not_catch_up_a_passed_reminder() -> None:
     _roster()
     late = datetime(2026, 3, 18, 19, 0, tzinfo=timezone.utc)  # Wed 3:00 PM EDT

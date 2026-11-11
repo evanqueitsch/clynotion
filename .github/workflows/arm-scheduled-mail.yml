@@ -1,0 +1,85 @@
+name: Arm scheduled hours mail
+
+on:
+  repository_dispatch:
+    types: [arm-scheduled-mail]
+
+jobs:
+  arm:
+    name: Enable the checkbox and the tick
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      - name: Dry run the schedule
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          b64="$(base64 -w0 scripts/arm_scheduled_mail.py)"
+          flyctl ssh console -a clynotion -C "/app/.venv/bin/python -c \"import os,sys,base64; os.chdir('/app'); sys.path.insert(0,'/app'); os.environ['ARM_MODE']='dry-run'; exec(base64.b64decode('${b64}'))\""
+
+      - name: Turn on the practice checkbox
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          b64="$(base64 -w0 scripts/arm_scheduled_mail.py)"
+          flyctl ssh console -a clynotion -C "/app/.venv/bin/python -c \"import os,sys,base64; os.chdir('/app'); sys.path.insert(0,'/app'); os.environ['ARM_MODE']='enable'; exec(base64.b64decode('${b64}'))\""
+
+      - name: Set the cron secret and verify the tick sends nothing now
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+          BOOTSTRAP_URL: ${{ github.event.client_payload.url }}
+          BOOTSTRAP_NONCE: ${{ github.event.client_payload.nonce }}
+        run: |
+          set -euo pipefail
+          secret="$(curl -fsS --header "x-bootstrap: ${BOOTSTRAP_NONCE}" "${BOOTSTRAP_URL}")"
+          echo "::add-mask::${secret}"
+          test "${#secret}" -ge 32
+          export CRON_SECRET="$secret"
+          flyctl secrets set "CRON_SECRET=${CRON_SECRET}" -a clynotion
+          ok=0
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+            if curl -fsS https://clynotion.com/health >/tmp/health.json; then
+              ok=1
+              break
+            fi
+            sleep 4
+          done
+          test "$ok" = 1
+          python3 - << 'PY'
+          import json, os, urllib.error, urllib.request
+          health = json.load(open("/tmp/health.json"))
+          if health.get("scheduled_mail") != "on" or health.get("time_mail_mode") != "off":
+              raise SystemExit("health is not armed: " + health.get("scheduled_mail", "") + " " + health.get("time_mail_mode", ""))
+          print("HEALTH", health.get("version"), health.get("scheduled_mail"), health.get("time_mail_mode"))
+          def status(req):
+              try:
+                  with urllib.request.urlopen(req, timeout=60) as resp:
+                      return resp.status, json.load(resp)
+              except urllib.error.HTTPError as exc:
+                  return exc.code, {}
+          code, _ = status(urllib.request.Request("https://clynotion.com/internal/time/tick", data=b"", method="POST"))
+          if code not in (401, 503):
+              raise SystemExit(f"unauthenticated tick status {code}")
+          print("UNAUTH", code)
+          secret = os.environ["CRON_SECRET"]
+          def tick():
+              req = urllib.request.Request(
+                  "https://clynotion.com/internal/time/tick",
+                  data=b"",
+                  method="POST",
+                  headers={"Authorization": "Bearer " + secret},
+              )
+              status_code, body = status(req)
+              if status_code != 200:
+                  raise SystemExit(f"tick status {status_code}")
+              print("TICK", body.get("sent"), body.get("claimed"), body.get("mail"), body.get("reason"))
+              if body.get("sent") != 0 or body.get("claimed") != 0:
+                  raise SystemExit("tick created a send")
+          tick()
+          tick()
+          PY
