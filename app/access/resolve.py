@@ -79,7 +79,13 @@ def has_permission(user: User, permission: str) -> bool:
         tool_id = permission.split(":", 1)[1]
         item = next((row for row in CATALOG_ITEMS if row.get("id") == tool_id), None)
         unit_id = str(item.get("unit") or "") if item else ""
-        if item and item.get("status") == "live" and unit_id and f"unit:{unit_id}" in perms:
+        if (
+            item
+            and item.get("status") == "live"
+            and not item.get("requires_explicit_grant")
+            and unit_id
+            and f"unit:{unit_id}" in perms
+        ):
             return True
     return False
 

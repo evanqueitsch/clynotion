@@ -4,18 +4,29 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from app.access.permissions import TIME_ENTRY, admin_permissions
+from app.access.permissions import (
+    NEW_BILLING_GRANTS,
+    SENSITIVE_GRANT_IDS,
+    TIME_ENTRY,
+    admin_permissions,
+    billing_role_permissions,
+)
 from app.crypto import decrypt_utf8, encrypt_utf8
+
+# Bumped once. The migration only appends Billing grants.
+GRANTS_VERSION = 1
 
 ENV_PATH = "ATTUNE_ACCESS_DATA_PATH"
 DEFAULT_PATH = ".attune_data/access_roles.enc"
 
 SEEDED_ROLES: dict[str, dict[str, Any]] = {
     "intake": {"name": "Intake", "permissions": [TIME_ENTRY]},
-    "billing": {"name": "Billing", "permissions": [TIME_ENTRY]},
+    "billing": {"name": "Billing", "permissions": billing_role_permissions()},
     "clinician": {"name": "Clinician", "permissions": [TIME_ENTRY]},
     "clinical_supervisor": {"name": "Clinical Supervisor", "permissions": [TIME_ENTRY]},
     "admin": {"name": "Admin", "permissions": admin_permissions()},
@@ -43,7 +54,7 @@ class AccessStore:
         if os.environ.get("ATTUNE_ACCESS_PERSISTENCE") == "memory":
             self._memory = _empty()
 
-    def _load(self) -> dict[str, Any]:
+    def _read(self) -> dict[str, Any]:
         if os.environ.get("ATTUNE_ACCESS_PERSISTENCE") == "memory":
             if self._memory is None:
                 self._memory = _empty()
@@ -58,6 +69,46 @@ class AccessStore:
         if not isinstance(payload, dict):
             return _empty()
         payload.setdefault("practices", {})
+        return payload
+
+    def _upgrade_grants(self, row: dict[str, Any]) -> bool:
+        """Append new Billing grants. Never deletes a permission or an assignment."""
+        if int(row.get("grants_version") or 0) >= GRANTS_VERSION:
+            return False
+        roles = row.setdefault("roles", {})
+        billing = roles.get("billing")
+        if not isinstance(billing, dict):
+            billing = {"name": "Billing", "permissions": [TIME_ENTRY]}
+            roles["billing"] = billing
+        perms = [item for item in (billing.get("permissions") or []) if isinstance(item, str)]
+        for item in NEW_BILLING_GRANTS:
+            if item not in perms:
+                perms.append(item)
+        billing["permissions"] = perms
+        billing.setdefault("name", "Billing")
+        row["grants_version"] = GRANTS_VERSION
+        return True
+
+    def _backup_before_grants(self) -> None:
+        if os.environ.get("ATTUNE_ACCESS_PERSISTENCE") == "memory":
+            return
+        path = _path()
+        if not path.is_file():
+            return
+        dest = path.with_name(path.name + ".bak-grants-v1")
+        if dest.exists():
+            return
+        shutil.copy2(path, dest)
+
+    def _load(self) -> dict[str, Any]:
+        payload = self._read()
+        changed = False
+        for row in (payload.get("practices") or {}).values():
+            if isinstance(row, dict) and self._upgrade_grants(row):
+                changed = True
+        if changed:
+            self._backup_before_grants()
+            self._save(payload)
         return payload
 
     def _save(self, payload: dict[str, Any]) -> None:
@@ -124,7 +175,14 @@ class AccessStore:
         out.sort(key=lambda item: item["name"].casefold())
         return out
 
-    def update_role_permissions(self, practice_id: str, role_id: str, permissions: list[str]) -> dict[str, Any]:
+    def update_role_permissions(
+        self,
+        practice_id: str,
+        role_id: str,
+        permissions: list[str],
+        *,
+        actor_email: str = "",
+    ) -> dict[str, Any]:
         from app.access.permissions import grantable_ids
 
         if role_id == "admin":
@@ -138,9 +196,51 @@ class AccessStore:
                 cleaned.append(item)
         payload = self._load()
         row = self._practice(practice_id, payload)
+        previous = [item for item in (row["roles"][role_id].get("permissions") or []) if isinstance(item, str)]
         row["roles"][role_id]["permissions"] = cleaned
+        self._audit_sensitive_grants(row, role_id, previous, cleaned, actor_email)
         self._save(payload)
         return {"id": role_id, "permissions": cleaned}
+
+    def _audit_sensitive_grants(
+        self,
+        row: dict[str, Any],
+        role_id: str,
+        previous: list[str],
+        cleaned: list[str],
+        actor_email: str,
+    ) -> None:
+        events = row.setdefault("permission_audit", [])
+        if not isinstance(events, list):
+            events = []
+            row["permission_audit"] = events
+        now = datetime.now(timezone.utc).isoformat()
+        actor = (actor_email or "").strip().lower()
+        before, after = set(previous), set(cleaned)
+        for permission in sorted(after - before):
+            if permission in SENSITIVE_GRANT_IDS:
+                events.append(
+                    {
+                        "at": now,
+                        "actor": actor,
+                        "role_id": role_id,
+                        "permission": permission,
+                        "action": "grant",
+                    }
+                )
+        for permission in sorted(before - after):
+            if permission in SENSITIVE_GRANT_IDS:
+                events.append(
+                    {
+                        "at": now,
+                        "actor": actor,
+                        "role_id": role_id,
+                        "permission": permission,
+                        "action": "remove",
+                    }
+                )
+        if len(events) > 200:
+            del events[:-200]
 
     def assignments_public(self, practice_id: str) -> list[dict[str, str]]:
         row = self.ensure(practice_id)

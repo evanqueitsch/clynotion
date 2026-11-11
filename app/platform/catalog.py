@@ -21,8 +21,8 @@ BUSINESS_UNITS: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "hr",
-        "name": "HR",
-        "description": "Hours, hiring, and new-hire checklists.",
+        "name": "HR & Credentialing",
+        "description": "Hours, credentialing, and hiring.",
         "order": 2,
     },
     {
@@ -130,15 +130,14 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
             "55 Pa. Code 1101.51(e)(1)(iii) — unsigned note aging (via documentation report)",
         ),
     },
-    # --- Planned / not live ---
     {
-        "id": "time_pto_bonus",
-        "name": "Time, PTO & bonus",
+        "id": "employee_view",
+        "name": "Employee View",
         "unit": "hr",
         "kind": "tool",
         "status": "planned",
         "href": "",
-        "description": "Leave, productivity, and bonus computations.",
+        "description": "Each person's own hours, HR details, and credentialing record.",
         "legacy_ids": ["OPS-1"],
         "authorities": _auth("FLSA wage-and-hour recordkeeping (when time drives pay)"),
     },
@@ -156,25 +155,20 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
         "authorities": _auth("FLSA — accurate hours worked for non-exempt employees"),
     },
     {
-        "id": "onboarding_compliance",
-        "name": "Onboarding & compliance",
+        "id": "credentialing",
+        "name": "Credentialing",
         "unit": "hr",
         "kind": "tool",
         "status": "live",
-        "href": "/#onboarding",
-        "description": (
-            "New-hire checklist, clearances, and license dates."
-        ),
-        "legacy_ids": ["OPS-2-onboarding", "OPS-7"],
-        "authorities": _auth(
-            "IRCA I-9 §2 within 3 business days",
-            "23 Pa.C.S. §6344 / Acts 34·151·114 clearances",
-            "PA Board supervised experience (LSW→LCSW)",
-        ),
+        "href": "/#credentialing",
+        "description": "Payer enrollment for the practice and each clinician.",
+        "legacy_ids": [],
+        "requires_explicit_grant": True,
+        "authorities": _auth("Payer enrollment tracking — people file the applications"),
     },
     {
         "id": "hiring_onboarding",
-        "name": "Hiring & onboarding",
+        "name": "Hiring & Onboarding",
         "unit": "hr",
         "kind": "tool",
         "status": "planned",
@@ -182,6 +176,21 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
         "description": "Candidates through first-day clocks and roster handoff.",
         "legacy_ids": ["OPS-7"],
         "authorities": _auth("42 CFR 455.436 — exclusion screening at hire"),
+    },
+    {
+        "id": "onboarding_compliance",
+        "name": "Onboarding & compliance",
+        "unit": "hr",
+        "kind": "tool",
+        "status": "retired",
+        "href": "/#onboarding",
+        "description": "Retired. Credentialing replaced this screen.",
+        "legacy_ids": ["OPS-2-onboarding", "OPS-7"],
+        "authorities": _auth(
+            "IRCA I-9 §2 within 3 business days",
+            "23 Pa.C.S. §6344 / Acts 34·151·114 clearances",
+            "PA Board supervised experience (LSW→LCSW)",
+        ),
     },
     {
         "id": "marketing_workbench",
@@ -204,6 +213,17 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
         "description": "QuickBooks context and operational cash views.",
         "legacy_ids": ["FIN-1"],
         "authorities": _auth("PerformCare Ch. VI — claims aging / filing bar (context)"),
+    },
+    {
+        "id": "billing",
+        "name": "Billing",
+        "unit": "finance",
+        "kind": "tool",
+        "status": "planned",
+        "href": "",
+        "description": "Credentialing follow-ups and billing to-dos.",
+        "legacy_ids": [],
+        "authorities": [],
     },
     {
         "id": "telephony_capture",
@@ -446,7 +466,7 @@ def catalog_by_unit(*, include_planned: bool = True) -> list[dict[str, Any]]:
     items = [
         i
         for i in CATALOG_ITEMS
-        if include_planned or i.get("status") == "live"
+        if i.get("status") != "retired" and (include_planned or i.get("status") == "live")
     ]
     out: list[dict[str, Any]] = []
     for unit in sorted(BUSINESS_UNITS, key=lambda u: u["order"]):
@@ -464,6 +484,8 @@ def catalog_by_unit(*, include_planned: bool = True) -> list[dict[str, Any]]:
                 "legacy_ids": list(item.get("legacy_ids") or []),
                 "authorities": list(item.get("authorities") or []),
             }
+            if item.get("requires_explicit_grant"):
+                row["requires_explicit_grant"] = True
             if item["id"] == "compliance_registry":
                 row["obligations"] = [
                     {
