@@ -314,4 +314,9 @@ async def _parsed(
         existing_payers={row["name"] for row in current["payers"] if not row.get("archived")},
         existing_subjects={row["name"] for row in current["subjects"]},
     )
-    return plan, {"errors": plan.errors, "warnings": plan.warnings, "changes": plan.changes}
+    return plan, {
+        "errors": plan.errors,
+        "warnings": plan.warnings,
+        "changes": plan.changes,
+        "summary": plan.summary,
+    }

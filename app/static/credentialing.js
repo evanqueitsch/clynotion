@@ -797,6 +797,12 @@
     const errors = (body && body.errors) || [];
     const warnings = (body && body.warnings) || [];
     const changes = (body && body.changes) || [];
+    if (body && body.summary) {
+      const summary = document.createElement("p");
+      summary.id = "cg-import-summary";
+      summary.textContent = body.summary;
+      root.appendChild(summary);
+    }
     const block = document.createElement("div");
     block.className = "cg-history";
     const lines = [];
