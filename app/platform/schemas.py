@@ -66,6 +66,7 @@ class HomeOut(BaseModel):
     attention: list[AttentionItemOut] = Field(default_factory=list)
     pulse: PulseOut = Field(default_factory=PulseOut)
     note: Optional[str] = None
+    full_catalog: bool = False
 
 
 class IngestUploadOut(BaseModel):

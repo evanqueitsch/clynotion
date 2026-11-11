@@ -14,7 +14,7 @@ from app.eligibility.service import eligibility_store
 from app.grow.intake import intake_store
 from app.hr.onboarding import onboarding_store
 from app.ingest.sp_csv import ingest_store
-from app.platform.catalog import catalog_by_unit, crosswalk_rows, live_tools
+from app.platform.catalog import catalog_by_unit, crosswalk_rows
 from app.platform.due import due_engine, reconcile_supervision_drafts
 from app.platform.practices import practice_store
 from app.platform.schemas import (
@@ -155,8 +155,62 @@ def _home_note(user: CurrentUser, open_count: int) -> str:
     return f"{hello} Here's what needs you."
 
 
+def _module_ids(units: list[dict]) -> list[str]:
+    ids: list[str] = []
+    for unit in units:
+        for tool in unit.get("tools") or []:
+            if tool.get("coming_soon") or tool.get("status") == "planned":
+                continue
+            ids.append(str(tool.get("id") or ""))
+    return ids
+
+
+def _open_tools(units: list[dict]) -> list[dict[str, str]]:
+    tools: list[dict[str, str]] = []
+    for unit in units:
+        for tool in unit.get("tools") or []:
+            if tool.get("coming_soon") or tool.get("status") != "live" or not tool.get("href"):
+                continue
+            tools.append(
+                {
+                    "id": str(tool.get("id") or ""),
+                    "name": str(tool.get("name") or ""),
+                    "href": str(tool.get("href") or ""),
+                    "description": str(tool.get("description") or ""),
+                }
+            )
+    return tools
+
+
+def _visible_units(user: CurrentUser) -> list[dict]:
+    """Admin sees every catalog module. Everyone else sees granted live modules."""
+    from app.access.resolve import permissions_for, sees_every_module
+
+    full = sees_every_module(user)
+    perms = permissions_for(user)
+    units = _time_entry_nav(catalog_by_unit(include_planned=True), user)
+    visible: list[dict] = []
+    for unit in units:
+        kept: list[dict] = []
+        for tool in unit.get("tools") or []:
+            if tool.get("status") == "planned":
+                if not full:
+                    continue
+                tool["href"] = ""
+                tool["open_label"] = ""
+                tool["coming_soon"] = True
+                kept.append(tool)
+                continue
+            granted = full or f"tool:{tool.get('id')}" in perms or f"unit:{unit.get('id')}" in perms
+            if granted:
+                kept.append(tool)
+        if kept:
+            visible.append({**unit, "tools": kept})
+    return visible
+
+
 def _home_payload(user: CurrentUser) -> HomeOut:
-    from app.access.resolve import landing_for
+    from app.access.resolve import landing_for, sees_every_module
 
     practice = practice_store.ensure(
         user.practice_id,
@@ -175,19 +229,34 @@ def _home_payload(user: CurrentUser) -> HomeOut:
             attention=[],
             pulse=PulseOut(),
             note="You do not have access yet. Contact Evan.",
+            full_catalog=False,
         )
-    if landing == "time":
+    units = _visible_units(user)
+    tools = _open_tools(units)
+    if not sees_every_module(user):
+        only_time = _module_ids(units) == ["time_entry"]
+        if only_time and not tools:
+            entry = next(tool for unit in units for tool in unit["tools"] if tool.get("id") == "time_entry")
+            tools = [
+                {
+                    "id": "time_entry",
+                    "name": str(entry.get("name") or "Time entry"),
+                    "href": str(entry.get("href") or ""),
+                    "description": str(entry.get("description") or ""),
+                }
+            ]
         return HomeOut(
             user_id=user.user_id,
             username=user.username,
             email=user.email,
             practice=PracticeOut.model_validate(practice.to_public_dict()),
-            tools=[{"id": "time_entry", "name": "Time entry", "href": "/#time", "description": "Weekly hours"}],
-            units=[],
+            tools=tools,
+            units=units,
             bands=HomeBandsOut(),
             attention=[],
             pulse=PulseOut(),
-            note="Time entry",
+            note="Time entry" if only_time else _home_note(user, 0).split(". ")[0] + ".",
+            full_catalog=False,
         )
     # Home reads the due register. It does not invent compliance, credential,
     # or ingest clocks. Recorded employees and supervision drafts still surface.
@@ -204,31 +273,6 @@ def _home_payload(user: CurrentUser) -> HomeOut:
         overdue=[_obligation_out(o) for o in bands_raw["overdue"]],
         this_week=[_obligation_out(o) for o in bands_raw["this_week"]],
     )
-    units = _time_entry_nav(catalog_by_unit(include_planned=True), user)
-    tools = []
-    for item in live_tools():
-        if item["id"] == "time_entry":
-            match = next(
-                (
-                    tool
-                    for unit in units
-                    if unit["id"] == "hr"
-                    for tool in unit["tools"]
-                    if tool["id"] == "time_entry" and tool.get("status") == "live" and tool.get("href")
-                ),
-                None,
-            )
-            if match is None:
-                continue
-            item = match
-        tools.append(
-            {
-                "id": item["id"],
-                "name": item["name"],
-                "href": item["href"],
-                "description": item["description"],
-            }
-        )
     pulse = _build_pulse(user.practice_id)
     return HomeOut(
         user_id=user.user_id,
@@ -241,6 +285,7 @@ def _home_payload(user: CurrentUser) -> HomeOut:
         attention=_build_attention(user.practice_id),
         pulse=pulse,
         note=_home_note(user, pulse.open_obligations),
+        full_catalog=True,
     )
 
 
@@ -289,8 +334,8 @@ def comply_catalog(user: CurrentUser) -> list[ComplyCatalogItemOut]:
 
 @router.get("/catalog")
 def product_catalog(user: CurrentUser) -> list[dict]:
-    """Business units → tools (planned + live). Plain names; legacy ids in payload."""
-    return _time_entry_nav(catalog_by_unit(include_planned=True), user)
+    """Business units → tools the signed-in person is allowed to see."""
+    return _visible_units(user)
 
 
 def _time_entry_nav(units: list[dict], user: CurrentUser) -> list[dict]:

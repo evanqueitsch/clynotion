@@ -60,6 +60,51 @@ def test_roles_screen_is_linked_from_home_chrome() -> None:
     assert '"/#roles"' in text
 
 
+def test_home_catalog_follows_role_and_marks_unbuilt_modules(client: TestClient) -> None:
+    from app.platform.catalog import CATALOG_ITEMS
+
+    admin = client.get("/home", headers=_alice()).json()
+    assert admin["full_catalog"] is True
+    seen = {tool["id"]: tool for unit in admin["units"] for tool in unit["tools"]}
+    catalog_tools = [item for item in CATALOG_ITEMS if item.get("kind") == "tool"]
+    assert set(seen) == {item["id"] for item in catalog_tools}
+    planned = [item["id"] for item in catalog_tools if item.get("status") == "planned"]
+    assert planned
+    for tool_id in planned:
+        assert seen[tool_id]["status"] == "planned"
+        assert seen[tool_id]["coming_soon"] is True
+        assert seen[tool_id]["href"] == ""
+    page = client.get("/").text
+    assert "Coming Soon" in page
+    assert ">Payroll week<" in page
+    assert "Weekly hours admin" not in page
+
+    _roster()
+    jordan = _jordan()
+    staff = client.get("/home", headers=_auth(jordan)).json()
+    assert staff["full_catalog"] is False
+    assert [tool["id"] for unit in staff["units"] for tool in unit["tools"]] == ["time_entry"]
+    assert all(not tool.get("coming_soon") for unit in staff["units"] for tool in unit["tools"])
+
+    access_store.update_role_permissions(
+        "practice-a", "clinician", ["tool:time_entry", "tool:intake_log"]
+    )
+    granted = client.get("/home", headers=_auth(jordan)).json()
+    assert {tool["id"] for unit in granted["units"] for tool in unit["tools"]} == {"time_entry", "intake_log"}
+    assert client.get("/intake", headers=_auth(jordan)).status_code == 200
+
+    access_store.update_role_permissions("practice-a", "clinician", ["tool:time_entry"])
+    revoked = client.get("/home", headers=_auth(jordan)).json()
+    assert [tool["id"] for unit in revoked["units"] for tool in unit["tools"]] == ["time_entry"]
+    assert client.get("/intake", headers=_auth(jordan)).status_code == 403
+
+    access_store.update_role_permissions(
+        "practice-a", "clinician", ["tool:time_entry", "tool:marketing_workbench"]
+    )
+    hidden = client.get("/home", headers=_auth(jordan)).json()
+    assert [tool["id"] for unit in hidden["units"] for tool in unit["tools"]] == ["time_entry"]
+
+
 def test_seeded_roles_grant_only_time_entry_and_admin_is_separate(client: TestClient) -> None:
     roles = client.get("/access/roles", headers=_alice()).json()["roles"]
     by_id = {row["id"]: row for row in roles}
