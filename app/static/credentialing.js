@@ -451,8 +451,23 @@
       const license = field("License type", subject.license_type);
       const hire = field("Hire date", subject.hire_date);
       const device = field("Device", subject.device);
+      const expires = field("License expires on", subject.license_expires_on);
+      const caqhDate = field("CAQH last attested", subject.caqh_attested_on);
       const legal = field("Legal name", subject.legal_name);
       const address = field("Service address", subject.service_address);
+      const clockInputs = {};
+      const clockNames = [
+        ["license_renewal", "License renewal"],
+        ["caqh_reattestation", "CAQH re-attestation"],
+        ["malpractice_rider", "Malpractice rider"],
+        ["recredentialing", "Recredentialing"],
+        ["ma_revalidation", "MA revalidation"],
+        ["clinician_exclusion_screening", "Exclusion screening"],
+      ];
+      clockNames.forEach((pair) => {
+        const current = (subject.clocks && subject.clocks[pair[0]]) || "";
+        clockInputs[pair[0]] = field(pair[1], current);
+      });
       const npi = field("Replace NPI", "");
       const tin = field("Replace TIN", "");
       const licenseNo = field("Replace license #", "");
@@ -462,6 +477,9 @@
       form.appendChild(license.wrap);
       form.appendChild(hire.wrap);
       form.appendChild(device.wrap);
+      form.appendChild(expires.wrap);
+      form.appendChild(caqhDate.wrap);
+      Object.keys(clockInputs).forEach((key) => form.appendChild(clockInputs[key].wrap));
       form.appendChild(legal.wrap);
       form.appendChild(address.wrap);
       if (subject.id) {
@@ -490,8 +508,15 @@
           device: device.input.value.trim(),
           legal_name: legal.input.value.trim(),
           service_address: address.input.value.trim(),
+          license_expires_on: expires.input.value.trim(),
+          caqh_attested_on: caqhDate.input.value.trim(),
+          clocks: {},
           active: true,
         };
+        Object.keys(clockInputs).forEach((key) => {
+          const value = clockInputs[key].input.value.trim();
+          if (value) body.clocks[key] = value;
+        });
         if (npi.input.value.trim()) body.npi = npi.input.value.trim();
         if (tin.input.value.trim()) body.tin = tin.input.value.trim();
         if (licenseNo.input.value.trim()) body.license_number = licenseNo.input.value.trim();
@@ -836,11 +861,30 @@
   async function openCredentialing() {
     const ui = bridge();
     ui.show("credentialing-panel");
-    window.history.replaceState({}, "", "/#credentialing");
+    const params = new URLSearchParams((window.location.hash.split("?")[1]) || "");
+    if (!params.get("payer") && !params.get("profile")) {
+      window.history.replaceState({}, "", "/#credentialing");
+    }
     setMessage("Loading…");
     try {
       await reload();
-      showSection("grid");
+      if (params.get("profile")) {
+        showSection("profiles");
+        const picker = document.getElementById("cg-profile-pick");
+        if (picker) {
+          picker.value = params.get("profile");
+          picker.dispatchEvent(new Event("change"));
+        }
+      } else {
+        showSection("grid");
+      }
+      const payerId = params.get("payer");
+      const subjectId = params.get("subject");
+      if (payerId && subjectId && payload) {
+        const payer = (payload.payers || []).find((item) => item.id === payerId);
+        const subject = (payload.subjects || []).find((item) => item.id === subjectId);
+        if (payer && subject) openDrawer(payer, subject, cellFor(payerId, subjectId));
+      }
       setMessage("");
     } catch (error) {
       setMessage(errText(error), "error");

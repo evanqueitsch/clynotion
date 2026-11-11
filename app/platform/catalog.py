@@ -219,10 +219,11 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
         "name": "Billing",
         "unit": "finance",
         "kind": "tool",
-        "status": "planned",
-        "href": "",
+        "status": "live",
+        "href": "/#billing",
         "description": "Credentialing follow-ups and billing to-dos.",
         "legacy_ids": [],
+        "requires_explicit_grant": True,
         "authorities": [],
     },
     {

@@ -250,6 +250,22 @@ def _home_payload(user: CurrentUser) -> HomeOut:
                     "description": str(entry.get("description") or ""),
                 }
             ]
+        bands = HomeBandsOut()
+        from app.access.resolve import permissions_for
+
+        if "tool:credentialing" in permissions_for(user):
+            from app.credentialing.reminders import sync_reminders
+
+            sync_reminders(user.practice_id, user.user_id)
+            raw = due_engine.bands(user.practice_id)
+            bands = HomeBandsOut(
+                overdue=[
+                    _obligation_out(o) for o in raw["overdue"] if o.domain == "credentialing"
+                ],
+                this_week=[
+                    _obligation_out(o) for o in raw["this_week"] if o.domain == "credentialing"
+                ],
+            )
         return HomeOut(
             user_id=user.user_id,
             username=user.username,
@@ -257,14 +273,16 @@ def _home_payload(user: CurrentUser) -> HomeOut:
             practice=PracticeOut.model_validate(practice.to_public_dict()),
             tools=tools,
             units=units,
-            bands=HomeBandsOut(),
+            bands=bands,
             attention=[],
             pulse=PulseOut(),
             note="Time entry" if only_time else _home_note(user, 0).split(". ")[0] + ".",
             full_catalog=False,
         )
-    # Home reads the due register. It does not invent compliance, credential,
-    # or ingest clocks. Recorded employees and supervision drafts still surface.
+    # Home reads the due register. Credentialing reminders are included for Admins.
+    from app.credentialing.reminders import sync_reminders
+
+    sync_reminders(user.practice_id, user.user_id)
     onboarding_store.reconcile_due(
         practice_id=user.practice_id, owner_user_id=user.user_id
     )

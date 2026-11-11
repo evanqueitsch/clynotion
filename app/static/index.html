@@ -689,6 +689,24 @@
       <div class="due-list" id="elig-list"></div>
     </section>
 
+    <section id="billing-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">Billing</h2>
+        <button class="ghost" id="btn-billing-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <p class="meta">Credentialing follow-ups, encounter reconciliation, and claims aging. Claims stay in SimplePractice.</p>
+      <p class="status" id="billing-status"></p>
+      <div id="billing-links" class="cg-actions"></div>
+      <h3>Needs action</h3>
+      <div id="billing-actions" class="due-list"></div>
+      <h3>Billing obligations</h3>
+      <div id="billing-obligations" class="due-list"></div>
+      <label id="billing-digest-wrap">Weekly digest
+        <input id="billing-digest" type="checkbox" />
+      </label>
+      <p class="meta">Off until an Admin turns it on. Turning it on does not send mail by itself.</p>
+    </section>
+
     <section id="credentialing-panel" class="panel hidden">
       <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
         <h2 style="margin:0;">Credentialing</h2>
@@ -995,7 +1013,8 @@
 
     <footer>Clynotion</footer>
   </main>
-  <script src="/static/credentialing.js?v=0.17.3"></script>
+  <script src="/static/credentialing.js?v=0.18.0"></script>
+  <script src="/static/billing.js?v=0.18.0"></script>
   <script>
     const state = {
       token: null,
@@ -2090,7 +2109,8 @@
         const wantIntake = hash === "#intake";
         const wantElig = hash === "#eligibility";
         const wantOnboarding = hash === "#onboarding";
-        const wantCredentialing = hash === "#credentialing";
+        const wantCredentialing = hash === "#credentialing" || hash.indexOf("#credentialing?") === 0;
+        const wantBilling = hash === "#billing";
         const timeRoute = hashRoute();
         if (timeRoute.path === "time-admin" && timeRoute.params.get("v") && $("time-admin-version")) {
           $("time-admin-version").value = timeRoute.params.get("v");
@@ -2124,6 +2144,8 @@
           await openEligibility();
         } else if (wantCredentialing) {
           await openCredentialing();
+        } else if (wantBilling) {
+          await openBilling();
         } else if (wantOnboarding) {
           await openOnboarding();
         } else if (wantTime) {
@@ -2146,7 +2168,7 @@
     }
 
     function show(panel) {
-      ["auth-panel", "no-access-panel", "access-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel", "credentialing-panel", "time-panel", "time-admin-panel", "time-settings-panel", "time-self-test-panel"].forEach((id) => {
+      ["auth-panel", "no-access-panel", "access-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel", "credentialing-panel", "billing-panel", "time-panel", "time-admin-panel", "time-settings-panel", "time-self-test-panel"].forEach((id) => {
         $(id).classList.toggle("hidden", id !== panel);
       });
       document.body.classList.toggle("credentialing-open", panel === "credentialing-panel");
@@ -2196,6 +2218,7 @@
       if (href.includes("intake")) return openIntake();
       if (href.includes("eligibility")) return openEligibility();
       if (href.includes("credentialing")) return window.openCredentialing();
+      if (href.includes("#billing")) return window.openBilling();
       if (href.includes("onboarding")) return openOnboarding();
       if (href.includes("time-self-test")) return openTimeSelfTest();
       if (href.includes("time-settings")) return openTimeSettings();
@@ -3804,6 +3827,7 @@
       else if (route.path === "intake") openIntake();
       else if (route.path === "eligibility") openEligibility();
       else if (route.path === "credentialing") openCredentialing();
+      else if (route.path === "billing") openBilling();
       else if (route.path === "onboarding") openOnboarding();
       else if (route.path === "supervision" || route.path === "clynotion") openSupervision();
       else if (!route.path) enterHome();

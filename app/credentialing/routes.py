@@ -104,7 +104,9 @@ async def _upload_text(upload: Optional[UploadFile]) -> Optional[str]:
 
 @router.get("/grid")
 def credentialing_grid(user: CurrentUser) -> dict[str, Any]:
-    return {**_flags(user), **credentialing_store.public_grid(user.practice_id)}
+    payload = credentialing_store.public_grid(user.practice_id)
+    credentialing_store.overlay_clocks(user.practice_id, payload["subjects"])
+    return {**_flags(user), **payload}
 
 
 @router.get("/audit")
