@@ -1455,6 +1455,11 @@ class TimeStore:
             "schedule_version": settings.schedule_version,
             "schedule_migrated": settings.schedule_migrated,
             "automation_enabled": settings.automation_enabled,
+            "scheduled_mail": (
+                "on"
+                if (os.environ.get("CRON_SECRET") or "").strip() and settings.automation_enabled
+                else "off"
+            ),
             "current_week": self._week_header(settings, week, state),
             "roster": self._staff_choices(settings.practice_id, set(settings.participant_emails)),
             "directory": self._directory_public(settings.practice_id),
