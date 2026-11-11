@@ -1389,6 +1389,27 @@
       }
     }
 
+    function reminderMessage(dayValue, timeValue) {
+      const day = TIME_WEEKDAYS[Number(dayValue)] || "the selected day";
+      const match = /^([01]\d|2[0-3]):([0-5]\d)/.exec(timeValue || "");
+      const hour24 = match ? Number(match[1]) : 0;
+      const minute = match ? match[2] : "00";
+      const hour = (hour24 % 12) || 12;
+      const suffix = hour24 < 12 ? "AM" : "PM";
+      return `Message: Weekly hours are due by ${day} at ${hour}:${minute} ${suffix}.`;
+    }
+
+    function refreshReminderMessages() {
+      const first = $("time-rem1-subject");
+      const second = $("time-rem2-subject");
+      if (first && $("time-rem1-day") && $("time-rem1-time")) {
+        first.textContent = reminderMessage($("time-rem1-day").value, $("time-rem1-time").value);
+      }
+      if (second && $("time-rem2-day") && $("time-rem2-time")) {
+        second.textContent = reminderMessage($("time-rem2-day").value, $("time-rem2-time").value);
+      }
+    }
+
     function settingsPayload() {
       const emails = [];
       document.querySelectorAll("#time-roster input[type=checkbox]:checked").forEach((box) => {
@@ -1414,19 +1435,7 @@
       const directory = data.directory || {};
       const directoryStatus = $("time-directory-status");
       if (directoryStatus) {
-        const skipped = directory.skipped || {};
-        const skippedText = Object.keys(skipped).length
-          ? ` Skipped ${Object.entries(skipped).map(([key, count]) => `${count} ${key}`).join(", ")}.`
-          : "";
-        if (!directory.connected && directory.mode === "live") {
-          directoryStatus.textContent = "Google Workspace directory is not connected for this practice. Connect it as a Workspace admin before this list can be the full staff list. A directory account is not an admin.";
-        } else if (directory.status === "never") {
-          directoryStatus.textContent = "Google Workspace has not been refreshed yet. The names below are not a complete staff list.";
-        } else if (!directory.complete || directory.status === "error") {
-          directoryStatus.textContent = `The last directory refresh did not finish (${directory.error_code || "error"}). The list below is the previous complete read from ${directory.last_complete_at || "never"}, not a new complete list.${skippedText}`;
-        } else {
-          directoryStatus.textContent = `Directory list is complete for ${directory.domain || "the allowed domain"} as of ${directory.last_complete_at}. ${directory.listed} people, ${directory.pages} page(s).${skippedText} Being listed does not enable hours.`;
-        }
+        directoryStatus.textContent = `Directory list updated on: ${directory.updated_label || "not yet"}`;
       }
       const selfTestBtn = $("btn-time-self-test");
       if (selfTestBtn) selfTestBtn.classList.toggle("hidden", !data.can_self_test);
@@ -1438,12 +1447,11 @@
         : `Nobody is enabled yet${disabled.length ? `. Not enabled: ${disabled.join(", ")}.` : "."}`;
       $("time-settings-note").textContent = `${data.schedule_note || ""} ${data.hours_cap_note || ""}`.trim();
       $("time-settings-corrector").textContent = data.corrector_note || "";
-      $("time-rem1-subject").textContent = `Message: ${data.reminder_first_subject}. Default is Wednesday 9:00 for the prior Monday–Friday. The text says due tomorrow.`;
-      $("time-rem2-subject").textContent = `Message: ${data.reminder_due_subject}. Keep this on cutoff day, before the cutoff.`;
       $("time-rem1-day").value = String(data.reminder_first_weekday);
       $("time-rem1-time").value = data.reminder_first_time;
       $("time-rem2-day").value = String(data.reminder_due_weekday);
       $("time-rem2-time").value = data.reminder_due_time;
+      refreshReminderMessages();
       $("time-lock-day").value = String(data.summary_weekday);
       $("time-lock-time").value = data.summary_time;
       $("time-summary-to").value = data.summary_recipient || "";
@@ -3193,6 +3201,12 @@
     if (btnTimeSettingsHome) btnTimeSettingsHome.onclick = () => enterHome();
     const btnTimeSettingsSave = $("btn-time-settings-save");
     if (btnTimeSettingsSave) btnTimeSettingsSave.onclick = () => { saveTimeSettings(); };
+    ["time-rem1-day", "time-rem1-time", "time-rem2-day", "time-rem2-time"].forEach((id) => {
+      const el = $(id);
+      if (!el) return;
+      el.addEventListener("change", refreshReminderMessages);
+      el.addEventListener("input", refreshReminderMessages);
+    });
     const btnTimePreview = $("btn-time-preview");
     if (btnTimePreview) btnTimePreview.onclick = () => { previewTimeSummary(); };
     const btnTimeTestReminder = $("btn-time-test-reminder");

@@ -579,7 +579,7 @@ def test_reminders_honor_exact_minutes_and_skip_submitted_including_zero(client:
         "jordan@heart4change.org",
         "sam@heart4change.org",
     }
-    assert all(message.subject == REMINDER_FIRST_SUBJECT for message in mailer.sent)
+    assert all(message.subject == "Weekly hours are due by Wednesday at 9:07 AM." for message in mailer.sent)
     assert all("already worked" in message.text for message in mailer.sent)
     assert all(TIME_ENTRY_URL in message.text for message in mailer.sent)
 
@@ -1058,3 +1058,38 @@ def test_open_week_uses_live_roster_until_cutoff(client: TestClient) -> None:
     week = client.get(f"/hr/time/week?week_ending={WEEK}", headers=_alice()).json()
     assert [row["email"] for row in week["rows"]] == ["jordan@heart4change.org"]
     assert week["locked"] is False
+
+
+def test_settings_copy_uses_names_dates_and_the_selected_reminder_time(client: TestClient) -> None:
+    from pathlib import Path
+
+    from app.hr.time_entry import directory_updated_label, reminder_due_phrase
+
+    assert reminder_due_phrase(4, "23:59") == "Weekly hours are due by Friday at 11:59 PM."
+    assert directory_updated_label("2026-11-06T19:00:00+00:00") == "Nov 6, 2026, 2:00 PM ET"
+    assert "tomorrow" not in reminder_due_phrase(2, "09:00")
+    assert "today" not in reminder_due_phrase(3, "08:00")
+
+    _roster()
+    set_clock(WED)
+    time_store.replace_directory_snapshot(
+        "practice-a",
+        [
+            {"email": "jordan@heart4change.org", "display_name": "Jordan Lee", "google_id": "jordan-1"},
+            {"email": "sam@heart4change.org", "display_name": "Sam Rivera", "google_id": "sam-1"},
+            {"email": MELISSA_EMAIL, "display_name": "Melissa Smith", "google_id": "melissa-1"},
+        ],
+    )
+    time_store._directory["practice-a"]["last_complete_at"] = "2026-11-06T19:00:00+00:00"
+    saved = _save_settings(client, reminder_first_weekday=4, reminder_first_time="23:59")
+    assert saved["reminder_first_subject"] == "Weekly hours are due by Friday at 11:59 PM."
+    assert saved["corrector_note"].startswith("After cutoff, only Melissa Smith can")
+    assert "msmith@" not in saved["corrector_note"]
+    assert saved["directory"]["updated_label"] == "Nov 6, 2026, 2:00 PM ET"
+    assert saved["participant_emails"] == ["jordan@heart4change.org", "sam@heart4change.org"]
+
+    page = Path("app/static/index.html").read_text(encoding="utf-8")
+    assert "Directory list updated on:" in page
+    assert "Being listed does not enable hours" not in page
+    assert "today!" not in page
+    assert "Weekly hours are due by" in page

@@ -109,7 +109,7 @@ def test_self_test_send_is_one_shot_and_leaves_payroll_and_scheduler_alone(
     assert first.status_code == 200, first.text
     assert first.json()["send_result"]["status"] == "sent"
     assert first.json()["send_result"]["to"] == "alice@example.com"
-    assert calls == [("alice@example.com", "[TEST] Weekly hours are due tomorrow")]
+    assert calls == [("alice@example.com", "[TEST] Weekly hours are due by Wednesday at 9:00 AM.")]
     second = client.post(
         "/hr/time/self-test/send",
         headers=_auth(alice),
@@ -126,7 +126,7 @@ def test_self_test_send_is_one_shot_and_leaves_payroll_and_scheduler_alone(
     )
     assert friday.status_code == 200, friday.text
     assert friday.json()["send_result"]["to"] == "alice@example.com"
-    assert "today" in friday.json()["friday"]["subject"]
+    assert "Thursday at 8:00 AM" in friday.json()["friday"]["subject"]
 
     too_soon = client.post(
         "/hr/time/self-test/send",
