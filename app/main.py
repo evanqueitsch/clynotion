@@ -1047,7 +1047,13 @@ def clynotion_ui() -> FileResponse:
     index = _STATIC / "index.html"
     if not index.is_file():
         raise HTTPException(status_code=404, detail="UI not found")
-    return FileResponse(index)
+    return FileResponse(
+        index,
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 if _STATIC.is_dir():

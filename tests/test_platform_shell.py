@@ -67,6 +67,8 @@ def test_home_returns_tools_pulse_and_seeded_comply(client: TestClient) -> None:
     assert "Clinical Tools" in unit_names
     assert "Technology" in unit_names
     assert "pulse" in body
+    assert "Two-minute" not in (body.get("note") or "")
+    assert "caught up" in (body.get("note") or "").lower() or "needs you" in (body.get("note") or "").lower()
     titles = [o["title"] for o in body["bands"]["overdue"] + body["bands"]["this_week"]]
     assert not any(o["source"] == "compliance_registry" for o in body["bands"]["overdue"] + body["bands"]["this_week"])
     assert not any("documentation" in t.lower() for t in titles)
