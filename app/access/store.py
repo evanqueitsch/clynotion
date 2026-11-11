@@ -66,7 +66,15 @@ class AccessStore:
             return
         path = _path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(encrypt_utf8(json.dumps(payload)))
+        data = encrypt_utf8(json.dumps(payload))
+        tmp = path.with_name(path.name + ".tmp")
+        fd = os.open(tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
+        try:
+            os.write(fd, data)
+            os.fsync(fd)
+        finally:
+            os.close(fd)
+        os.replace(tmp, path)
 
     def _practice(self, practice_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         practices = payload.setdefault("practices", {})
@@ -142,18 +150,29 @@ class AccessStore:
             if role_id
         ]
 
-    def set_assignment(self, practice_id: str, email: str, role_id: str) -> None:
+    def set_assignment(
+        self, practice_id: str, email: str, role_id: str, *, actor_email: str = ""
+    ) -> None:
         cleaned = (email or "").strip().lower()
+        actor = (actor_email or "").strip().lower()
         if "@" not in cleaned:
             raise ValueError("A staff email is required.")
         if role_id and role_id not in SEEDED_ROLES:
             raise ValueError("Unknown role.")
         payload = self._load()
         row = self._practice(practice_id, payload)
+        assignments = row["assignments"]
+        current = str(assignments.get(cleaned) or "")
+        if current == "admin" and role_id != "admin":
+            if actor and cleaned == actor:
+                raise ValueError("You can't remove your own Admin role.")
+            remaining = [item for item, role in assignments.items() if role == "admin" and item != cleaned]
+            if not remaining:
+                raise ValueError("The practice needs at least one Admin.")
         if role_id:
-            row["assignments"][cleaned] = role_id
+            assignments[cleaned] = role_id
         else:
-            row["assignments"].pop(cleaned, None)
+            assignments.pop(cleaned, None)
         self._save(payload)
 
     def role_id_for(self, practice_id: str, email: str) -> str:

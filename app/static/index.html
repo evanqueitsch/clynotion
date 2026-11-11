@@ -421,6 +421,8 @@
       color: var(--muted);
       margin-top: 0.15rem;
     }
+    #role-assignments select { width: auto; min-width: 12rem; margin: 0; }
+    .role-row-status { font-size: 0.85rem; min-width: 6.5rem; text-align: right; }
     .due-row button {
       flex: 0 0 auto;
       padding: 0.4rem 0.85rem;
@@ -542,7 +544,10 @@
       <p class="lead">Each role is a list of sections and tools. Admin always has the full product, except Melissa’s post-cutoff corrections.</p>
       <div id="role-editor" class="role-grid"></div>
       <h2>Staff assignments</h2>
-      <p class="hint">From the Google Workspace staff list when Directory is connected, otherwise the roster. A person with no role sees no product content.</p>
+      <p class="hint">Pick a role, then press Save changes. Nothing is stored until you do. A person with no role sees no product content.</p>
+      <div class="row">
+        <button type="button" class="primary" id="btn-save-assignments" disabled>Save changes</button>
+      </div>
       <div id="role-assignments"></div>
       <div id="access-status" class="status" role="status"></div>
     </section>
@@ -1772,17 +1777,39 @@
             save.type = "button";
             save.className = "primary";
             save.textContent = "Save " + role.name;
+            save.disabled = true;
+            const savedSet = new Set(role.permissions || []);
+            const currentSet = () => new Set(Array.from(list.querySelectorAll("input:checked")).map((el) => el.dataset.permission));
+            const sameSet = () => {
+              const now = currentSet();
+              if (now.size !== savedSet.size) return false;
+              for (const item of now) if (!savedSet.has(item)) return false;
+              return true;
+            };
+            list.querySelectorAll("input").forEach((box) => {
+              box.addEventListener("change", () => { save.disabled = sameSet(); });
+            });
             save.onclick = async () => {
-              const permissions = Array.from(list.querySelectorAll("input:checked")).map((el) => el.dataset.permission);
-              await api("/access/roles/" + role.id, { method: "PUT", body: JSON.stringify({ permissions }) });
-              setStatus(status, role.name + " saved.", "ok");
+              const permissions = Array.from(currentSet());
+              save.disabled = true;
+              try {
+                await api("/access/roles/" + role.id, { method: "PUT", json: { permissions } });
+                savedSet.clear();
+                permissions.forEach((item) => savedSet.add(item));
+                setStatus(status, role.name + " saved.", "ok");
+              } catch (e) {
+                save.disabled = false;
+                setStatus(status, role.name + " was not saved. " + e.message, "error");
+              }
             };
             card.appendChild(save);
           }
           editor.appendChild(card);
         });
         const assign = $("role-assignments");
+        const saveAssignments = $("btn-save-assignments");
         assign.innerHTML = "";
+        const meEmail = ((state.user && state.user.email) || "").toLowerCase();
         (staff || []).forEach((person) => {
           const row = document.createElement("div");
           row.className = "due-row";
@@ -1790,6 +1817,7 @@
           label.className = "due-title";
           label.textContent = person.display_name + " (" + person.email + ")";
           const select = document.createElement("select");
+          select.setAttribute("aria-label", "Role for " + person.display_name);
           const empty = document.createElement("option");
           empty.value = "";
           empty.textContent = "No role";
@@ -1798,20 +1826,59 @@
             const option = document.createElement("option");
             option.value = role.id;
             option.textContent = role.name;
-            if (person.role_id === role.id) option.selected = true;
             select.appendChild(option);
           });
-          select.onchange = async () => {
-            await api("/access/assignments", {
-              method: "PUT",
-              body: JSON.stringify({ email: person.email, role_id: select.value }),
-            });
-            setStatus(status, "Saved " + person.email + ".", "ok");
-          };
+          const saved = person.role_id || "";
+          select.dataset.email = person.email;
+          select.dataset.saved = saved;
+          select.value = saved;
+          const ownAdmin = person.email === meEmail && saved === "admin";
+          if (ownAdmin) {
+            select.disabled = true;
+            select.title = "You can't remove your own Admin role.";
+          }
+          const rowStatus = document.createElement("span");
+          rowStatus.className = "role-row-status";
+          select.addEventListener("change", () => {
+            rowStatus.textContent = select.value === select.dataset.saved ? "" : "Not saved";
+            rowStatus.className = "role-row-status";
+            saveAssignments.disabled = Array.from(assign.querySelectorAll("select")).every((el) => el.value === el.dataset.saved);
+          });
           row.appendChild(label);
           row.appendChild(select);
+          row.appendChild(rowStatus);
           assign.appendChild(row);
         });
+        saveAssignments.disabled = true;
+        saveAssignments.onclick = async () => {
+          const dirty = Array.from(assign.querySelectorAll("select")).filter((el) => el.value !== el.dataset.saved);
+          if (!dirty.length) return;
+          saveAssignments.disabled = true;
+          setStatus(status, "Saving…");
+          const failed = [];
+          for (const select of dirty) {
+            const rowStatus = select.parentElement.querySelector(".role-row-status");
+            try {
+              await api("/access/assignments", {
+                method: "PUT",
+                json: { email: select.dataset.email, role_id: select.value },
+              });
+              select.dataset.saved = select.value;
+              rowStatus.textContent = "Saved";
+              rowStatus.className = "role-row-status";
+            } catch (e) {
+              failed.push(e.message);
+              rowStatus.textContent = "Not saved";
+              rowStatus.className = "role-row-status";
+            }
+          }
+          if (failed.length) {
+            saveAssignments.disabled = false;
+            setStatus(status, failed[0], "error");
+            return;
+          }
+          setStatus(status, "Saved.", "ok");
+        };
         setStatus(status, "");
       } catch (e) {
         setStatus(status, e.message, "error");
@@ -3528,6 +3595,22 @@
       show("capture-panel");
     };
 
+    window.addEventListener("hashchange", () => {
+      if (!state.user || !state.access || state.access.landing === "none" || state.access.landing === "time") return;
+      const route = hashRoute();
+      if (route.path === "roles") openAccess();
+      else if (route.path === "time-settings") openTimeSettings();
+      else if (route.path === "time-admin") openTimeAdmin(route.params.get("week") || "");
+      else if (route.path === "time") openTime();
+      else if (route.path === "time-self-test") openTimeSelfTest();
+      else if (route.path === "comply") openComply();
+      else if (route.path === "ingest") openIngest();
+      else if (route.path === "intake") openIntake();
+      else if (route.path === "eligibility") openEligibility();
+      else if (route.path === "onboarding") openOnboarding();
+      else if (route.path === "supervision" || route.path === "clynotion") openSupervision();
+      else if (!route.path) enterHome();
+    });
     bootstrapAuth();
   </script>
 </body>

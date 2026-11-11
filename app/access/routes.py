@@ -74,7 +74,9 @@ def list_assignments(user: CurrentUser) -> dict[str, Any]:
 def put_assignment(body: AssignmentBody, user: CurrentUser) -> dict[str, bool]:
     _admin(user)
     try:
-        access_store.set_assignment(user.practice_id, body.email, body.role_id)
+        access_store.set_assignment(
+            user.practice_id, body.email, body.role_id, actor_email=user.email
+        )
     except ValueError as exc:
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     return {"ok": True}

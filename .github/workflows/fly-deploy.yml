@@ -39,3 +39,11 @@ jobs:
         run: flyctl deploy --remote-only --config fly.toml
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Verify one role assignment on the live API
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          b64="$(base64 -w0 scripts/verify_role_roundtrip.py)"
+          flyctl ssh console -a clynotion -C "/app/.venv/bin/python -c \"import os,sys,base64; os.chdir('/app'); sys.path.insert(0,'/app'); exec(base64.b64decode('${b64}'))\""
