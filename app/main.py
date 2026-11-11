@@ -264,6 +264,7 @@ def health() -> dict[str, Any]:
         "time_persistence": os.environ.get("ATTUNE_HR_TIME_PERSISTENCE", "memory"),
         "time_data_path": os.environ.get("ATTUNE_HR_TIME_DATA_PATH", ""),
         "time_mail_mode": _public_time_mail_mode(),
+        "cron_configured": bool((os.environ.get("CRON_SECRET") or "").strip()),
         "scheduled_mail": scheduled_mail_status(),
     }
 
