@@ -147,6 +147,61 @@ def test_operations_mailbox_is_owner_and_the_shared_hr_mailbox_is_not(client: Te
     assert access_store.role_id_for("practice-hfc", "hr@heart4change.org") == ""
 
 
+def test_assignment_json_persists_and_plain_text_does_not(client: TestClient, tmp_path, monkeypatch) -> None:
+    from app.access.store import AccessStore
+    from app.crypto import generate_key
+
+    monkeypatch.setenv("ATTUNE_ACCESS_PERSISTENCE", "file")
+    monkeypatch.setenv("ATTUNE_ACCESS_DATA_PATH", str(tmp_path / "roles.enc"))
+    monkeypatch.setenv("ATTUNE_DATA_ENCRYPTION_KEY", generate_key())
+    access_store._memory = None
+    rejected = client.put(
+        "/access/assignments",
+        headers={**_alice(), "Content-Type": "text/plain"},
+        content=b'{"email":"intake@heart4change.org","role_id":"intake"}',
+    )
+    assert rejected.status_code == 422
+    saved = client.put(
+        "/access/assignments",
+        headers=_alice(),
+        json={"email": "intake@heart4change.org", "role_id": "intake"},
+    )
+    assert saved.status_code == 200, saved.text
+    listed = client.get("/access/assignments", headers=_alice()).json()["assignments"]
+    assert {"email": "intake@heart4change.org", "role_id": "intake"} in listed
+    reloaded = AccessStore()
+    assert reloaded.role_id_for("practice-a", "intake@heart4change.org") == "intake"
+    cleared = client.put(
+        "/access/assignments",
+        headers=_alice(),
+        json={"email": "intake@heart4change.org", "role_id": ""},
+    )
+    assert cleared.status_code == 200
+    assert reloaded.role_id_for("practice-a", "intake@heart4change.org") == "" or AccessStore().role_id_for(
+        "practice-a", "intake@heart4change.org"
+    ) == ""
+
+
+def test_admin_cannot_remove_their_own_admin_role_or_the_last_admin(client: TestClient) -> None:
+    ops = User("user-ops", "Evan Queitsch", "practice-hfc", "operations@heart4change.org")
+    assert client.get("/access/roles", headers=_auth(ops)).status_code == 200
+    own = client.put(
+        "/access/assignments",
+        headers=_auth(ops),
+        json={"email": "operations@heart4change.org", "role_id": ""},
+    )
+    assert own.status_code == 422
+    assert "own Admin" in own.json()["detail"]
+    with pytest.raises(ValueError, match="at least one Admin"):
+        access_store.set_assignment(
+            "practice-hfc",
+            "operations@heart4change.org",
+            "",
+            actor_email="hr@heart4change.org",
+        )
+    assert access_store.role_id_for("practice-hfc", "operations@heart4change.org") == "admin"
+
+
 def test_owner_email_is_break_glass_and_assignments_stay_in_practice(
     client: TestClient, monkeypatch
 ) -> None:
