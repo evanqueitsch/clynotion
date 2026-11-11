@@ -103,9 +103,10 @@ def test_catalog_order_retired_tool_and_billing_placeholder(client: TestClient) 
     assert cred["requires_explicit_grant"] is True
     finance = next(unit for unit in units if unit["id"] == "finance")
     billing = next(tool for tool in finance["tools"] if tool["id"] == "billing")
-    assert billing["status"] == "planned"
-    assert billing["coming_soon"] is True
-    assert billing["href"] == ""
+    assert billing["status"] == "live"
+    assert billing.get("coming_soon") is not True
+    assert billing["href"] == "/#billing"
+    assert billing["requires_explicit_grant"] is True
     from app.platform.catalog import CATALOG_ITEMS
 
     employee = next(row for row in CATALOG_ITEMS if row["id"] == "employee_view")

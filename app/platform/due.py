@@ -13,7 +13,7 @@ from uuid import uuid4
 
 from app.platform.due_persist import DuePersistence, build_due_persistence
 
-Domain = Literal["comply", "people", "grow", "books", "platform"]
+Domain = Literal["comply", "people", "grow", "books", "platform", "credentialing"]
 ObligationStatus = Literal["open", "done", "cancelled"]
 
 

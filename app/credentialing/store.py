@@ -183,6 +183,149 @@ class CredentialingStore:
                 return row
         return None
 
+    def reminder_view(self, practice_id: str) -> dict[str, Any]:
+        """Non-secret fields the reminder pass needs."""
+        _, row = self._load_practice(practice_id)
+        subjects = []
+        for item in row["subjects"].values():
+            if not isinstance(item, dict):
+                continue
+            clocks = item.get("clocks") if isinstance(item.get("clocks"), dict) else {}
+            subjects.append(
+                {
+                    "id": item.get("id") or "",
+                    "name": item.get("name") or "",
+                    "kind": item.get("kind") or "",
+                    "archived": bool(item.get("archived")),
+                    "license_expires_on": item.get("license_expires_on") or "",
+                    "caqh_attested_on": item.get("caqh_attested_on") or "",
+                    "clocks": {str(key): str(value) for key, value in clocks.items()},
+                }
+            )
+        payers = []
+        for item in row["payers"].values():
+            if not isinstance(item, dict) or item.get("archived"):
+                continue
+            payers.append(
+                {
+                    "id": item.get("id") or "",
+                    "name": item.get("name") or "",
+                    "follow_up_days": item.get("follow_up_days") or 0,
+                    "recredential_days": item.get("recredential_days") or 0,
+                }
+            )
+        enrollments = []
+        for item in row["enrollments"].values():
+            if not isinstance(item, dict):
+                continue
+            enrollments.append(
+                {
+                    "subject_id": item.get("subject_id") or "",
+                    "payer_id": item.get("payer_id") or "",
+                    "status": item.get("status") or "",
+                    "submitted_on": item.get("submitted_on") or "",
+                    "effective_on": item.get("effective_on") or "",
+                }
+            )
+        self.overlay_clocks(practice_id, subjects)
+        return {"subjects": subjects, "payers": payers, "enrollments": enrollments}
+
+    def overlay_clocks(self, practice_id: str, subjects: list[dict[str, Any]]) -> None:
+        """Fill missing clock dates from credentials.enc for display and reminders. Does not write."""
+        from app.comply.credentials import credential_store
+
+        try:
+            matrix = credential_store.matrix(practice_id)
+        except Exception:
+            return
+        by_name: dict[str, dict[str, Any]] = {}
+        for person in matrix:
+            key = " ".join(str(person.get("display_name") or "").casefold().split())
+            if key:
+                by_name[key] = person
+        for subject in subjects:
+            if subject.get("kind") != "clinician":
+                continue
+            key = " ".join(str(subject.get("name") or "").casefold().split())
+            match = by_name.get(key)
+            if not match:
+                continue
+            clocks = dict(subject.get("clocks") or {})
+            for clock in match.get("clocks") or []:
+                clock_id = str(clock.get("clock_id") or "")
+                last = str(clock.get("last_completed") or "")
+                if clock_id and last and not clocks.get(clock_id):
+                    clocks[clock_id] = last[:10]
+            subject["clocks"] = clocks
+            if not subject.get("clinician_id") and match.get("clinician_id"):
+                subject["clinician_id"] = match["clinician_id"]
+
+    def migrate_clock_fields(self, practice_id: str) -> list[str]:
+        """Copy missing clock dates onto subjects. Does not remove credential-store rows."""
+        from app.comply.credentials import credential_store
+
+        payload, row = self._load_practice(practice_id)
+        by_name: dict[str, dict[str, Any]] = {}
+        try:
+            matrix = credential_store.matrix(practice_id)
+        except Exception:
+            matrix = []
+        for person in matrix:
+            key = " ".join(str(person.get("display_name") or "").casefold().split())
+            if key:
+                by_name[key] = person
+        changed = False
+        for subject in row["subjects"].values():
+            if not isinstance(subject, dict) or subject.get("kind") != "clinician":
+                continue
+            key = " ".join(str(subject.get("name") or "").casefold().split())
+            match = by_name.get(key)
+            if not match:
+                continue
+            if not subject.get("clinician_id") and match.get("clinician_id"):
+                subject["clinician_id"] = match["clinician_id"]
+                changed = True
+            clocks = subject.get("clocks")
+            if not isinstance(clocks, dict):
+                clocks = {}
+                subject["clocks"] = clocks
+            for clock in match.get("clocks") or []:
+                clock_id = str(clock.get("clock_id") or "")
+                last = str(clock.get("last_completed") or "")
+                if clock_id and last and not clocks.get(clock_id):
+                    clocks[clock_id] = last[:10]
+                    changed = True
+        if not changed:
+            return []
+        backups: list[str] = []
+        if _file_mode():
+            from app.credentialing.backup import backup_once
+
+            for path in (_path(), credential_store._path):
+                name = backup_once(path)
+                if name:
+                    backups.append(name)
+        self._save(payload)
+        return backups
+
+    def digest_enabled(self, practice_id: str) -> bool:
+        _, row = self._load_practice(practice_id)
+        settings = row.get("settings") if isinstance(row.get("settings"), dict) else {}
+        return bool(settings.get("digest_enabled"))
+
+    def set_digest_enabled(self, practice_id: str, enabled: bool) -> None:
+        if _file_mode():
+            from app.credentialing.backup import backup_once
+
+            backup_once(_path())
+        payload, row = self._load_practice(practice_id)
+        settings = row.get("settings")
+        if not isinstance(settings, dict):
+            settings = {}
+            row["settings"] = settings
+        settings["digest_enabled"] = bool(enabled)
+        self._save(payload)
+
     def public_grid(self, practice_id: str) -> dict[str, Any]:
         _, row = self._load_practice(practice_id)
         subjects = [
@@ -299,6 +442,25 @@ class CredentialingStore:
             if delta:
                 changes[key] = delta
             current[key] = new_value
+        incoming_clocks = body.get("clocks")
+        if isinstance(incoming_clocks, dict):
+            from app.platform.catalog import CREDENTIAL_CLOCKS
+
+            allowed = {str(item["id"]) for item in CREDENTIAL_CLOCKS}
+            clocks = current.setdefault("clocks", {})
+            if not isinstance(clocks, dict):
+                clocks = {}
+                current["clocks"] = clocks
+            for key, value in incoming_clocks.items():
+                if key not in allowed:
+                    continue
+                text = str(value or "").strip()
+                if not text:
+                    continue
+                saved = _date_or_blank(text)
+                if clocks.get(key) != saved:
+                    changes[key] = {"old": clocks.get(key) or "", "new": saved}
+                clocks[key] = saved
         current["id"] = subject_id
         current["updated_by"] = actor
         current["updated_at"] = _now()
@@ -668,6 +830,7 @@ def _grid_cell(enrollment: dict[str, Any]) -> str:
 
 
 def _public_subject(row: dict[str, Any]) -> dict[str, Any]:
+    raw_clocks = row.get("clocks") if isinstance(row.get("clocks"), dict) else {}
     return {
         "id": row.get("id") or "",
         "name": row.get("name") or "",
@@ -683,6 +846,8 @@ def _public_subject(row: dict[str, Any]) -> dict[str, Any]:
         "service_address": row.get("service_address") or "",
         "active": bool(row.get("active", True)),
         "archived": bool(row.get("archived")),
+        "clinician_id": row.get("clinician_id") or "",
+        "clocks": {str(key): str(value) for key, value in raw_clocks.items()},
         "npi_masked": mask_secret(str(row.get("npi") or "")),
         "tin_masked": mask_secret(str(row.get("tin") or "")),
         "license_number_masked": mask_secret(str(row.get("license_number") or "")),

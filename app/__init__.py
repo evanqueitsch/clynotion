@@ -1,3 +1,3 @@
 """Clynotion — practice product (supervision notes + local voice match; MOCK ASR/LLM by default)."""
 
-__version__ = "0.17.3"
+__version__ = "0.18.0"
