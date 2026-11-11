@@ -310,10 +310,13 @@ def test_page_payload_masks_ids_and_import_formats(client: TestClient, tmp_path,
     assert "QA Test Payer / QA Test Practice: in network." in preview_text
     assert "QA Masters Payer / QA Test Practice: needs review." in preview_text
     assert "QA Strict Payer / QA Test Clinician: unknown." in preview_text
+    assert body["summary"] == "3 payers to create, 2 people to create, 6 cells, 1 warning"
     assert NPI not in preview.text
     committed = client.post("/credentialing/import/commit", headers=_alice(), files=_files())
     assert committed.status_code == 200, committed.text
     assert committed.json()["backup"] == ""
+    again = client.post("/credentialing/import/preview", headers=_alice(), files=_files())
+    assert again.json()["summary"] == "3 payers to update, 2 people to update, 6 cells, 1 warning"
     grid_response = client.get("/credentialing/grid", headers=_alice())
     assert NPI not in grid_response.text
     assert "6789" in grid_response.text
@@ -426,6 +429,29 @@ def test_page_payload_masks_ids_and_import_formats(client: TestClient, tmp_path,
     ).json()["events"]
     assert any(item["action"] == "export" and item["field"] == "people.csv" for item in export_audit)
     assert NPI not in json.dumps(export_audit)
+
+
+def test_import_summary_singular_and_subtitle() -> None:
+    from app.credentialing.csvio import ImportPlan, summarize_plan
+
+    plan = ImportPlan(
+        payers=[{"name": "QA Test Payer"}],
+        subjects=[{"name": "QA Test Clinician"}],
+        cells=[{"payer": "QA Test Payer", "subject": "QA Test Clinician"}],
+        warnings=["QA Test Clinician: NPI has 9 digits; expected 10."],
+    )
+    assert (
+        summarize_plan(plan, existing_payers=set(), existing_subjects=set())
+        == "1 payer to create, 1 person to create, 1 cell, 1 warning"
+    )
+    page = Path("app/static/index.html").read_text(encoding="utf-8")
+    assert (
+        'id="cg-subtitle">Payer enrollment for the practice and each clinician.</p>'
+        in page
+    )
+    assert "Test records only" not in page
+    script = Path("app/static/credentialing.js").read_text(encoding="utf-8")
+    assert 'summary.id = "cg-import-summary"' in script
 
 
 def test_withheld_export_keeps_hire_date_and_sensitive_round_trip(client: TestClient) -> None:

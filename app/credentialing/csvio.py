@@ -33,6 +33,7 @@ class ImportPlan:
     payers: list[dict[str, Any]] = field(default_factory=list)
     subjects: list[dict[str, Any]] = field(default_factory=list)
     cells: list[dict[str, Any]] = field(default_factory=list)
+    summary: str = ""
 
 
 def _text(raw: Optional[str]) -> str:
@@ -257,6 +258,32 @@ def parse_grid(
     return rows, errors, changes
 
 
+def _noun(count: int, singular: str, plural: str) -> str:
+    return f"{count} {singular if count == 1 else plural}"
+
+
+def summarize_plan(
+    plan: ImportPlan, *, existing_payers: set[str], existing_subjects: set[str]
+) -> str:
+    """One line for the import preview, for example '3 payers to create, 2 people to create, 6 cells, 1 warning'."""
+    parts: list[str] = []
+    payer_create = sum(1 for row in plan.payers if row["name"] not in existing_payers)
+    payer_update = len(plan.payers) - payer_create
+    person_create = sum(1 for row in plan.subjects if row["name"] not in existing_subjects)
+    person_update = len(plan.subjects) - person_create
+    if payer_create:
+        parts.append(f"{_noun(payer_create, 'payer', 'payers')} to create")
+    if payer_update:
+        parts.append(f"{_noun(payer_update, 'payer', 'payers')} to update")
+    if person_create:
+        parts.append(f"{_noun(person_create, 'person', 'people')} to create")
+    if person_update:
+        parts.append(f"{_noun(person_update, 'person', 'people')} to update")
+    parts.append(_noun(len(plan.cells), "cell", "cells"))
+    parts.append(_noun(len(plan.warnings), "warning", "warnings"))
+    return ", ".join(parts)
+
+
 def build_plan(
     *,
     payers_csv: Optional[str],
@@ -268,6 +295,9 @@ def build_plan(
     plan = ImportPlan()
     if payers_csv is None and people_csv is None and grid_csv is None:
         plan.errors.append("Upload at least one CSV.")
+        plan.summary = summarize_plan(
+            plan, existing_payers=existing_payers, existing_subjects=existing_subjects
+        )
         return plan
     payers, payer_errors, payer_changes = parse_payers(payers_csv, existing=existing_payers)
     people, people_errors, warnings, people_changes = parse_people(people_csv, existing=existing_subjects)
@@ -286,4 +316,7 @@ def build_plan(
     plan.errors.extend(grid_errors)
     plan.cells = cells
     plan.changes.extend(grid_changes)
+    plan.summary = summarize_plan(
+        plan, existing_payers=existing_payers, existing_subjects=existing_subjects
+    )
     return plan
