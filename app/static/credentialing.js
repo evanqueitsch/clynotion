@@ -64,14 +64,18 @@
   }
 
   function cellLabel(cell) {
-    if (!cell || cell.status === "unknown") {
-      return cell && cell.suggestion_reason ? { text: "X", cls: "cg-suggested", title: cell.suggestion_reason } : { text: "", cls: "", title: "Unknown" };
+    const warn = cell && cell.display === "warning" ? (cell.license_warning || "License does not match this payer.") : "";
+    if (!cell || cell.status === "unknown" || cell.display === "suggested") {
+      if (cell && (cell.display === "suggested" || cell.suggestion_reason)) {
+        return { text: "X", cls: "cg-suggested", title: cell.suggestion_reason || "Suggested not eligible", warn: "" };
+      }
+      return { text: "", cls: "", title: "Unknown", warn: "" };
     }
-    if (cell.status === "in_network") return { text: "Y", cls: "cg-y", title: "In network" };
-    if (cell.status === "not_eligible") return { text: "X", cls: "cg-x", title: "Not eligible" };
-    if (cell.status === "pending") return { text: cell.submitted_on || "Pending", cls: "cg-pending", title: "Pending" };
-    if (cell.status === "needs_review") return { text: "?", cls: "cg-review", title: "Needs review" };
-    return { text: cell.status, cls: "", title: cell.status };
+    if (cell.status === "in_network") return { text: "Y", cls: "cg-y", title: "In network", warn: warn };
+    if (cell.status === "not_eligible") return { text: "X", cls: "cg-x", title: "Not eligible", warn: "" };
+    if (cell.status === "pending") return { text: cell.submitted_on || "Pending", cls: "cg-pending", title: "Pending", warn: warn };
+    if (cell.status === "needs_review") return { text: "?", cls: "cg-review", title: "Needs review", warn: warn };
+    return { text: cell.status, cls: "", title: cell.status, warn: warn };
   }
 
   function needsAction(cell) {
@@ -79,9 +83,13 @@
     return cell.status === "pending" || cell.status === "needs_review" || (cell.status === "unknown" && cell.suggestion_reason);
   }
 
+  function activeSubjects() {
+    return (payload.subjects || []).filter((item) => !item.archived);
+  }
+
   function visibleSubjects() {
     const focus = $("cg-focus").value;
-    const subjects = (payload.subjects || []).filter((item) => !item.archived);
+    const subjects = activeSubjects();
     if (!focus || focus === "all") return subjects;
     return subjects.filter((item) => item.id === focus);
   }
@@ -94,7 +102,7 @@
     all.value = "all";
     all.textContent = "All columns";
     select.appendChild(all);
-    (payload.subjects || []).forEach((subject) => {
+    activeSubjects().forEach((subject) => {
       const option = document.createElement("option");
       option.value = subject.id;
       option.textContent = subject.name;
@@ -168,6 +176,14 @@
         button.className = "cg-cell";
         button.textContent = look.text;
         button.title = look.title;
+        if (look.warn) {
+          const mark = document.createElement("span");
+          mark.className = "cg-warn";
+          mark.textContent = "!";
+          mark.title = look.warn;
+          button.appendChild(document.createTextNode(" "));
+          button.appendChild(mark);
+        }
         button.addEventListener("click", () => openDrawer(payer, subject, cell));
         td.appendChild(button);
         tr.appendChild(td);
@@ -200,10 +216,14 @@
       eye.type = "button";
       eye.className = "ghost";
       eye.textContent = "Show";
+      const remask = () => {
+        value.textContent = value.getAttribute("data-masked") || "";
+        value.removeAttribute("data-revealed");
+        eye.textContent = "Show";
+      };
       eye.addEventListener("click", async () => {
         if (value.getAttribute("data-revealed") === "1") {
-          value.textContent = value.getAttribute("data-masked") || "";
-          value.removeAttribute("data-revealed");
+          remask();
           return;
         }
         try {
@@ -213,11 +233,10 @@
           });
           value.textContent = data.value || "—";
           value.setAttribute("data-revealed", "1");
-          const timer = window.setTimeout(() => {
-            value.textContent = value.getAttribute("data-masked") || "";
-            value.removeAttribute("data-revealed");
-          }, 30000);
+          eye.textContent = "Hide";
+          const timer = window.setTimeout(remask, 30000);
           timers.push(timer);
+          refreshAudit(subjectId);
         } catch (error) {
           setMessage(errText(error), "error");
         }
@@ -234,6 +253,7 @@
           });
           await navigator.clipboard.writeText(data.value || "");
           setMessage("Copied", "ok");
+          refreshAudit(subjectId);
         } catch (error) {
           setMessage(errText(error), "error");
         }
@@ -242,6 +262,21 @@
       wrap.appendChild(copy);
     }
     return wrap;
+  }
+
+  async function refreshAudit(subjectId) {
+    if (!subjectId) return;
+    const log = document.querySelector('[data-audit-for="' + subjectId + '"]');
+    if (!log) return;
+    try {
+      const data = await bridge().api("/credentialing/audit?subject_id=" + encodeURIComponent(subjectId));
+      const events = data.events || [];
+      log.textContent = events.length
+        ? events.map((event) => event.at + " " + event.actor + " " + event.action + " " + event.field).join("\n")
+        : "No reveals or copies yet.";
+    } catch (error) {
+      log.textContent = errText(error);
+    }
   }
 
   function historyBlock(events) {
@@ -324,6 +359,10 @@
       try {
         await bridge().api("/credentialing/enrollments", { method: "PUT", json: body });
         await reload();
+        const updated = cellFor(payer.id, subject.id);
+        const history = drawer.querySelector(".cg-history");
+        if (history) history.replaceWith(historyBlock(updated && updated.history));
+        refreshAudit(subject.id);
         result.className = "status ok";
         result.textContent = "Saved";
         setMessage("Saved", "ok");
@@ -371,7 +410,7 @@
     root.innerHTML = "";
     const picker = document.createElement("select");
     picker.id = "cg-profile-pick";
-    (payload.subjects || []).forEach((subject) => {
+    activeSubjects().forEach((subject) => {
       const option = document.createElement("option");
       option.value = subject.id;
       option.textContent = subject.name + " (" + subject.kind + ")";
@@ -461,6 +500,7 @@
           await bridge().api("/credentialing/subjects", { method: "PUT", json: body });
           setMessage("Saved", "ok");
           await reload();
+          refreshAudit(subject.id);
         } catch (error) {
           setMessage(errText(error), "error");
         }
@@ -471,42 +511,107 @@
         archive.type = "button";
         archive.className = "ghost";
         archive.textContent = "Remove from grid";
-        archive.addEventListener("click", async () => {
-          if (!window.confirm("Remove " + subject.name + " from the grid? History stays in the encrypted file.")) return;
-          try {
-            await bridge().api("/credentialing/subjects/" + subject.id + "/archive", { method: "POST" });
-            setMessage("Saved", "ok");
-            await reload();
-          } catch (error) {
-            setMessage(errText(error), "error");
-          }
+        archive.addEventListener("click", () => {
+          const box = confirmBox(
+            "Remove " + subject.name + " from the grid? They will be hidden. History is kept.",
+            async () => {
+              await bridge().api("/credentialing/subjects/" + subject.id + "/archive", { method: "POST" });
+              setMessage("Saved", "ok");
+              await reload();
+            }
+          );
+          form.appendChild(box);
         });
         form.appendChild(archive);
       }
       if (subject.id && payload.can_sensitive) {
         const log = document.createElement("div");
         log.className = "cg-history";
+        log.setAttribute("data-audit-for", subject.id);
         log.textContent = "Loading reveal log…";
         form.appendChild(log);
-        bridge().api("/credentialing/audit?subject_id=" + encodeURIComponent(subject.id)).then((data) => {
-          const events = data.events || [];
-          log.textContent = events.length
-            ? events.map((event) => event.at + " " + event.actor + " " + event.action + " " + event.field).join("\n")
-            : "No reveals or copies yet.";
-        }).catch((error) => {
-          log.textContent = errText(error);
-        });
+        refreshAudit(subject.id);
       }
     };
     picker.addEventListener("change", draw);
     if (picker.options.length) draw();
+    const removed = (payload.subjects || []).filter((item) => item.archived);
+    if (removed.length) {
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "Removed (" + removed.length + ")";
+      details.appendChild(summary);
+      removed.forEach((subject) => {
+        const row = document.createElement("div");
+        row.className = "due-row";
+        const label = document.createElement("span");
+        label.textContent = subject.name;
+        row.appendChild(label);
+        if (payload.can_manage) {
+          const restore = document.createElement("button");
+          restore.type = "button";
+          restore.className = "ghost";
+          restore.textContent = "Restore";
+          restore.addEventListener("click", async () => {
+            try {
+              await bridge().api("/credentialing/subjects/" + subject.id + "/restore", { method: "POST" });
+              setMessage("Saved", "ok");
+              await reload();
+            } catch (error) {
+              setMessage(errText(error), "error");
+            }
+          });
+          row.appendChild(restore);
+        }
+        details.appendChild(row);
+      });
+      root.appendChild(details);
+    }
+  }
+
+  function confirmBox(message, onYes) {
+    const box = document.createElement("div");
+    box.className = "cg-confirm";
+    const text = document.createElement("p");
+    text.textContent = message;
+    const yes = document.createElement("button");
+    yes.type = "button";
+    yes.className = "primary";
+    yes.textContent = "Confirm";
+    const no = document.createElement("button");
+    no.type = "button";
+    no.className = "ghost";
+    no.textContent = "Cancel";
+    no.addEventListener("click", () => box.remove());
+    yes.addEventListener("click", async () => {
+      yes.disabled = true;
+      try {
+        await onYes();
+        box.remove();
+      } catch (error) {
+        yes.disabled = false;
+        setMessage(errText(error), "error");
+      }
+    });
+    box.appendChild(text);
+    box.appendChild(yes);
+    box.appendChild(no);
+    return box;
   }
 
   function renderPayers() {
     const root = $("cg-payers-section");
     root.innerHTML = "";
+    const add = document.createElement("button");
+    add.type = "button";
+    add.id = "cg-add-payer";
+    add.className = "primary";
+    add.textContent = "Add payer";
+    add.disabled = !(payload.can_manage && payload.can_payers);
+    root.appendChild(add);
     const form = document.createElement("div");
-    form.className = "cg-form";
+    form.className = "cg-form hidden";
+    form.id = "cg-payer-form";
     const name = field("Payer", "");
     const type = document.createElement("select");
     TYPES.forEach((value) => {
@@ -550,6 +655,7 @@
           json: body,
         });
         form.dataset.id = "";
+        form.classList.add("hidden");
         setMessage("Saved", "ok");
         await reload();
       } catch (error) {
@@ -558,45 +664,92 @@
     });
     form.appendChild(save);
     root.appendChild(form);
-    (payload.payers || []).forEach((payer) => {
+    const clearForm = () => {
+      form.dataset.id = "";
+      name.input.value = "";
+      family.input.value = "";
+      licenses.input.value = "";
+      notes.input.value = "";
+      parent.input.value = "";
+      counties.input.value = "";
+      type.selectedIndex = 0;
+    };
+    add.addEventListener("click", () => {
+      clearForm();
+      form.classList.remove("hidden");
+      name.input.focus();
+    });
+    const fillForm = (payer) => {
+      name.input.value = payer.name;
+      type.value = payer.type;
+      family.input.value = (payer.family_members || []).join("; ");
+      licenses.input.value = (payer.accepts_licenses || []).join("; ");
+      notes.input.value = payer.notes || "";
+      parent.input.value = payer.parent_payer || "";
+      counties.input.value = (payer.counties || []).join("; ");
+      form.dataset.id = payer.id;
+      form.classList.remove("hidden");
+    };
+    const active = (payload.payers || []).filter((payer) => !payer.archived);
+    const archived = (payload.payers || []).filter((payer) => payer.archived);
+    active.forEach((payer) => root.appendChild(payerRow(payer, false)));
+    if (archived.length) {
+      const details = document.createElement("details");
+      const summary = document.createElement("summary");
+      summary.textContent = "Archived (" + archived.length + ")";
+      details.appendChild(summary);
+      archived.forEach((payer) => details.appendChild(payerRow(payer, true)));
+      root.appendChild(details);
+    }
+
+    function payerRow(payer, isArchived) {
       const row = document.createElement("div");
       row.className = "due-row";
       const label = document.createElement("span");
-      label.textContent = payer.name + (payer.archived ? " (archived)" : "") + " · " + payer.type;
+      label.textContent = payer.name + " · " + payer.type;
       row.appendChild(label);
-      if (!payer.archived && payload.can_manage && payload.can_payers) {
-        const archive = document.createElement("button");
-        archive.type = "button";
-        archive.className = "ghost";
-        archive.textContent = "Archive";
-        archive.addEventListener("click", async () => {
-          try {
-            await bridge().api("/credentialing/payers/" + payer.id + "/archive", { method: "POST" });
-            setMessage("Saved", "ok");
-            await reload();
-          } catch (error) {
-            setMessage(errText(error), "error");
-          }
-        });
-        row.appendChild(archive);
-        const edit = document.createElement("button");
-        edit.type = "button";
-        edit.className = "ghost";
-        edit.textContent = "Edit";
-        edit.addEventListener("click", () => {
-          name.input.value = payer.name;
-          type.value = payer.type;
-          family.input.value = (payer.family_members || []).join("; ");
-          licenses.input.value = (payer.accepts_licenses || []).join("; ");
-          notes.input.value = payer.notes || "";
-          parent.input.value = payer.parent_payer || "";
-          counties.input.value = (payer.counties || []).join("; ");
-          form.dataset.id = payer.id;
-        });
-        row.appendChild(edit);
+      if (payload.can_manage && payload.can_payers) {
+        if (isArchived) {
+          const restore = document.createElement("button");
+          restore.type = "button";
+          restore.className = "ghost";
+          restore.textContent = "Restore";
+          restore.addEventListener("click", async () => {
+            try {
+              await bridge().api("/credentialing/payers/" + payer.id + "/restore", { method: "POST" });
+              setMessage("Saved", "ok");
+              await reload();
+            } catch (error) {
+              setMessage(errText(error), "error");
+            }
+          });
+          row.appendChild(restore);
+        } else {
+          const archive = document.createElement("button");
+          archive.type = "button";
+          archive.className = "ghost";
+          archive.textContent = "Archive";
+          archive.addEventListener("click", () => {
+            row.appendChild(confirmBox(
+              "Archive " + payer.name + "? It will be hidden from the grid. History is kept.",
+              async () => {
+                await bridge().api("/credentialing/payers/" + payer.id + "/archive", { method: "POST" });
+                setMessage("Saved", "ok");
+                await reload();
+              }
+            ));
+          });
+          const edit = document.createElement("button");
+          edit.type = "button";
+          edit.className = "ghost";
+          edit.textContent = "Edit";
+          edit.addEventListener("click", () => fillForm(payer));
+          row.appendChild(archive);
+          row.appendChild(edit);
+        }
       }
-      root.appendChild(row);
-    });
+      return row;
+    }
   }
 
   function splitList(value) {
@@ -606,6 +759,11 @@
   function showSection(name) {
     ["grid", "profiles", "payers", "import"].forEach((item) => {
       $("cg-" + item + "-section").classList.toggle("hidden", item !== name);
+      const tab = $("cg-tab-" + item);
+      const selected = item === name;
+      tab.classList.toggle("primary", selected);
+      tab.classList.toggle("ghost", !selected);
+      tab.setAttribute("aria-selected", selected ? "true" : "false");
     });
   }
 

@@ -36,7 +36,9 @@ class ImportPlan:
 
 
 def _text(raw: Optional[str]) -> str:
-    return (raw or "").lstrip("\ufeff")
+    body = (raw or "").lstrip("\ufeff")
+    kept = [line for line in body.splitlines() if not line.startswith("#")]
+    return "\n".join(kept)
 
 
 def _split_list(value: str) -> list[str]:
@@ -61,7 +63,20 @@ def _iso(value: str, label: str, errors: list[str]) -> str:
     return raw
 
 
-def parse_payers(text: Optional[str]) -> tuple[list[dict[str, Any]], list[str], list[str]]:
+def _status_words(status: str, submitted: str) -> str:
+    if status == "pending":
+        return f"pending, submitted {submitted}" if submitted else "pending"
+    return {
+        "in_network": "in network",
+        "not_eligible": "not eligible",
+        "needs_review": "needs review",
+        "unknown": "unknown",
+    }.get(status, status)
+
+
+def parse_payers(
+    text: Optional[str], *, existing: Optional[set[str]] = None
+) -> tuple[list[dict[str, Any]], list[str], list[str]]:
     if text is None:
         return [], [], []
     body = _text(text)
@@ -99,11 +114,14 @@ def parse_payers(text: Optional[str]) -> tuple[list[dict[str, Any]], list[str], 
                 "notes": (row.get("notes") or "").strip(),
             }
         )
-        changes.append(f"Payer {name}: update from payers.csv.")
+        verb = "update" if existing and name in existing else "create"
+        changes.append(f"Payer {name}: {verb}.")
     return rows, errors, changes
 
 
-def parse_people(text: Optional[str]) -> tuple[list[dict[str, Any]], list[str], list[str], list[str]]:
+def parse_people(
+    text: Optional[str], *, existing: Optional[set[str]] = None
+) -> tuple[list[dict[str, Any]], list[str], list[str], list[str]]:
     if text is None:
         return [], [], [], []
     body = _text(text)
@@ -152,7 +170,8 @@ def parse_people(text: Optional[str]) -> tuple[list[dict[str, Any]], list[str], 
                 "device": (row.get("device") or "").strip(),
             }
         )
-        changes.append(f"Subject {name}: update from people.csv.")
+        verb = "update" if existing and name in existing else "create"
+        changes.append(f"Subject {name}: {verb}.")
     return rows, errors, warnings, changes
 
 
@@ -234,8 +253,7 @@ def parse_grid(
                     "submitted_on": submitted,
                 }
             )
-            label = submitted or status
-            changes.append(f"{payer} / {name}: {label}.")
+            changes.append(f"{payer} / {name}: {_status_words(status, submitted)}.")
     return rows, errors, changes
 
 
@@ -251,8 +269,8 @@ def build_plan(
     if payers_csv is None and people_csv is None and grid_csv is None:
         plan.errors.append("Upload at least one CSV.")
         return plan
-    payers, payer_errors, payer_changes = parse_payers(payers_csv)
-    people, people_errors, warnings, people_changes = parse_people(people_csv)
+    payers, payer_errors, payer_changes = parse_payers(payers_csv, existing=existing_payers)
+    people, people_errors, warnings, people_changes = parse_people(people_csv, existing=existing_subjects)
     plan.errors.extend(payer_errors)
     plan.errors.extend(people_errors)
     plan.warnings.extend(warnings)

@@ -30,7 +30,7 @@ QA Strict Payer,,commercial,LCSW,fake strict
 """
 PEOPLE = """subject,kind,license_type,npi,tin,license_number,caqh_id,hire_date,device
 QA Test Practice,practice,,,,,,,
-QA Test Clinician,clinician,LSW,123456789,,,,,2020-01-15,QA-IPAD
+QA Test Clinician,clinician,LSW,123456789,,,,2020-01-15,QA-IPAD
 """
 GRID = """payer,QA Test Practice,QA Test Clinician
 QA Test Payer,Y,2026-04-01
@@ -258,7 +258,13 @@ def test_writes_and_reveals_require_the_capability(client: TestClient) -> None:
     )
     assert removed.status_code == 200, removed.text
     remaining = client.get("/credentialing/grid", headers=_alice()).json()
-    assert all(row["name"] != "QA Test Clinician" for row in remaining["subjects"])
+    visible = [row for row in remaining["subjects"] if not row.get("archived")]
+    assert all(row["name"] != "QA Test Clinician" for row in visible)
+    assert any(row["name"] == "QA Test Clinician" and row["archived"] for row in remaining["subjects"])
+    restored = client.post(f"/credentialing/subjects/{subject['id']}/restore", headers=_alice())
+    assert restored.status_code == 200, restored.text
+    back = client.get("/credentialing/grid", headers=_alice()).json()
+    assert any(row["name"] == "QA Test Clinician" and not row["archived"] for row in back["subjects"])
     assert client.get("/credentialing/export/people", headers=_auth(viewer)).status_code == 403
 
     manager = _assign(
@@ -297,6 +303,13 @@ def test_page_payload_masks_ids_and_import_formats(client: TestClient, tmp_path,
     body = preview.json()
     assert not body["errors"]
     assert any("9 digits" in item for item in body["warnings"])
+    preview_text = "\n".join(body["changes"])
+    assert "Payer QA Test Payer: create." in preview_text
+    assert "Subject QA Test Clinician: create." in preview_text
+    assert "QA Test Payer / QA Test Clinician: pending, submitted 2026-04-01." in preview_text
+    assert "QA Test Payer / QA Test Practice: in network." in preview_text
+    assert "QA Masters Payer / QA Test Practice: needs review." in preview_text
+    assert "QA Strict Payer / QA Test Clinician: unknown." in preview_text
     assert NPI not in preview.text
     committed = client.post("/credentialing/import/commit", headers=_alice(), files=_files())
     assert committed.status_code == 200, committed.text
@@ -316,12 +329,15 @@ def test_page_payload_masks_ids_and_import_formats(client: TestClient, tmp_path,
     pending = cells[(payer["id"], clinician["id"])]
     assert pending["status"] == "pending"
     assert pending["submitted_on"] == "2026-04-01"
+    assert pending["display"] == "warning"
     assert "LSW" in pending["license_warning"]
     assert cells[(masters["id"], practice["id"])]["status"] == "needs_review"
     assert cells[(masters["id"], clinician["id"])]["suggestion_reason"] == ""
     suggested = cells[(strict["id"], clinician["id"])]
     assert suggested["status"] == "unknown"
+    assert suggested["display"] == "suggested"
     assert "LSW" in suggested["suggestion_reason"]
+    assert cells[(masters["id"], clinician["id"])]["display"] == "plain"
     blocked = client.put(
         "/credentialing/enrollments",
         headers=_alice(),
@@ -401,3 +417,112 @@ def test_page_payload_masks_ids_and_import_formats(client: TestClient, tmp_path,
         "subject,kind,license_type,npi,tin,license_number,caqh_id,hire_date,device"
     )
     assert NPI in people
+    assert "2020-01-15" in people
+    assert "QA-IPAD" in people
+    export_audit = client.get(
+        "/credentialing/audit",
+        headers=_alice(),
+        params={"subject_id": clinician["id"]},
+    ).json()["events"]
+    assert any(item["action"] == "export" and item["field"] == "people.csv" for item in export_audit)
+    assert NPI not in json.dumps(export_audit)
+
+
+def test_withheld_export_keeps_hire_date_and_sensitive_round_trip(client: TestClient) -> None:
+    people = """subject,kind,license_type,npi,tin,license_number,caqh_id,hire_date,device
+QA Test Clinician,clinician,LSW,1234567890,111222333,LIC-99,CAQH-7,2024-02-03,QA-TABLET
+"""
+    payers = """payer,family_members,type,accepts_licenses,notes
+QA Test Payer,,commercial,ALL,fake
+"""
+    grid = """payer,QA Test Clinician
+QA Test Payer,Y
+"""
+    first = client.post(
+        "/credentialing/import/commit",
+        headers=_alice(),
+        files=_files(payers=payers, people=people, grid=grid),
+    )
+    assert first.status_code == 200, first.text
+    again = client.post(
+        "/credentialing/import/preview",
+        headers=_alice(),
+        files=_files(payers=payers, people=people, grid=grid),
+    )
+    assert "Payer QA Test Payer: update." in again.json()["changes"]
+    assert "Subject QA Test Clinician: update." in again.json()["changes"]
+    sensitive = client.get("/credentialing/export/people", headers=_alice()).text
+    assert sensitive.splitlines()[0].startswith("subject,")
+    assert "1234567890" in sensitive
+    assert "111222333" in sensitive
+    assert "LIC-99" in sensitive
+    assert "CAQH-7" in sensitive
+    assert "2024-02-03" in sensitive
+    assert "QA-TABLET" in sensitive
+    reimported = client.post(
+        "/credentialing/import/commit",
+        headers=_alice(),
+        files=_files(
+            payers=payers,
+            people=sensitive,
+            grid=client.get("/credentialing/export/grid", headers=_alice()).text,
+        ),
+    )
+    assert reimported.status_code == 200, reimported.text
+    grid_body = client.get("/credentialing/grid", headers=_alice()).json()
+    person = next(row for row in grid_body["subjects"] if row["name"] == "QA Test Clinician")
+    assert person["hire_date"] == "2024-02-03"
+    assert person["device"] == "QA-TABLET"
+    revealed = client.post(
+        "/credentialing/reveal",
+        headers=_alice(),
+        json={"subject_id": person["id"], "field": "tin"},
+    )
+    assert revealed.json()["value"] == "111222333"
+
+    limited = _assign(["tool:credentialing", "capability:credentialing_manage", "tool:time_entry"])
+    withheld = client.get("/credentialing/export/people", headers=_auth(limited)).text
+    assert withheld.startswith("# npi, tin, license_number, and caqh_id were withheld")
+    assert "2024-02-03" in withheld
+    assert "QA-TABLET" in withheld
+    assert "1234567890" not in withheld
+    assert "111222333" not in withheld
+    assert "LIC-99" not in withheld
+    assert "CAQH-7" not in withheld
+    log = client.get(
+        "/credentialing/audit", headers=_alice(), params={"subject_id": person["id"]}
+    ).json()["events"]
+    exports = [item for item in log if item["action"] == "export"]
+    assert len(exports) == 1
+
+
+def test_payer_archive_restore_and_screen_copy(client: TestClient) -> None:
+    created = client.post(
+        "/credentialing/payers",
+        headers=_alice(),
+        json={"name": "QA Test Payer", "type": "eap", "accepts_licenses": ["masters"]},
+    )
+    assert created.status_code == 200, created.text
+    payer_id = created.json()["id"]
+    archived = client.post(f"/credentialing/payers/{payer_id}/archive", headers=_alice())
+    assert archived.status_code == 200
+    hidden = client.get("/credentialing/grid", headers=_alice()).json()
+    assert all(row["payer_id"] != payer_id for row in hidden["cells"])
+    assert any(row["id"] == payer_id and row["archived"] for row in hidden["payers"])
+    restored = client.post(f"/credentialing/payers/{payer_id}/restore", headers=_alice())
+    assert restored.status_code == 200
+    assert restored.json()["archived"] is False
+    page = Path("app/static/index.html").read_text(encoding="utf-8")
+    script = Path("app/static/credentialing.js").read_text(encoding="utf-8")
+    assert "role.locked ? true" in page
+    assert 'toggle.textContent = "Permissions ("' in page
+    assert "Add payer" in script
+    assert "Archive " in script and "It will be hidden from the grid. History is kept." in script
+    assert 'summary.textContent = "Archived ("' in script
+    assert 'summary.textContent = "Removed ("' in script
+    assert "Restore" in script
+    assert 'eye.textContent = "Hide"' in script
+    assert "cg-suggested" in script and "cg-warn" in script
+    assert 'tab.classList.toggle("primary", selected)' in script
+    assert "refreshAudit" in script
+    assert "window.confirm" not in script
