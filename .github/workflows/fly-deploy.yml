@@ -39,3 +39,29 @@ jobs:
         run: flyctl deploy --remote-only --config fly.toml
         env:
           FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+
+      - name: Back up and clear home clocks
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          b64="$(base64 -w0 scripts/clear_due_clocks.py)"
+          flyctl ssh console -a clynotion -C "/app/.venv/bin/python -c \"import os,sys,base64; os.chdir('/app'); sys.path.insert(0,'/app'); os.environ['DUE_RESET_MODE']='clear'; exec(base64.b64decode('${b64}'))\""
+
+      - name: Confirm the empty store and the backup
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          ok=0
+          for i in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
+            if curl -fsS https://clynotion.com/health; then
+              echo
+              ok=1
+              break
+            fi
+            sleep 4
+          done
+          test "$ok" = 1
+          b64="$(base64 -w0 scripts/clear_due_clocks.py)"
+          flyctl ssh console -a clynotion -C "/app/.venv/bin/python -c \"import os,sys,base64; os.chdir('/app'); sys.path.insert(0,'/app'); os.environ['DUE_RESET_MODE']='verify'; exec(base64.b64decode('${b64}'))\""
