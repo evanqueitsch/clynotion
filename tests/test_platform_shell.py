@@ -67,11 +67,9 @@ def test_home_returns_tools_pulse_and_seeded_comply(client: TestClient) -> None:
     assert "Clinical Tools" in unit_names
     assert "Technology" in unit_names
     assert "pulse" in body
-    assert body["pulse"]["open_obligations"] >= 1
     titles = [o["title"] for o in body["bands"]["overdue"] + body["bands"]["this_week"]]
-    assert any("Unsigned note sweep" in t for t in titles) or any(
-        "documentation" in t.lower() for t in titles
-    )
+    assert not any(o["source"] == "compliance_registry" for o in body["bands"]["overdue"] + body["bands"]["this_week"])
+    assert not any("documentation" in t.lower() for t in titles)
 
 
 def test_complete_obligation_one_click(client: TestClient) -> None:

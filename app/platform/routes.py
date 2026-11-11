@@ -13,7 +13,7 @@ from app.comply.registry import ensure_seeded_clocks, list_seed_catalog
 from app.eligibility.service import eligibility_store
 from app.grow.intake import intake_store
 from app.hr.onboarding import onboarding_store
-from app.ingest.sp_csv import ingest_store, reconcile_stale_ingest
+from app.ingest.sp_csv import ingest_store
 from app.platform.catalog import catalog_by_unit, crosswalk_rows, live_tools
 from app.platform.due import due_engine, reconcile_supervision_drafts
 from app.platform.practices import practice_store
@@ -178,16 +178,11 @@ def _home_payload(user: CurrentUser) -> HomeOut:
             pulse=PulseOut(),
             note="Time entry",
         )
-    # Tier-0 / Tier-1 feeds into due engine
-    ensure_seeded_clocks(practice_id=user.practice_id, owner_user_id=user.user_id)
-    credential_store.reconcile(
-        practice_id=user.practice_id, owner_user_id=user.user_id
-    )
-    onboarding_store.ensure_seeded(user.practice_id)
+    # Home reads the due register. It does not invent compliance, credential,
+    # or ingest clocks. Recorded employees and supervision drafts still surface.
     onboarding_store.reconcile_due(
         practice_id=user.practice_id, owner_user_id=user.user_id
     )
-    reconcile_stale_ingest(practice_id=user.practice_id, owner_user_id=user.user_id)
     reconcile_supervision_drafts(
         practice_id=user.practice_id,
         owner_user_id=user.user_id,
@@ -253,15 +248,9 @@ def current_practice(user: CurrentUser) -> PracticeOut:
 
 @router.get("/due", response_model=HomeBandsOut)
 def due_bands(user: CurrentUser) -> HomeBandsOut:
-    ensure_seeded_clocks(practice_id=user.practice_id, owner_user_id=user.user_id)
-    credential_store.reconcile(
-        practice_id=user.practice_id, owner_user_id=user.user_id
-    )
-    onboarding_store.ensure_seeded(user.practice_id)
     onboarding_store.reconcile_due(
         practice_id=user.practice_id, owner_user_id=user.user_id
     )
-    reconcile_stale_ingest(practice_id=user.practice_id, owner_user_id=user.user_id)
     reconcile_supervision_drafts(
         practice_id=user.practice_id,
         owner_user_id=user.user_id,

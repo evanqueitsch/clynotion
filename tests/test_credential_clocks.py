@@ -70,14 +70,16 @@ def test_complete_credential_clock_pushes_due_forward(client: TestClient) -> Non
     )
 
 
-def test_unknown_baseline_appears_on_home_overdue(client: TestClient) -> None:
+def test_unknown_baseline_stays_off_the_home_clocks(client: TestClient) -> None:
+    matrix = client.get("/comply/credentials", headers=_auth("alice")).json()
+    assert matrix and all(clock["overdue"] for clock in matrix[0]["clocks"])
     home = client.get("/home", headers=_auth("alice")).json()
     cred = [
         o
-        for o in home["bands"]["overdue"]
+        for o in home["bands"]["overdue"] + home["bands"]["this_week"]
         if o["source"] == "credential_clocks"
     ]
-    assert len(cred) >= 6  # at least one clinician × six clocks
+    assert cred == []
 
 
 def test_crosswalk_includes_credential_clocks(client: TestClient) -> None:

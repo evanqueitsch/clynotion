@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
@@ -32,6 +33,14 @@ def client() -> TestClient:
 
 def _auth(user: User) -> dict[str, str]:
     return {"Authorization": f"Bearer {issue_token(user)}"}
+
+
+def test_roles_screen_is_linked_from_home_chrome() -> None:
+    text = Path("app/static/index.html").read_text(encoding="utf-8")
+    assert 'id="btn-top-roles"' in text
+    assert "Roles &amp; access" in text
+    assert 'id="home-roles-card"' in text
+    assert '"/#roles"' in text
 
 
 def test_seeded_roles_grant_only_time_entry_and_admin_is_separate(client: TestClient) -> None:

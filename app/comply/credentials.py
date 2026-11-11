@@ -236,8 +236,23 @@ class CredentialStore:
     ) -> dict[str, Any]:
         clock = next(c for c in clock_defs() if c.clock_id == clock_id)
         last = self.last_completed(practice_id, clinician_id, clock_id)
-        due = self._due_at(last, clock.cadence_days)
         ref = f"{clinician_id}:{clock_id}"
+        if not last:
+            # No recorded date. Do not invent an overdue home clock.
+            due_engine.complete(
+                practice_id=practice_id,
+                source=CREDENTIAL_SOURCE,
+                source_ref=ref,
+            )
+            return {
+                "obligation_id": "",
+                "clinician_id": clinician_id,
+                "clock_id": clock_id,
+                "title": f"{clock.name} — {display_name}",
+                "due_at": "",
+                "last_completed": "",
+            }
+        due = self._due_at(last, clock.cadence_days)
         title = f"{clock.name} — {display_name}"
         ob = due_engine.upsert(
             practice_id=practice_id,

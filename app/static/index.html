@@ -499,6 +499,7 @@
       </div>
       <div class="topbar-user hidden" id="topbar-user">
         <span class="who" id="signed-in-as"></span>
+        <button id="btn-top-roles" class="primary hidden" type="button">Roles &amp; access</button>
         <button id="btn-logout" type="button">Sign out</button>
       </div>
     </div>
@@ -546,7 +547,11 @@
     <section id="home-panel" class="panel hidden">
       <h2 id="home-practice-name">Your practice</h2>
       <p class="meta" id="home-blurb">Clynotion is the practice product. Open a tool to continue.</p>
-      <button type="button" class="ghost hidden" id="btn-home-roles">Roles</button>
+      <div id="home-roles-card" class="tool-card hidden">
+        <h3 style="font-family:Fraunces,Georgia,serif;font-weight:500;margin:0 0 0.35rem;">Roles &amp; access</h3>
+        <p class="meta" style="margin-bottom:0.85rem;">Choose what each person can see. Direct link: /#roles</p>
+        <button class="primary" id="btn-home-roles" type="button">Open roles</button>
+      </div>
 
       <div id="home-pulse" class="pulse-row hidden"></div>
 
@@ -1840,6 +1845,7 @@
         state.access = access;
         document.body.classList.toggle("staff-only", access.landing === "time");
         document.body.classList.toggle("no-access", access.landing === "none");
+        showRolesEntry(!!access.can_manage_roles);
         if (access.landing === "none") {
           show("no-access-panel");
           return;
@@ -1931,8 +1937,7 @@
         renderAttention(home.attention || []);
         renderHomeBands(home.bands || { overdue: [], this_week: [] });
         renderHomeUnits(home.units || []);
-        const rolesBtn = $("btn-home-roles");
-        if (rolesBtn) rolesBtn.classList.toggle("hidden", !(state.access && state.access.can_manage_roles));
+        showRolesEntry(!!(state.access && state.access.can_manage_roles));
         show("home-panel");
         window.history.replaceState({}, "", "/");
       } catch (e) {
@@ -3046,8 +3051,16 @@
     if (btnOnboardingHome) btnOnboardingHome.onclick = () => enterHome();
     const btnTimeHome = $("btn-time-home");
     if (btnTimeHome) btnTimeHome.onclick = () => enterHome();
+    function showRolesEntry(show) {
+      ["btn-top-roles", "home-roles-card"].forEach((id) => {
+        const el = $(id);
+        if (el) el.classList.toggle("hidden", !show);
+      });
+    }
     const btnHomeRoles = $("btn-home-roles");
     if (btnHomeRoles) btnHomeRoles.onclick = () => { openAccess(); };
+    const btnTopRoles = $("btn-top-roles");
+    if (btnTopRoles) btnTopRoles.onclick = () => { openAccess(); };
     const btnAccessHome = $("btn-access-home");
     if (btnAccessHome) btnAccessHome.onclick = () => enterHome();
     const btnTimeSave = $("btn-time-save");
