@@ -466,6 +466,23 @@
         }
       });
       form.appendChild(save);
+      if (subject.id && payload.can_manage) {
+        const archive = document.createElement("button");
+        archive.type = "button";
+        archive.className = "ghost";
+        archive.textContent = "Remove from grid";
+        archive.addEventListener("click", async () => {
+          if (!window.confirm("Remove " + subject.name + " from the grid? History stays in the encrypted file.")) return;
+          try {
+            await bridge().api("/credentialing/subjects/" + subject.id + "/archive", { method: "POST" });
+            setMessage("Saved", "ok");
+            await reload();
+          } catch (error) {
+            setMessage(errText(error), "error");
+          }
+        });
+        form.appendChild(archive);
+      }
       if (subject.id && payload.can_sensitive) {
         const log = document.createElement("div");
         log.className = "cg-history";

@@ -234,6 +234,10 @@ def test_writes_and_reveals_require_the_capability(client: TestClient) -> None:
             headers=_auth(viewer),
             json={"subject_id": subject["id"], "payer_id": payer["id"], "status": "in_network"},
         ),
+        client.post(
+            f"/credentialing/subjects/{subject['id']}/archive",
+            headers=_auth(viewer),
+        ),
         client.post("/credentialing/import/preview", headers=_auth(viewer)),
         client.post("/credentialing/import/commit", headers=_auth(viewer)),
         client.post(
@@ -248,6 +252,13 @@ def test_writes_and_reveals_require_the_capability(client: TestClient) -> None:
         ),
     ]
     assert [item.status_code for item in writes] == [403] * len(writes)
+    removed = client.post(
+        f"/credentialing/subjects/{subject['id']}/archive",
+        headers=_alice(),
+    )
+    assert removed.status_code == 200, removed.text
+    remaining = client.get("/credentialing/grid", headers=_alice()).json()
+    assert all(row["name"] != "QA Test Clinician" for row in remaining["subjects"])
     assert client.get("/credentialing/export/people", headers=_auth(viewer)).status_code == 403
 
     manager = _assign(

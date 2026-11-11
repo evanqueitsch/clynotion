@@ -126,6 +126,17 @@ def put_subject(body: SubjectBody, user: CurrentUser) -> dict[str, Any]:
     return saved
 
 
+@router.post("/subjects/{subject_id}/archive")
+def archive_subject(subject_id: str, user: CurrentUser) -> dict[str, Any]:
+    _need(user, CREDENTIALING_MANAGE)
+    try:
+        return credentialing_store.archive_subject(
+            user.practice_id, subject_id, actor=user.email or user.username
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Subject not found.") from exc
+
+
 @router.post("/payers")
 def post_payer(body: PayerBody, user: CurrentUser) -> dict[str, Any]:
     _need(user, CREDENTIALING_MANAGE)
