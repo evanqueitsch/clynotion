@@ -1445,7 +1445,7 @@
       $("time-enabled-summary").textContent = enabled.length
         ? `Enabled (${enabled.length}): ${enabled.join(", ")}. Not enabled: ${disabled.join(", ") || "none"}.`
         : `Nobody is enabled yet${disabled.length ? `. Not enabled: ${disabled.join(", ")}.` : "."}`;
-      $("time-settings-note").textContent = `${data.schedule_note || ""} ${data.hours_cap_note || ""}`.trim();
+      $("time-settings-note").textContent = "All times are Eastern.";
       $("time-settings-corrector").textContent = data.corrector_note || "";
       $("time-rem1-day").value = String(data.reminder_first_weekday);
       $("time-rem1-time").value = data.reminder_first_time;
