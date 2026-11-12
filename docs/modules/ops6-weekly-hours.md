@@ -195,7 +195,7 @@ npx wrangler deploy
 Without mail:
 
 1. `python3 run_smoke_test.py` and `python3 -m pytest -q`.
-2. Sign in, import a synthetic roster, open **Time entry**.
+2. Sign in, import a synthetic roster, open **Time Entry**.
 3. Settings: select staff, save, **Preview summary** and **Preview reminders**. The page must say they were not sent.
 4. As a selected user, save hours and minutes, including `0` / `0`. Confirm the admin week shows raw, payable, decimal, and a blank missing row for anyone who did not save.
 5. `curl -sS -X POST https://<host>/internal/time/tick` with no secret returns 503 and sends nothing.

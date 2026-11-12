@@ -40,6 +40,7 @@ from app.hr.time_mail import (
 )
 from app.hr.time_schedule import run_tick
 from app.main import app
+from app.platform.catalog import CATALOG_ITEMS
 
 WEEK = "2026-03-13"  # workweek Monday Mar 9 – Friday Mar 13; payroll Thursday Mar 19
 WED = datetime(2026, 3, 18, 14, 0, tzinfo=timezone.utc)  # Wed Mar 18 10:00 EDT, entry open
@@ -802,8 +803,14 @@ def test_catalog_tile_is_live(client: TestClient) -> None:
     hr = next(unit for unit in catalog if unit["id"] == "hr")
     tile = next(tool for tool in hr["tools"] if tool["id"] == "time_entry")
     assert tile["status"] == "live"
+    assert tile["name"] == "Time Entry"
+    assert tile["id"] == "time_entry"
     assert tile["href"] == "/#time-settings"
     assert tile["open_label"] == "Weekly hours settings"
+    source = next(row for row in CATALOG_ITEMS if row["id"] == "time_entry")
+    assert source["name"] == "Time Entry"
+    assert source["description"] == "Enter your weekly hours"
+    assert source["href"] == "/#time"
 
 
 def test_encrypted_file_is_atomic_and_isolated_across_stores(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -947,6 +954,8 @@ def test_nav_enables_only_selected_people(client: TestClient) -> None:
     jordan_tile = next(tool for unit in jordan if unit["id"] == "hr" for tool in unit["tools"] if tool["id"] == "time_entry")
     assert jordan_tile["href"] == "/#time"
     assert jordan_tile["status"] == "live"
+    assert jordan_tile["name"] == "Time Entry"
+    assert jordan_tile["description"] == "Enter your weekly hours"
     sam = client.get("/catalog", headers=_auth(_sam())).json()
     sam_tile = next(tool for unit in sam if unit["id"] == "hr" for tool in unit["tools"] if tool["id"] == "time_entry")
     assert sam_tile["status"] == "disabled"

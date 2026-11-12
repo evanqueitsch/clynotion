@@ -144,14 +144,12 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
     },
     {
         "id": "time_entry",
-        "name": "Time entry",
+        "name": "Time Entry",
         "unit": "hr",
         "kind": "tool",
         "status": "live",
         "href": "/#time",
-        "description": (
-            "Enter hours for last week. Weekend hours after Friday count in that week."
-        ),
+        "description": "Enter your weekly hours",
         "legacy_ids": ["OPS-6"],
         "authorities": _auth("FLSA — accurate hours worked for non-exempt employees"),
     },

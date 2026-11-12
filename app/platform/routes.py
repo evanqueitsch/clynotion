@@ -258,7 +258,7 @@ def _home_payload(user: CurrentUser) -> HomeOut:
             tools = [
                 {
                     "id": "time_entry",
-                    "name": str(entry.get("name") or "Time entry"),
+                    "name": str(entry.get("name") or "Time Entry"),
                     "href": str(entry.get("href") or ""),
                     "description": str(entry.get("description") or ""),
                 }
@@ -289,7 +289,7 @@ def _home_payload(user: CurrentUser) -> HomeOut:
             bands=bands,
             attention=[],
             pulse=PulseOut(),
-            note="Time entry" if only_time else _home_note(user, 0).split(". ")[0] + ".",
+            note="Time Entry" if only_time else _home_note(user, 0).split(". ")[0] + ".",
             full_catalog=False,
         )
     # Home reads the due register. Credentialing reminders are included for Admins.

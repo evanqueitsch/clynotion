@@ -13,6 +13,160 @@
     ["emergency_phone", "Emergency contact phone"],
   ];
 
+  const PHONE_FIELDS = new Set(["personal_phone", "work_phone", "emergency_phone"]);
+  const PHONE_HINT = "must be a 10-digit US number like (555)010-0100, or leave it blank.";
+
+  const US_STATES = [
+    ["AL", "Alabama"],
+    ["AK", "Alaska"],
+    ["AZ", "Arizona"],
+    ["AR", "Arkansas"],
+    ["CA", "California"],
+    ["CO", "Colorado"],
+    ["CT", "Connecticut"],
+    ["DE", "Delaware"],
+    ["DC", "District of Columbia"],
+    ["FL", "Florida"],
+    ["GA", "Georgia"],
+    ["HI", "Hawaii"],
+    ["ID", "Idaho"],
+    ["IL", "Illinois"],
+    ["IN", "Indiana"],
+    ["IA", "Iowa"],
+    ["KS", "Kansas"],
+    ["KY", "Kentucky"],
+    ["LA", "Louisiana"],
+    ["ME", "Maine"],
+    ["MD", "Maryland"],
+    ["MA", "Massachusetts"],
+    ["MI", "Michigan"],
+    ["MN", "Minnesota"],
+    ["MS", "Mississippi"],
+    ["MO", "Missouri"],
+    ["MT", "Montana"],
+    ["NE", "Nebraska"],
+    ["NV", "Nevada"],
+    ["NH", "New Hampshire"],
+    ["NJ", "New Jersey"],
+    ["NM", "New Mexico"],
+    ["NY", "New York"],
+    ["NC", "North Carolina"],
+    ["ND", "North Dakota"],
+    ["OH", "Ohio"],
+    ["OK", "Oklahoma"],
+    ["OR", "Oregon"],
+    ["PA", "Pennsylvania"],
+    ["RI", "Rhode Island"],
+    ["SC", "South Carolina"],
+    ["SD", "South Dakota"],
+    ["TN", "Tennessee"],
+    ["TX", "Texas"],
+    ["UT", "Utah"],
+    ["VT", "Vermont"],
+    ["VA", "Virginia"],
+    ["WA", "Washington"],
+    ["WV", "West Virginia"],
+    ["WI", "Wisconsin"],
+    ["WY", "Wyoming"],
+  ];
+
+  function canonicalState(value) {
+    const text = String(value || "").trim().replace(/\s+/g, " ");
+    if (!text) return "";
+    const folded = text.toLowerCase().replace(/\.+$/, "");
+    const byName = US_STATES.find((pair) => pair[1].toLowerCase() === folded);
+    if (byName) return byName[0];
+    const letters = folded.replace(/[^a-z]/g, "");
+    if (letters.length === 2) {
+      const byAbbr = US_STATES.find((pair) => pair[0].toLowerCase() === letters);
+      if (byAbbr) return byAbbr[0];
+    }
+    return null;
+  }
+
+  function formatUsPhone(value) {
+    const text = String(value || "").trim();
+    if (!text) return "";
+    let digits = text.replace(/\D/g, "");
+    if (digits.length === 11 && digits.charAt(0) === "1") digits = digits.slice(1);
+    if (digits.length !== 10) return null;
+    return "(" + digits.slice(0, 3) + ")" + digits.slice(3, 6) + "-" + digits.slice(6);
+  }
+
+  function displayPhone(stored) {
+    const formatted = formatUsPhone(stored);
+    if (formatted === null) return String(stored == null ? "" : stored);
+    return formatted;
+  }
+
+  function phoneError(label) {
+    return label + " " + PHONE_HINT;
+  }
+
+  function statePicker(stored) {
+    const select = document.createElement("select");
+    select.dataset.field = "state";
+    select.autocomplete = "address-level1";
+    const blank = document.createElement("option");
+    blank.value = "";
+    blank.textContent = "State";
+    select.appendChild(blank);
+    const canonical = canonicalState(stored);
+    const raw = String(stored || "");
+    if (raw && canonical === null) {
+      const odd = document.createElement("option");
+      odd.value = raw;
+      odd.textContent = raw;
+      select.appendChild(odd);
+    }
+    US_STATES.forEach((pair) => {
+      const option = document.createElement("option");
+      option.value = pair[0];
+      option.textContent = pair[1];
+      select.appendChild(option);
+    });
+    if (canonical) select.value = canonical;
+    else if (raw) select.value = raw;
+    else select.value = "";
+    return select;
+  }
+
+  function stateField(label, stored) {
+    const wrap = document.createElement("label");
+    wrap.textContent = label;
+    const select = statePicker(stored);
+    wrap.appendChild(select);
+    return { wrap, input: select };
+  }
+
+  function clearPhoneStatus(ctx) {
+    const status = $(ctx.statusId);
+    if (status && status.textContent.indexOf(PHONE_HINT) !== -1) ui().setStatus(status, "");
+  }
+
+  function onPhoneBlur(input, label, loaded, ctx) {
+    const formatted = formatUsPhone(input.value);
+    if (formatted !== null) {
+      input.value = formatted;
+      clearPhoneStatus(ctx);
+      return;
+    }
+    if (input.value.trim() === String(loaded || "").trim()) {
+      input.value = loaded;
+      return;
+    }
+    ui().setStatus($(ctx.statusId), phoneError(label), "error");
+  }
+
+  function bindPhone(input, field, label, ctx) {
+    const loaded = input.value;
+    input.dataset.field = field;
+    input.type = "tel";
+    input.inputMode = "tel";
+    input.autocomplete = "tel";
+    input.addEventListener("blur", () => onPhoneBlur(input, label, loaded, ctx));
+  }
+
   const FALLBACK_FIELDS = [
     ["license_type", "License type"],
     ["npi", "NPI"],
@@ -125,8 +279,12 @@
     if (ctx.editable && revealed && ctx.contactUrl) {
       const inputs = {};
       CONTACT.forEach((pair) => {
-        const row = inputField(pair[1], (data.contact && data.contact[pair[0]]) || "");
+        const stored = (data.contact && data.contact[pair[0]]) || "";
+        const row = pair[0] === "state"
+          ? stateField(pair[1], stored)
+          : inputField(pair[1], PHONE_FIELDS.has(pair[0]) ? displayPhone(stored) : stored);
         inputs[pair[0]] = row.input;
+        if (PHONE_FIELDS.has(pair[0])) bindPhone(row.input, pair[0], pair[1], ctx);
         root.appendChild(row.wrap);
       });
       const save = document.createElement("button");
@@ -136,7 +294,13 @@
       save.addEventListener("click", () => {
         const body = {};
         CONTACT.forEach((pair) => {
-          body[pair[0]] = inputs[pair[0]].value.trim();
+          const field = pair[0];
+          const el = inputs[field];
+          if (PHONE_FIELDS.has(field)) {
+            const formatted = formatUsPhone(el.value);
+            if (formatted !== null) el.value = formatted;
+          }
+          body[field] = el.value.trim();
         });
         saveSection(ctx, ctx.contactUrl, body);
       });
@@ -147,7 +311,9 @@
     CONTACT.forEach((pair) => {
       const row = document.createElement("p");
       row.className = "meta";
-      row.textContent = pair[1] + ": " + (contact[pair[0]] || "empty");
+      let value = contact[pair[0]] || "";
+      if (PHONE_FIELDS.has(pair[0])) value = displayPhone(value);
+      row.textContent = pair[1] + ": " + (value || "empty");
       root.appendChild(row);
     });
     if (!revealed && ctx.revealUrl) {

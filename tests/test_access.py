@@ -164,7 +164,8 @@ def test_time_entry_role_still_requires_the_hours_checklist(client: TestClient) 
     assert client.get("/clinicians", headers=_auth(_jordan())).status_code == 403
     assert client.get("/hr/time/week?week_ending=" + WEEK, headers=_auth(_jordan())).status_code == 403
     home = client.get("/home", headers=_auth(_jordan())).json()
-    assert home["note"] == "Time entry"
+    assert home["note"] == "Time Entry"
+    assert home["tools"][0]["name"] == "Time Entry"
     assert [tool["id"] for tool in home["tools"]] == ["time_entry"]
     assert home["bands"]["overdue"] == []
 
