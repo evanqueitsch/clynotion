@@ -292,17 +292,32 @@
   }
 
   function historyBlock(events) {
-    const pre = document.createElement("div");
-    pre.className = "cg-history";
-    if (!events || !events.length) {
-      pre.textContent = "No history yet.";
-      return pre;
+    const wrap = document.createElement("div");
+    wrap.className = "cg-history-block";
+    const count = events && events.length ? events.length : 0;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ghost history-toggle";
+    button.textContent = count ? "Change history (" + count + ")" : "Change history";
+    button.setAttribute("aria-expanded", "false");
+    const panel = document.createElement("div");
+    panel.className = "cg-history hidden";
+    if (!count) {
+      panel.textContent = "No changes yet.";
+    } else {
+      events.forEach((event) => {
+        const row = document.createElement("p");
+        row.textContent = event.line || "Change recorded.";
+        panel.appendChild(row);
+      });
     }
-    pre.textContent = events.map((event) => {
-      const bits = Object.keys(event.changes || {}).map((key) => key + " " + JSON.stringify(event.changes[key]));
-      return (event.at || "") + " " + (event.by || "") + " " + (event.source || "") + " " + bits.join("; ");
-    }).join("\n");
-    return pre;
+    button.addEventListener("click", () => {
+      const hidden = panel.classList.toggle("hidden");
+      button.setAttribute("aria-expanded", hidden ? "false" : "true");
+    });
+    wrap.appendChild(button);
+    wrap.appendChild(panel);
+    return wrap;
   }
 
   const DATE_HINT = "Use Nov 9, 2026 as 11/09/2026.";
@@ -487,7 +502,7 @@
         await bridge().api("/credentialing/enrollments", { method: "PUT", json: body });
         await reload();
         const updated = cellFor(payer.id, subject.id);
-        const history = drawer.querySelector(".cg-history");
+        const history = drawer.querySelector(".cg-history-block");
         if (history) history.replaceWith(historyBlock(updated && updated.history));
         refreshAudit(subject.id);
         result.className = "status ok";
@@ -502,9 +517,6 @@
     });
     drawer.appendChild(save);
     drawer.appendChild(result);
-    const historyTitle = document.createElement("h4");
-    historyTitle.textContent = "History";
-    drawer.appendChild(historyTitle);
     drawer.appendChild(historyBlock(cell && cell.history));
   }
 
@@ -857,10 +869,20 @@
         form.appendChild(archive);
       }
       if (subject.id && payload.can_sensitive) {
+        const toggle = document.createElement("button");
+        toggle.type = "button";
+        toggle.className = "ghost history-toggle";
+        toggle.textContent = "Reveal log";
+        toggle.setAttribute("aria-expanded", "false");
         const log = document.createElement("div");
-        log.className = "cg-history";
+        log.className = "cg-history hidden";
         log.setAttribute("data-audit-for", subject.id);
-        log.textContent = "Loading reveal log…";
+        log.textContent = "No reveals or copies yet.";
+        toggle.addEventListener("click", () => {
+          const hidden = log.classList.toggle("hidden");
+          toggle.setAttribute("aria-expanded", hidden ? "false" : "true");
+        });
+        form.appendChild(toggle);
         form.appendChild(log);
         refreshAudit(subject.id);
       }

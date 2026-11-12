@@ -1,4 +1,4 @@
-/* Employee View. Contact values stay in the form and are not written to the console. */
+/* Employee file. Contact values stay in the form and are not written to the console. */
 (function () {
   const CONTACT = [
     ["preferred_name", "Preferred name"],
@@ -13,6 +13,16 @@
     ["emergency_phone", "Emergency contact phone"],
   ];
 
+  const FALLBACK_FIELDS = [
+    ["license_type", "License type"],
+    ["npi", "NPI"],
+    ["license_number", "License number"],
+    ["caqh_id", "CAQH ID"],
+    ["license_expires_on", "License expiration"],
+    ["caqh_attested_on", "CAQH attestation"],
+    ["license_renewal", "License renewal"],
+  ];
+
   function $(id) {
     return document.getElementById(id);
   }
@@ -21,7 +31,59 @@
     return window.clynotion;
   }
 
-  function field(label, value) {
+  function formatUsDate(value) {
+    const raw = String(value || "").trim();
+    const match = raw.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (!match) return raw;
+    return String(Number(match[2])) + "/" + String(Number(match[3])) + "/" + match[1];
+  }
+
+  function showCredentialing(data) {
+    if (typeof data.show_credentialing === "boolean") return data.show_credentialing;
+    const suggested = data.suggested_subject || {};
+    return !!(data.is_clinician || data.subject_id || data.credentialing || suggested.id);
+  }
+
+  function fieldLabel(data, field) {
+    const match = (data.change_fields || []).find((item) => item.id === field);
+    if (match && match.label) return match.label;
+    const fallback = FALLBACK_FIELDS.find((item) => item[0] === field);
+    return fallback ? fallback[1] : field;
+  }
+
+  function historySection(events) {
+    const wrap = document.createElement("div");
+    const count = (events || []).length;
+    const button = document.createElement("button");
+    button.type = "button";
+    button.className = "ghost history-toggle";
+    button.textContent = count ? "Change history (" + count + ")" : "Change history";
+    button.setAttribute("aria-expanded", "false");
+    const panel = document.createElement("div");
+    panel.className = "history-log hidden";
+    if (!count) {
+      const empty = document.createElement("p");
+      empty.className = "meta";
+      empty.textContent = "No changes yet.";
+      panel.appendChild(empty);
+    } else {
+      events.forEach((item) => {
+        const row = document.createElement("p");
+        row.className = "meta";
+        row.textContent = item.line || "Change recorded.";
+        panel.appendChild(row);
+      });
+    }
+    button.addEventListener("click", () => {
+      const hidden = panel.classList.toggle("hidden");
+      button.setAttribute("aria-expanded", hidden ? "false" : "true");
+    });
+    wrap.appendChild(button);
+    wrap.appendChild(panel);
+    return wrap;
+  }
+
+  function inputField(label, value) {
     const wrap = document.createElement("label");
     wrap.textContent = label;
     const input = document.createElement("input");
@@ -31,211 +93,118 @@
     return { wrap, input };
   }
 
-  function renderContact(data) {
-    const root = $("employee-contact");
-    root.innerHTML = "";
-    const inputs = {};
-    CONTACT.forEach((pair) => {
-      const row = field(pair[1], (data.contact && data.contact[pair[0]]) || "");
-      inputs[pair[0]] = row.input;
-      root.appendChild(row.wrap);
-    });
-    const save = document.createElement("button");
-    save.type = "button";
-    save.className = "primary";
-    save.textContent = "Save contact";
-    save.addEventListener("click", async () => {
-      const body = {};
-      CONTACT.forEach((pair) => {
-        body[pair[0]] = inputs[pair[0]].value.trim();
-      });
-      try {
-        const saved = await ui().api("/employee/me/contact", { method: "PUT", json: body });
-        ui().setStatus($("employee-status"), "Saved", "ok");
-        renderSelf(saved);
-      } catch (error) {
-        ui().setStatus($("employee-status"), error.message || "Not saved", "error");
-      }
-    });
-    root.appendChild(save);
+  async function saveSection(ctx, url, body) {
+    try {
+      const saved = await ui().api(url, { method: "PUT", json: body });
+      ui().setStatus($(ctx.statusId), "Saved", "ok");
+      await ctx.reload(saved);
+    } catch (error) {
+      ui().setStatus($(ctx.statusId), error.message || "Not saved", "error");
+    }
   }
 
-  function renderLink(data) {
-    const root = $("employee-link");
+  function renderIdentity(root, data) {
     root.innerHTML = "";
-    if (data.subject_id) {
-      const note = document.createElement("p");
-      note.className = "meta";
-      note.textContent = "Credentialing profile linked.";
-      const clear = document.createElement("button");
-      clear.type = "button";
-      clear.className = "ghost";
-      clear.textContent = "Unlink";
-      clear.addEventListener("click", async () => {
-        try {
-          const saved = await ui().api("/employee/me/link", { method: "PUT", json: { subject_id: "" } });
-          renderSelf(saved);
-        } catch (error) {
-          ui().setStatus($("employee-status"), error.message || "Not saved", "error");
-        }
+    const preferred = data.contact && data.contact.preferred_name;
+    const usablePreferred = preferred && preferred !== "saved" && preferred !== "empty" ? preferred : "";
+    const name = document.createElement("h3");
+    name.textContent = data.name || usablePreferred || data.email || "Employee file";
+    root.appendChild(name);
+    const license = data.credentialing && data.credentialing.license_type;
+    if (license) {
+      const sub = document.createElement("p");
+      sub.className = "meta";
+      sub.textContent = license;
+      root.appendChild(sub);
+    }
+  }
+
+  function renderContact(root, data, ctx) {
+    root.innerHTML = "";
+    const revealed = data.contact_revealed !== false;
+    if (ctx.editable && revealed && ctx.contactUrl) {
+      const inputs = {};
+      CONTACT.forEach((pair) => {
+        const row = inputField(pair[1], (data.contact && data.contact[pair[0]]) || "");
+        inputs[pair[0]] = row.input;
+        root.appendChild(row.wrap);
       });
-      root.appendChild(note);
-      root.appendChild(clear);
+      const save = document.createElement("button");
+      save.type = "button";
+      save.className = "primary";
+      save.textContent = "Save contact";
+      save.addEventListener("click", () => {
+        const body = {};
+        CONTACT.forEach((pair) => {
+          body[pair[0]] = inputs[pair[0]].value.trim();
+        });
+        saveSection(ctx, ctx.contactUrl, body);
+      });
+      root.appendChild(save);
       return;
     }
-    const note = document.createElement("p");
-    note.className = "meta";
-    const suggested = data.suggested_subject || {};
-    note.textContent = suggested.id
-      ? "Suggested profile: " + suggested.name + ". Nothing is linked until you confirm."
-      : "Link your credentialing profile if you are a clinician. A suggestion is not saved until you confirm.";
-    root.appendChild(note);
-    const label = document.createElement("label");
-    label.textContent = "Credentialing profile";
-    const select = document.createElement("select");
-    const empty = document.createElement("option");
-    empty.value = "";
-    empty.textContent = "Choose a profile";
-    select.appendChild(empty);
-    (data.candidates || []).forEach((item) => {
-      const option = document.createElement("option");
-      option.value = item.id;
-      option.textContent = item.name;
-      select.appendChild(option);
+    const contact = data.contact || {};
+    CONTACT.forEach((pair) => {
+      const row = document.createElement("p");
+      row.className = "meta";
+      row.textContent = pair[1] + ": " + (contact[pair[0]] || "empty");
+      root.appendChild(row);
     });
-    if (suggested.id) select.value = suggested.id;
-    label.appendChild(select);
-    root.appendChild(label);
-    const save = document.createElement("button");
-    save.type = "button";
-    save.className = "primary";
-    save.textContent = "Link profile";
-    save.addEventListener("click", async () => {
-      if (!select.value) {
-        ui().setStatus($("employee-status"), "Choose a profile to link.", "error");
-        return;
-      }
-      try {
-        const saved = await ui().api("/employee/me/link", { method: "PUT", json: { subject_id: select.value } });
-        ui().setStatus($("employee-status"), "Saved", "ok");
-        renderSelf(saved);
-      } catch (error) {
-        ui().setStatus($("employee-status"), error.message || "Not saved", "error");
-      }
-    });
-    root.appendChild(save);
+    if (!revealed && ctx.revealUrl) {
+      const reveal = document.createElement("button");
+      reveal.type = "button";
+      reveal.className = "ghost";
+      reveal.textContent = "Reveal contact";
+      reveal.addEventListener("click", async () => {
+        try {
+          const opened = await ui().api(ctx.revealUrl, { method: "POST" });
+          data.contact = opened;
+          data.contact_revealed = true;
+          renderContact(root, data, ctx);
+        } catch (error) {
+          ui().setStatus($(ctx.statusId), error.message || "Could not reveal contact", "error");
+        }
+      });
+      root.appendChild(reveal);
+    }
   }
 
-  function renderCredentialing(data) {
-    const root = $("employee-credentialing");
+  function renderSpecialties(root, data, ctx) {
     root.innerHTML = "";
-    if (!data.is_clinician) return;
-    const snapshot = data.credentialing || {};
-    const block = document.createElement("div");
-    const title = document.createElement("h3");
-    title.textContent = "Credentialing";
-    block.appendChild(title);
-    const lines = [
-      ["License type", snapshot.license_type || ""],
-      ["License expires", snapshot.license_expires_on || ""],
-      ["NPI", snapshot.npi_masked || ""],
-      ["License number", snapshot.license_number_masked || ""],
-      ["CAQH ID", snapshot.caqh_id_masked || ""],
-      ["CAQH attested", snapshot.caqh_attested_on || ""],
-      ["Hire date", snapshot.hire_date || ""],
-      ["Device", snapshot.device || ""],
-    ];
-    lines.forEach((pair) => {
-      if (!pair[1]) return;
+    const names = data.specialties || [];
+    if (!ctx.editable || !ctx.specialtiesUrl) {
       const row = document.createElement("p");
       row.className = "meta";
-      row.textContent = pair[0] + ": " + pair[1];
-      block.appendChild(row);
-    });
-    const clocks = snapshot.clocks || {};
-    Object.keys(clocks).forEach((key) => {
-      if (!clocks[key]) return;
-      const row = document.createElement("p");
-      row.className = "meta";
-      row.textContent = key + ": " + clocks[key];
-      block.appendChild(row);
-    });
-    const request = document.createElement("div");
-    const field = document.createElement("select");
-    ["license_type", "npi", "license_number", "caqh_id", "license_expires_on", "caqh_attested_on", "license_renewal"].forEach((name) => {
-      const option = document.createElement("option");
-      option.value = name;
-      option.textContent = name;
-      field.appendChild(option);
-    });
-    const value = document.createElement("input");
-    value.type = "text";
-    value.placeholder = "Requested value";
-    const button = document.createElement("button");
-    button.type = "button";
-    button.className = "ghost";
-    button.textContent = "Request a change";
-    button.addEventListener("click", async () => {
-      try {
-        const saved = await ui().api("/employee/me/changes", {
-          method: "POST",
-          json: { field: field.value, value: value.value.trim() },
-        });
-        ui().setStatus($("employee-status"), "Submitted for approval", "ok");
-        renderSelf(saved);
-      } catch (error) {
-        ui().setStatus($("employee-status"), error.message || "Not saved", "error");
-      }
-    });
-    request.appendChild(field);
-    request.appendChild(value);
-    request.appendChild(button);
-    block.appendChild(request);
-    const waiting = document.createElement("div");
-    (data.pending || []).forEach((item) => {
-      const row = document.createElement("p");
-      row.className = "meta";
-      row.textContent = "Waiting: " + item.field + (item.overdue ? " (overdue)" : "");
-      waiting.appendChild(row);
-    });
-    block.appendChild(waiting);
-    root.appendChild(block);
-  }
-
-  function renderSpecialties(data) {
-    const root = $("employee-specialties");
-    root.innerHTML = "";
+      row.textContent = names.length ? names.join(", ") : "No specialties yet.";
+      root.appendChild(row);
+      return;
+    }
     const label = document.createElement("label");
     label.textContent = "Specialties";
     const input = document.createElement("input");
     input.type = "text";
-    input.value = (data.specialties || []).join(", ");
+    input.value = names.join(", ");
     label.appendChild(input);
     const hint = document.createElement("p");
     hint.className = "meta";
-    hint.textContent = "Separate specialties with commas.";
-    root.appendChild(label);
-    root.appendChild(hint);
+    hint.textContent = "Separate specialties with commas. These save immediately.";
     const save = document.createElement("button");
     save.type = "button";
     save.className = "primary";
     save.textContent = "Save specialties";
-    save.addEventListener("click", async () => {
-      const names = input.value.split(",").map((item) => item.trim()).filter(Boolean);
-      try {
-        const saved = await ui().api("/employee/me/specialties", { method: "PUT", json: { names } });
-        ui().setStatus($("employee-status"), "Saved", "ok");
-        renderSelf(saved);
-      } catch (error) {
-        ui().setStatus($("employee-status"), error.message || "Not saved", "error");
-      }
+    save.addEventListener("click", () => {
+      const next = input.value.split(",").map((item) => item.trim()).filter(Boolean);
+      saveSection(ctx, ctx.specialtiesUrl, { names: next });
     });
+    root.appendChild(label);
+    root.appendChild(hint);
     root.appendChild(save);
   }
 
   function renderEditableList(root, options) {
     root.innerHTML = "";
     const items = options.items.slice();
+    const canEdit = !!(options.ctx.editable && options.url);
     const list = document.createElement("div");
     function draw() {
       list.innerHTML = "";
@@ -244,16 +213,18 @@
         row.className = "due-row";
         const text = document.createElement("span");
         text.textContent = options.rowText(item);
-        const remove = document.createElement("button");
-        remove.type = "button";
-        remove.className = "ghost";
-        remove.textContent = "Remove";
-        remove.addEventListener("click", () => {
-          items.splice(index, 1);
-          draw();
-        });
         row.appendChild(text);
-        row.appendChild(remove);
+        if (canEdit) {
+          const remove = document.createElement("button");
+          remove.type = "button";
+          remove.className = "ghost";
+          remove.textContent = "Remove";
+          remove.addEventListener("click", () => {
+            items.splice(index, 1);
+            draw();
+          });
+          row.appendChild(remove);
+        }
         list.appendChild(row);
       });
       if (!items.length) {
@@ -265,6 +236,15 @@
     }
     draw();
     root.appendChild(list);
+    if (!canEdit) {
+      if (options.ctx.editable && !options.url) {
+        const note = document.createElement("p");
+        note.className = "meta";
+        note.textContent = "Link a Workspace account before saving this section.";
+        root.appendChild(note);
+      }
+      return;
+    }
     const draft = options.draft();
     root.appendChild(draft.node);
     const add = document.createElement("button");
@@ -274,7 +254,7 @@
     add.addEventListener("click", () => {
       const next = draft.read();
       if (!next) {
-        ui().setStatus($("employee-status"), options.missingMessage, "error");
+        ui().setStatus($(options.ctx.statusId), options.missingMessage, "error");
         return;
       }
       items.push(next);
@@ -285,30 +265,25 @@
     save.type = "button";
     save.className = "primary";
     save.textContent = options.saveLabel;
-    save.addEventListener("click", async () => {
+    save.addEventListener("click", () => {
       const pending = draft.read();
       const payload = pending ? items.concat([pending]) : items.slice();
-      try {
-        const saved = await ui().api(options.url, { method: "PUT", json: { items: payload } });
-        ui().setStatus($("employee-status"), "Saved", "ok");
-        renderSelf(saved);
-      } catch (error) {
-        ui().setStatus($("employee-status"), error.message || "Not saved", "error");
-      }
+      saveSection(options.ctx, options.url, { items: payload });
     });
     root.appendChild(add);
     root.appendChild(save);
   }
 
-  function renderTrainings(data) {
-    renderEditableList($("employee-trainings"), {
+  function trainingOptions(data, ctx) {
+    return {
+      ctx,
       items: (data.trainings || []).map((item) => ({ name: item.name, completed_on: item.completed_on || "" })),
       emptyText: "No trainings yet.",
       addLabel: "Add training",
       saveLabel: "Save trainings",
       missingMessage: "Enter a training name.",
-      url: "/employee/me/trainings",
-      rowText: (item) => item.name + (item.completed_on ? " — " + item.completed_on : ""),
+      url: ctx.trainingsUrl,
+      rowText: (item) => item.name + (item.completed_on ? " — " + formatUsDate(item.completed_on) : ""),
       draft: () => {
         const node = document.createElement("div");
         const nameLabel = document.createElement("label");
@@ -336,23 +311,12 @@
           },
         };
       },
-    });
+    };
   }
 
-  function renderCertifications(data) {
-    const root = $("employee-certifications");
-    root.innerHTML = "";
-    if (!data.is_clinician) return;
-    const title = document.createElement("h3");
-    title.textContent = "Certifications";
-    root.appendChild(title);
-    const hint = document.createElement("p");
-    hint.className = "meta";
-    hint.textContent = "Examples: NCC, CADC, CPR/First Aid, mandated reporter. These save on your record and do not change credentialing.";
-    root.appendChild(hint);
-    const holder = document.createElement("div");
-    root.appendChild(holder);
-    renderEditableList(holder, {
+  function certificationOptions(data, ctx) {
+    return {
+      ctx,
       items: (data.certifications || []).map((item) => ({
         name: item.name,
         issued_on: item.issued_on || "",
@@ -362,8 +326,12 @@
       addLabel: "Add certification",
       saveLabel: "Save certifications",
       missingMessage: "Enter a certification name.",
-      url: "/employee/me/certifications",
-      rowText: (item) => item.name,
+      url: ctx.certificationsUrl,
+      rowText: (item) => {
+        const issued = item.issued_on ? " issued " + formatUsDate(item.issued_on) : "";
+        const expires = item.expires_on ? " expires " + formatUsDate(item.expires_on) : "";
+        return item.name + issued + expires;
+      },
       draft: () => {
         const node = document.createElement("div");
         const nameLabel = document.createElement("label");
@@ -398,37 +366,179 @@
           },
         };
       },
-    });
+    };
   }
 
-  function renderHistory(data) {
-    const root = $("employee-history");
+  function renderProfileLink(root, data, ctx) {
+    if (data.workspace_link) return;
+    const suggested = data.suggested_subject || {};
+    if (!data.subject_id && !suggested.id && !ctx.linkUrl) return;
+    const note = document.createElement("p");
+    note.className = "meta";
+    if (data.subject_id) note.textContent = "Credentialing profile linked.";
+    else if (suggested.id) note.textContent = "Suggested profile: " + suggested.name + ". Nothing is linked until you confirm.";
+    else note.textContent = "Nothing is linked until you confirm.";
+    root.appendChild(note);
+    if (!ctx.linkUrl) return;
+    const label = document.createElement("label");
+    label.textContent = "Credentialing profile";
+    const select = document.createElement("select");
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = "Choose a profile";
+    select.appendChild(empty);
+    (data.candidates || []).forEach((item) => {
+      const option = document.createElement("option");
+      option.value = item.id;
+      option.textContent = item.name;
+      select.appendChild(option);
+    });
+    if (data.subject_id) select.value = data.subject_id;
+    else if (suggested.id) select.value = suggested.id;
+    label.appendChild(select);
+    root.appendChild(label);
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "primary";
+    save.textContent = data.subject_id ? "Update link" : "Link profile";
+    save.addEventListener("click", () => {
+      if (!select.value) {
+        ui().setStatus($(ctx.statusId), "Choose a profile to link.", "error");
+        return;
+      }
+      saveSection(ctx, ctx.linkUrl, { subject_id: select.value });
+    });
+    root.appendChild(save);
+    if (data.subject_id) {
+      const clear = document.createElement("button");
+      clear.type = "button";
+      clear.className = "ghost";
+      clear.textContent = "Unlink";
+      clear.addEventListener("click", () => saveSection(ctx, ctx.linkUrl, { subject_id: "" }));
+      root.appendChild(clear);
+    }
+  }
+
+  function renderCredentialing(root, data, ctx) {
     root.innerHTML = "";
-    (data.history || []).forEach((item) => {
+    if (!showCredentialing(data)) return;
+    const block = document.createElement("div");
+    const title = document.createElement("h3");
+    title.textContent = "Credentialing";
+    block.appendChild(title);
+    const snapshot = data.credentialing || null;
+    if (snapshot) {
+      const lines = [
+        ["License type", snapshot.license_type || ""],
+        ["License expires", snapshot.license_expires_on ? formatUsDate(snapshot.license_expires_on) : ""],
+        ["NPI", snapshot.npi_masked || ""],
+        ["License number", snapshot.license_number_masked || ""],
+        ["CAQH ID", snapshot.caqh_id_masked || ""],
+        ["CAQH attested", snapshot.caqh_attested_on ? formatUsDate(snapshot.caqh_attested_on) : ""],
+        ["Hire date", snapshot.hire_date ? formatUsDate(snapshot.hire_date) : ""],
+        ["Device", snapshot.device || ""],
+      ];
+      lines.forEach((pair) => {
+        if (!pair[1]) return;
+        const row = document.createElement("p");
+        row.className = "meta";
+        row.textContent = pair[0] + ": " + pair[1];
+        block.appendChild(row);
+      });
+      const clocks = snapshot.clocks || {};
+      const labels = snapshot.clock_labels || {};
+      Object.keys(clocks).forEach((key) => {
+        if (!clocks[key]) return;
+        const row = document.createElement("p");
+        row.className = "meta";
+        const label = labels[key] || fieldLabel(data, key);
+        row.textContent = label + ": " + formatUsDate(clocks[key]);
+        block.appendChild(row);
+      });
+    }
+    renderProfileLink(block, data, ctx);
+    if (ctx.changesUrl && data.is_clinician) {
+      const request = document.createElement("div");
+      const field = document.createElement("select");
+      const choices = (data.change_fields && data.change_fields.length) ? data.change_fields : FALLBACK_FIELDS.map((item) => ({ id: item[0], label: item[1] }));
+      choices.forEach((item) => {
+        const option = document.createElement("option");
+        option.value = item.id;
+        option.textContent = item.label;
+        field.appendChild(option);
+      });
+      const value = document.createElement("input");
+      value.type = "text";
+      value.placeholder = "Requested value";
+      const button = document.createElement("button");
+      button.type = "button";
+      button.className = "ghost";
+      button.textContent = "Request a change";
+      button.addEventListener("click", async () => {
+        try {
+          const saved = await ui().api(ctx.changesUrl, {
+            method: "POST",
+            json: { field: field.value, value: value.value.trim() },
+          });
+          ui().setStatus($(ctx.statusId), "Submitted for approval", "ok");
+          await ctx.reload(saved);
+        } catch (error) {
+          ui().setStatus($(ctx.statusId), error.message || "Not saved", "error");
+        }
+      });
+      request.appendChild(field);
+      request.appendChild(value);
+      request.appendChild(button);
+      block.appendChild(request);
+    }
+    (data.pending || []).forEach((item) => {
       const row = document.createElement("p");
       row.className = "meta";
-      row.textContent = item.line || "";
-      root.appendChild(row);
+      const label = item.field_label || fieldLabel(data, item.field);
+      row.textContent = "Waiting: " + label + (item.overdue ? " (overdue)" : "");
+      block.appendChild(row);
     });
-    if (!(data.history || []).length) root.textContent = "No changes yet.";
+    root.appendChild(block);
+  }
+
+  function renderFileSections(data, ctx, targets) {
+    renderIdentity(targets.identity, data);
+    renderContact(targets.contact, data, ctx);
+    renderSpecialties(targets.specialties, data, ctx);
+    renderEditableList(targets.trainings, trainingOptions(data, ctx));
+    renderEditableList(targets.certifications, certificationOptions(data, ctx));
+    renderCredentialing(targets.credentialing, data, ctx);
+    targets.history.innerHTML = "";
+    targets.history.appendChild(historySection(data.history || []));
+  }
+
+  function selfContext() {
+    return {
+      statusId: "employee-status",
+      editable: true,
+      contactUrl: "/employee/me/contact",
+      specialtiesUrl: "/employee/me/specialties",
+      trainingsUrl: "/employee/me/trainings",
+      certificationsUrl: "/employee/me/certifications",
+      linkUrl: "/employee/me/link",
+      changesUrl: "/employee/me/changes",
+      revealUrl: "",
+      reload: async (saved) => {
+        if (saved && saved.contact) renderSelf(saved);
+      },
+    };
   }
 
   function renderSelf(data) {
-    renderLink(data);
-    renderContact(data);
-    renderCredentialing(data);
-    renderSpecialties(data);
-    renderTrainings(data);
-    renderCertifications(data);
-    renderHistory(data);
-    const directory = document.createElement("button");
-    directory.type = "button";
-    directory.className = "ghost";
-    directory.textContent = "Staff directory";
-    directory.addEventListener("click", () => {
-      window.location.hash = "#employees";
+    renderFileSections(data, selfContext(), {
+      identity: $("employee-identity"),
+      contact: $("employee-contact"),
+      specialties: $("employee-specialties"),
+      trainings: $("employee-trainings"),
+      certifications: $("employee-certifications"),
+      credentialing: $("employee-credentialing"),
+      history: $("employee-history"),
     });
-    $("employee-history").appendChild(directory);
   }
 
   async function openSelf() {
@@ -480,39 +590,45 @@
     }
   }
 
-  function renderDirectoryLink(root, key, data) {
+  function renderWorkspaceLink(root, key, data) {
     const block = document.createElement("div");
-    if (data.workspace_account && !data.workspace_link) {
-      const account = document.createElement("p");
-      account.className = "meta";
-      account.textContent = "Workspace account: " + data.workspace_account;
-      block.appendChild(account);
+    const link = data.workspace_link;
+    if (!link) {
+      if (data.workspace_account) {
+        const account = document.createElement("p");
+        account.className = "meta";
+        account.textContent = "Workspace account: " + data.workspace_account;
+        block.appendChild(account);
+        root.appendChild(block);
+      }
+      return;
     }
-    if (data.workspace_link) {
-      const link = data.workspace_link;
-      const label = document.createElement("label");
-      label.textContent = "Workspace account";
-      const select = document.createElement("select");
-      const empty = document.createElement("option");
-      empty.value = "";
-      empty.textContent = "Choose a Workspace account";
-      select.appendChild(empty);
-      (link.accounts || []).forEach((account) => {
-        const option = document.createElement("option");
-        option.value = account.email;
-        option.textContent = account.name + " (" + account.email + ")";
-        select.appendChild(option);
-      });
-      if (link.linked_email) select.value = link.linked_email;
-      else if (link.suggested_email) select.value = link.suggested_email;
-      label.appendChild(select);
-      const note = document.createElement("p");
-      note.className = "meta";
-      note.textContent = link.linked_email
-        ? "Linked to " + link.linked_email + "."
-        : (link.suggested_email
-          ? "Suggested: " + link.suggested_name + ". Nothing is linked until you confirm."
-          : "Nothing is linked until you confirm.");
+    const label = document.createElement("label");
+    label.textContent = "Workspace account";
+    const select = document.createElement("select");
+    const empty = document.createElement("option");
+    empty.value = "";
+    empty.textContent = "Choose a Workspace account";
+    select.appendChild(empty);
+    (link.accounts || []).forEach((account) => {
+      const option = document.createElement("option");
+      option.value = account.email;
+      option.textContent = account.name + " (" + account.email + ")";
+      select.appendChild(option);
+    });
+    if (link.linked_email) select.value = link.linked_email;
+    else if (link.suggested_email) select.value = link.suggested_email;
+    label.appendChild(select);
+    const note = document.createElement("p");
+    note.className = "meta";
+    note.textContent = link.linked_email
+      ? "Linked to " + link.linked_email + "."
+      : (link.suggested_email
+        ? "Suggested: " + link.suggested_name + ". Nothing is linked until you confirm."
+        : "Nothing is linked until you confirm.");
+    block.appendChild(label);
+    block.appendChild(note);
+    if (data.can_edit) {
       const confirm = document.createElement("button");
       confirm.type = "button";
       confirm.className = "primary";
@@ -528,99 +644,68 @@
             json: { email: select.value },
           });
           ui().setStatus($("employees-status"), "Saved", "ok");
-          await openDirectory();
-        } catch (error) {
-          ui().setStatus($("employees-status"), error.message || "Not saved", "error");
-        }
-      });
-      const unlink = document.createElement("button");
-      unlink.type = "button";
-      unlink.className = "ghost";
-      unlink.textContent = "Unlink";
-      unlink.addEventListener("click", async () => {
-        try {
-          await ui().api("/employee/people/" + encodeURIComponent(key) + "/workspace", {
-            method: "PUT",
-            json: { email: "" },
-          });
-          ui().setStatus($("employees-status"), "Saved", "ok");
           await openPerson(key);
         } catch (error) {
           ui().setStatus($("employees-status"), error.message || "Not saved", "error");
         }
       });
-      block.appendChild(label);
-      block.appendChild(note);
       block.appendChild(confirm);
-      if (link.linked_email) block.appendChild(unlink);
-      root.appendChild(block);
-      return;
+      if (link.linked_email) {
+        const unlink = document.createElement("button");
+        unlink.type = "button";
+        unlink.className = "ghost";
+        unlink.textContent = "Unlink";
+        unlink.addEventListener("click", async () => {
+          try {
+            await ui().api("/employee/people/" + encodeURIComponent(key) + "/workspace", {
+              method: "PUT",
+              json: { email: "" },
+            });
+            ui().setStatus($("employees-status"), "Saved", "ok");
+            await openPerson(key);
+          } catch (error) {
+            ui().setStatus($("employees-status"), error.message || "Not saved", "error");
+          }
+        });
+        block.appendChild(unlink);
+      }
     }
-    const label = document.createElement("label");
-    label.textContent = "Credentialing profile";
-    const select = document.createElement("select");
-    const empty = document.createElement("option");
-    empty.value = "";
-    empty.textContent = "Choose a profile";
-    select.appendChild(empty);
-    (data.candidates || []).forEach((item) => {
-      const option = document.createElement("option");
-      option.value = item.id;
-      option.textContent = item.name;
-      select.appendChild(option);
-    });
-    const suggested = data.suggested_subject || {};
-    if (data.subject_id) select.value = data.subject_id;
-    else if (suggested.id) select.value = suggested.id;
-    label.appendChild(select);
-    const note = document.createElement("p");
-    note.className = "meta";
-    note.textContent = data.subject_id
-      ? "Credentialing profile linked."
-      : (suggested.id
-        ? "Suggested profile: " + suggested.name + ". Nothing is linked until you confirm."
-        : "Nothing is linked until you confirm.");
-    const confirm = document.createElement("button");
-    confirm.type = "button";
-    confirm.className = "primary";
-    confirm.textContent = "Confirm link";
-    confirm.addEventListener("click", async () => {
-      if (!select.value) {
-        ui().setStatus($("employees-status"), "Choose a profile to link.", "error");
-        return;
-      }
-      try {
-        await ui().api("/employee/people/" + encodeURIComponent(key) + "/profile", {
-          method: "PUT",
-          json: { subject_id: select.value },
-        });
-        ui().setStatus($("employees-status"), "Saved", "ok");
-        await openPerson(key);
-      } catch (error) {
-        ui().setStatus($("employees-status"), error.message || "Not saved", "error");
-      }
-    });
-    const unlink = document.createElement("button");
-    unlink.type = "button";
-    unlink.className = "ghost";
-    unlink.textContent = "Unlink";
-    unlink.addEventListener("click", async () => {
-      try {
-        await ui().api("/employee/people/" + encodeURIComponent(key) + "/profile", {
-          method: "PUT",
-          json: { subject_id: "" },
-        });
-        ui().setStatus($("employees-status"), "Saved", "ok");
-        await openPerson(key);
-      } catch (error) {
-        ui().setStatus($("employees-status"), error.message || "Not saved", "error");
-      }
-    });
-    block.appendChild(label);
-    block.appendChild(note);
-    block.appendChild(confirm);
-    if (data.subject_id) block.appendChild(unlink);
     root.appendChild(block);
+  }
+
+  function hrContext(key, data) {
+    const email = data.email || "";
+    const editable = data.can_edit === true;
+    const encoded = encodeURIComponent(key);
+    return {
+      statusId: "employees-status",
+      editable,
+      contactUrl: email && editable ? "/employee/people/" + encodeURIComponent(email) + "/contact" : "",
+      specialtiesUrl: editable ? "/employee/people/" + encoded + "/specialties" : "",
+      trainingsUrl: email && editable ? "/employee/people/" + encoded + "/trainings" : "",
+      certificationsUrl: email && editable ? "/employee/people/" + encoded + "/certifications" : "",
+      linkUrl: email && editable ? "/employee/people/" + encodeURIComponent(email) + "/profile" : "",
+      changesUrl: "",
+      revealUrl: email && data.can_reveal ? "/employee/people/" + encodeURIComponent(email) + "/reveal" : "",
+      reload: async () => {
+        await openPerson(key);
+      },
+    };
+  }
+
+  function section(root, title, hint) {
+    const heading = document.createElement("h3");
+    heading.textContent = title;
+    root.appendChild(heading);
+    if (hint) {
+      const note = document.createElement("p");
+      note.className = "meta";
+      note.textContent = hint;
+      root.appendChild(note);
+    }
+    const body = document.createElement("div");
+    root.appendChild(body);
+    return body;
   }
 
   async function openPerson(key) {
@@ -628,25 +713,31 @@
     root.innerHTML = "";
     try {
       const data = await ui().api("/employee/people/" + encodeURIComponent(key));
-      const title = document.createElement("h3");
-      title.textContent = data.name || data.email || "Record";
-      root.appendChild(title);
-      const contact = data.contact || {};
-      CONTACT.forEach((pair) => {
-        const row = document.createElement("p");
-        row.className = "meta";
-        const value = contact[pair[0]];
-        row.textContent = pair[1] + ": " + (value || "empty");
-        root.appendChild(row);
+      const identity = document.createElement("div");
+      identity.className = "file-identity";
+      root.appendChild(identity);
+      renderWorkspaceLink(root, key, data);
+      const contact = section(root, "Contact and emergency contacts");
+      const specialties = section(root, "Specialties");
+      const trainings = section(root, "Trainings");
+      const certifications = section(
+        root,
+        "Certifications",
+        "Examples: CPR/First Aid and mandated reporter. These save on the employee file and do not change credentialing."
+      );
+      const credentialing = document.createElement("div");
+      root.appendChild(credentialing);
+      const history = document.createElement("div");
+      root.appendChild(history);
+      renderFileSections(data, hrContext(key, data), {
+        identity,
+        contact,
+        specialties,
+        trainings,
+        certifications,
+        credentialing,
+        history,
       });
-      if (data.credentialing) {
-        const snap = document.createElement("p");
-        snap.className = "meta";
-        const license = data.credentialing.license_type || "not set";
-        snap.textContent = "Credentialing profile: " + (data.credentialing.name || data.name || "Linked") + ". License type: " + license;
-        root.appendChild(snap);
-      }
-      renderDirectoryLink(root, key, data);
       root.scrollIntoView({ block: "nearest" });
     } catch (error) {
       const message = document.createElement("p");
@@ -662,4 +753,10 @@
   if (home) home.addEventListener("click", () => { window.location.href = "/"; });
   const directoryHome = $("btn-employees-home");
   if (directoryHome) directoryHome.addEventListener("click", () => { window.location.href = "/"; });
+  const directory = $("btn-employee-directory");
+  if (directory) {
+    directory.addEventListener("click", () => {
+      window.location.hash = "#employees";
+    });
+  }
 })();
