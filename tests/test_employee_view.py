@@ -185,7 +185,7 @@ def test_specialties_and_trainings_save_immediately_and_show_on_billing(client: 
     billing = client.get("/billing", headers=_alice()).json()
     summaries = [item["summary"] for item in billing["employee_changes"]]
     assert any("Trauma" in item for item in summaries)
-    assert any(item == "Updated trainings" for item in summaries)
+    assert any(item == "Updated trainings: Boundaries" for item in summaries)
     cleared = client.put("/employee/me/specialties", headers=_alice(), json={"names": []})
     assert cleared.status_code == 200
     assert credentialing_store.public_subject("practice-a", subject_id)["specialties"] == []
@@ -333,7 +333,7 @@ def test_idle_logoff_and_small_health_are_in_the_ui(client: TestClient) -> None:
     assert "IDLE_LIMIT_MS = 20 * 60 * 1000" in page.text
     assert "20 minutes of inactivity" in page.text
     health = client.get("/health")
-    assert health.json()["version"] == "0.19.0"
+    assert health.json()["version"] == "0.19.1"
     assert "deepgram" not in health.text.casefold()
     assert "phi_path" not in health.json()
     script = client.get("/static/employee.js")
@@ -401,3 +401,144 @@ def test_grants_version_2_does_not_edit_role_lists(tmp_path, monkeypatch: pytest
         "tool:intake_log",
         "tool:billing",
     ]
+
+
+def test_home_tile_is_live_for_admin_and_hidden_while_rollout_is_off(client: TestClient) -> None:
+    home = client.get("/home", headers=_alice()).json()
+    tool = next(
+        item
+        for unit in home["units"]
+        if unit["id"] == "hr"
+        for item in unit["tools"]
+        if item["id"] == "employee_view"
+    )
+    assert tool["status"] == "live"
+    assert tool["href"] == "/#employee"
+    assert tool["coming_soon"] is False
+    assert tool["open_label"] == "Open Employee View"
+    access_store.update_role_permissions("practice-a", "clinician", ["tool:time_entry"])
+    access_store.set_assignment("practice-a", "viewer@example.com", "clinician")
+    staff = client.get("/home", headers=_user("viewer@example.com", "viewer")).json()
+    ids = [item["id"] for unit in staff["units"] for item in unit["tools"]]
+    assert "employee_view" not in ids
+    page = client.get("/").text
+    assert 'tool.id === "employee_view" && tool.status === "live"' in page
+
+
+def test_multiple_trainings_save_remove_and_clear(client: TestClient) -> None:
+    first = client.put(
+        "/employee/me/trainings",
+        headers=_alice(),
+        json={"items": [
+            {"name": "Boundaries", "completed_on": "2026-01-15"},
+            {"name": "Ethics", "completed_on": "2026-02-01"},
+        ]},
+    )
+    assert first.status_code == 200, first.text
+    assert [item["name"] for item in first.json()["trainings"]] == ["Boundaries", "Ethics"]
+    again = client.get("/employee/me", headers=_alice()).json()
+    assert [item["name"] for item in again["trainings"]] == ["Boundaries", "Ethics"]
+    removed = client.put(
+        "/employee/me/trainings",
+        headers=_alice(),
+        json={"items": [{"name": "Boundaries", "completed_on": "2026-01-15"}]},
+    )
+    assert [item["name"] for item in removed.json()["trainings"]] == ["Boundaries"]
+    cleared = client.put("/employee/me/trainings", headers=_alice(), json={"items": []})
+    assert cleared.json()["trainings"] == []
+    reloaded = client.get("/employee/me", headers=_alice()).json()
+    assert reloaded["trainings"] == []
+    summaries = [item["summary"] for item in client.get("/billing", headers=_alice()).json()["employee_changes"]]
+    assert "Updated trainings: Boundaries, Ethics" in summaries
+    assert "Cleared trainings" in summaries
+    blob = "\n".join(summaries)
+    assert PHONE not in blob
+    assert STREET not in blob
+    assert PERSONAL not in blob
+    script = client.get("/static/employee.js?v=0.19.1").text
+    assert "Add training" in script
+    assert "Remove" in script
+    assert "draft.clear" in script
+
+
+def test_history_lines_are_readable_and_omit_contact_values(client: TestClient) -> None:
+    saved = client.put(
+        "/employee/me/contact",
+        headers=_alice(),
+        json=_contact(street=STREET, personal_phone=PHONE, personal_email=PERSONAL, emergency_name="QA Contact"),
+    )
+    assert saved.status_code == 200, saved.text
+    lines = [item["line"] for item in saved.json()["history"]]
+    phone = next(line for line in lines if "Personal phone" in line)
+    assert "alice@example.com" in phone
+    assert "ET" in phone
+    assert "updated Personal phone" in phone
+    assert PHONE not in phone
+    assert STREET not in "\n".join(lines)
+    assert PERSONAL not in "\n".join(lines)
+    assert "personal_phone" not in phone
+    assert "emergency_name" not in "\n".join(lines)
+    assert any("Emergency contact name" in line for line in lines)
+
+
+def test_certifications_show_after_a_confirmed_link_and_save_like_trainings(client: TestClient) -> None:
+    blocked = client.put(
+        "/employee/me/certifications",
+        headers=_alice(),
+        json={"items": [{"name": "NCC", "issued_on": "2026-01-01", "expires_on": ""}]},
+    )
+    assert blocked.status_code == 422
+    assert client.get("/employee/me", headers=_alice()).json()["certifications"] == []
+    subject_id = _clinician(client)
+    client.put("/employee/me/link", headers=_alice(), json={"subject_id": subject_id})
+    saved = client.put(
+        "/employee/me/certifications",
+        headers=_alice(),
+        json={"items": [{"name": "NCC", "issued_on": "2026-01-01", "expires_on": "2028-01-01"}]},
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["is_clinician"] is True
+    assert saved.json()["credentialing"]["name"] == "QA Test Clinician"
+    assert saved.json()["certifications"][0]["name"] == "NCC"
+    summaries = [item["summary"] for item in client.get("/billing", headers=_alice()).json()["employee_changes"]]
+    assert "Updated certifications: NCC" in summaries
+    assert PHONE not in "\n".join(summaries)
+    cleared = client.put("/employee/me/certifications", headers=_alice(), json={"items": []})
+    assert cleared.json()["certifications"] == []
+    assert client.get("/employee/me", headers=_alice()).json()["certifications"] == []
+
+
+def test_directory_lists_workspace_roster_and_suggestion_waits_for_confirm(client: TestClient) -> None:
+    subject_id = _clinician(client, "Jamie Clinician")
+    directory = client.get("/employee/directory", headers=_alice()).json()["people"]
+    emails = [person["email"] for person in directory]
+    assert "jamie.clinician@example.com" in emails
+    assert "alex.supervisor@example.com" in emails
+    detail = client.get(f"/employee/people/{subject_id}", headers=_alice())
+    assert detail.status_code == 200, detail.text
+    link = detail.json()["workspace_link"]
+    assert link["suggested_email"] == "jamie.clinician@example.com"
+    assert link["linked_email"] == ""
+    assert "Workspace account" in client.get("/static/employee.js?v=0.19.1").text
+    records = employees_store._memory["practices"]["practice-a"].get("records") or {}
+    assert not (records.get("jamie.clinician@example.com") or {}).get("subject_id")
+    confirmed = client.put(
+        f"/employee/people/{subject_id}/workspace",
+        headers=_alice(),
+        json={"email": "jamie.clinician@example.com"},
+    )
+    assert confirmed.status_code == 200, confirmed.text
+    linked = employees_store._memory["practices"]["practice-a"]["records"]["jamie.clinician@example.com"]
+    assert linked["subject_id"] == subject_id
+    viewed = client.get("/employee/people/jamie.clinician@example.com", headers=_alice())
+    assert viewed.status_code == 200, viewed.text
+    history = "\n".join(item["line"] for item in viewed.json()["history"])
+    assert "Workspace account" in history
+    assert STREET not in history
+    cleared = client.put(
+        f"/employee/people/{subject_id}/workspace",
+        headers=_alice(),
+        json={"email": ""},
+    )
+    assert cleared.status_code == 200, cleared.text
+    assert employees_store._memory["practices"]["practice-a"]["records"]["jamie.clinician@example.com"]["subject_id"] == ""

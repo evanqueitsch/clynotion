@@ -727,6 +727,7 @@
       <div id="employee-specialties"></div>
       <h3>Trainings</h3>
       <div id="employee-trainings"></div>
+      <div id="employee-certifications"></div>
       <h3>History</h3>
       <div id="employee-history" class="due-list"></div>
     </section>
@@ -1051,9 +1052,9 @@
 
     <footer>Clynotion</footer>
   </main>
-  <script src="/static/credentialing.js?v=0.19.0"></script>
-  <script src="/static/billing.js?v=0.19.0"></script>
-  <script src="/static/employee.js?v=0.19.0"></script>
+  <script src="/static/credentialing.js?v=0.19.1"></script>
+  <script src="/static/billing.js?v=0.19.1"></script>
+  <script src="/static/employee.js?v=0.19.1"></script>
   <script>
     const state = {
       token: null,
@@ -2318,7 +2319,8 @@
         block.appendChild(h);
         block.appendChild(desc);
         (unit.tools || []).forEach((tool) => {
-          const comingSoon = tool.coming_soon === true || tool.status === "planned";
+          let comingSoon = tool.coming_soon === true || tool.status === "planned";
+          if (tool.id === "employee_view" && tool.status === "live" && tool.href) comingSoon = false;
           const card = document.createElement("div");
           card.className = "tool-card" + (comingSoon || tool.status === "disabled" ? " planned" : "");
           const title = document.createElement("h3");

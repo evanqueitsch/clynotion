@@ -57,6 +57,30 @@ SENSITIVE_CONTACT = frozenset(
         "emergency_phone",
     }
 )
+FIELD_LABELS = {
+    "preferred_name": "Preferred name",
+    "street": "Street",
+    "city": "City",
+    "state": "State",
+    "zip": "ZIP",
+    "personal_phone": "Personal phone",
+    "personal_email": "Personal email",
+    "work_phone": "Work phone",
+    "emergency_name": "Emergency contact name",
+    "emergency_phone": "Emergency contact phone",
+    "specialties": "Specialties",
+    "trainings": "Trainings",
+    "certifications": "Certifications",
+    "credentialing_link": "Credentialing profile",
+    "workspace_link": "Workspace account",
+    "license_type": "License type",
+    "npi": "NPI",
+    "license_number": "License number",
+    "caqh_id": "CAQH ID",
+    "license_expires_on": "License expiration",
+    "caqh_attested_on": "CAQH attestation",
+    "license_renewal": "License renewal",
+}
 SECRET_APPROVAL = frozenset({"npi", "license_number", "caqh_id", "tin"})
 PLAIN_APPROVAL = frozenset(
     {"license_type", "license_expires_on", "caqh_attested_on"}
@@ -157,6 +181,56 @@ def _business_days_since(start_iso: str, today: date) -> int:
 
 def _clock_ids() -> set[str]:
     return {str(item["id"]) for item in CREDENTIAL_CLOCKS}
+
+
+def _format_when(iso: str) -> str:
+    text = str(iso or "").strip()
+    if not text:
+        return ""
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return ""
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=_EASTERN)
+    else:
+        parsed = parsed.astimezone(_EASTERN)
+    hour = parsed.strftime("%I").lstrip("0") or "12"
+    return f"{parsed.strftime('%b')} {parsed.day}, {parsed.year}, {hour}:{parsed.strftime('%M %p')} ET"
+
+
+def _history_line(item: dict[str, Any]) -> str:
+    """Readable history. Field labels only — never a street, phone, email, or ID value."""
+    field = str(item.get("field") or "")
+    label = FIELD_LABELS.get(field) or field.replace("_", " ").strip().capitalize() or "Record"
+    action = str(item.get("action") or "updated")
+    if action == "cleared":
+        verb = f"cleared {label}"
+    elif action == "requested":
+        verb = f"requested a change to {label}"
+    else:
+        verb = f"updated {label}"
+    actor = str(item.get("actor") or "").strip().lower()
+    when = _format_when(str(item.get("at") or ""))
+    parts = [part for part in (when, actor, verb) if part]
+    return " — ".join(parts)
+
+
+def _public_history(items: Any) -> list[dict[str, str]]:
+    out: list[dict[str, str]] = []
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        out.append(
+            {
+                "at": str(item.get("at") or ""),
+                "actor": str(item.get("actor") or ""),
+                "action": str(item.get("action") or ""),
+                "field": str(item.get("field") or ""),
+                "line": _history_line(item),
+            }
+        )
+    return out
 
 
 class EmployeesStore:
@@ -319,6 +393,7 @@ class EmployeesStore:
         current.setdefault("subject_id", "")
         current.setdefault("specialties", [])
         current.setdefault("trainings", [])
+        current.setdefault("certifications", [])
         current.setdefault("history", [])
         current["email"] = key
         return current
@@ -413,11 +488,46 @@ class EmployeesStore:
         record["trainings"] = cleaned
         if old != cleaned:
             self._history(record, actor, "cleared" if not cleaned else "updated", "trainings")
+            names = ", ".join(item["name"] for item in cleaned)
             self._change(
                 row,
                 actor=actor,
                 record_email=email,
-                summary="Cleared trainings" if not cleaned else "Updated trainings",
+                summary="Cleared trainings" if not cleaned else "Updated trainings: " + names,
+            )
+        self._save(payload)
+        return self._own_record(practice_id, email, actor)
+
+    def save_certifications(
+        self, practice_id: str, email: str, items: list[dict[str, str]], actor: str
+    ) -> dict[str, Any]:
+        """Employee-side certifications. They do not change the credentialing record."""
+        payload, row = self._load(practice_id)
+        record = self._record(row, email)
+        if not self._is_clinician(practice_id, str(record.get("subject_id") or "")):
+            raise ValueError("Link a clinician credentialing profile first.")
+        cleaned = []
+        for item in items:
+            name = _clip(str(item.get("name") or ""))
+            if not name:
+                continue
+            cleaned.append(
+                {
+                    "name": name,
+                    "issued_on": _date_or_blank(str(item.get("issued_on") or "")),
+                    "expires_on": _date_or_blank(str(item.get("expires_on") or "")),
+                }
+            )
+        old = record.get("certifications") or []
+        record["certifications"] = cleaned
+        if old != cleaned:
+            self._history(record, actor, "cleared" if not cleaned else "updated", "certifications")
+            names = ", ".join(item["name"] for item in cleaned)
+            self._change(
+                row,
+                actor=actor,
+                record_email=email,
+                summary="Cleared certifications" if not cleaned else "Updated certifications: " + names,
             )
         self._save(payload)
         return self._own_record(practice_id, email, actor)
@@ -518,6 +628,7 @@ class EmployeesStore:
             "subject_id": "",
             "specialties": [],
             "trainings": [],
+            "certifications": [],
             "history": [],
         }
         for field in CONTACT_FIELDS:
@@ -543,6 +654,7 @@ class EmployeesStore:
             "contact": self._contact_public(record, reveal=True),
             "specialties": list(record.get("specialties") or []),
             "trainings": list(record.get("trainings") or []),
+            "certifications": list(record.get("certifications") or []) if clinician else [],
             "subject_id": subject_id,
             "is_clinician": clinician,
             "suggested_subject": self._suggest(practice_id, email, username or email.split("@")[0]),
@@ -551,16 +663,7 @@ class EmployeesStore:
                 for item in credentialing_store.list_subject_names(practice_id)
                 if item["kind"] == "clinician"
             ],
-            "history": [
-                {
-                    "at": str(item.get("at") or ""),
-                    "actor": str(item.get("actor") or ""),
-                    "action": str(item.get("action") or ""),
-                    "field": str(item.get("field") or ""),
-                }
-                for item in (record.get("history") or [])
-                if isinstance(item, dict)
-            ],
+            "history": _public_history(record.get("history") or []),
             "pending": self._pending_for(row, record["email"], reveal=False),
             "qualification_types": self.qualification_types(practice_id) if clinician else [],
         }
@@ -618,6 +721,53 @@ class EmployeesStore:
             "status": str(item.get("status") or ""),
         }
 
+    def _workspace_people(self, practice_id: str) -> list[dict[str, str]]:
+        """Workspace roster for the directory. Falls back to the local roster. No logging."""
+        found: list[dict[str, str]] = []
+        seen: set[str] = set()
+        try:
+            from app.workspace_directory import list_directory_users
+
+            for person in list_directory_users(practice_id):
+                if getattr(person, "suspended", False):
+                    continue
+                email = str(getattr(person, "email", "") or "").strip().lower()
+                if not email or email in seen:
+                    continue
+                seen.add(email)
+                name = str(getattr(person, "display_name", "") or email).strip() or email
+                found.append({"email": email, "name": name})
+        except Exception:
+            found = []
+            seen = set()
+        if found:
+            return found
+        from app.clinicians import clinician_store
+
+        for clin in clinician_store.list_for_practice(practice_id):
+            email = str(getattr(clin, "email", "") or "").strip().lower()
+            if not email or email in seen:
+                continue
+            seen.add(email)
+            name = str(getattr(clin, "display_name", "") or email).strip() or email
+            found.append({"email": email, "name": name})
+        return found
+
+    def _suggest_workspace(self, practice_id: str, subject_name: str) -> dict[str, str]:
+        target = str(subject_name or "").strip().casefold()
+        if not target:
+            return {"email": "", "name": ""}
+        hits = [
+            person
+            for person in self._workspace_people(practice_id)
+            if person["name"].strip().casefold() == target
+        ]
+        unique = {person["email"]: person for person in hits}
+        if len(unique) != 1:
+            return {"email": "", "name": ""}
+        found = next(iter(unique.values()))
+        return {"email": found["email"], "name": found["name"]}
+
     def directory(self, practice_id: str, actor: str) -> list[dict[str, Any]]:
         from app.credentialing.store import credentialing_store
 
@@ -625,7 +775,15 @@ class EmployeesStore:
         self._audit(row, actor, "view_directory", "directory", "")
         self._save(payload)
         _, row = self._load(practice_id)
-        rows = []
+        rows: dict[str, dict[str, Any]] = {}
+        for person in self._workspace_people(practice_id):
+            rows[person["email"]] = {
+                "key": person["email"],
+                "name": person["name"],
+                "email": person["email"],
+                "specialties": [],
+                "clinician": False,
+            }
         linked: set[str] = set()
         records = row.get("records") or {}
         for email, record in records.items():
@@ -634,29 +792,32 @@ class EmployeesStore:
             subject_id = str(record.get("subject_id") or "")
             if subject_id:
                 linked.add(subject_id)
-            rows.append(
-                {
-                    "key": email,
-                    "name": str(record.get("preferred_name") or email),
-                    "email": email,
-                    "specialties": list(record.get("specialties") or []),
-                    "clinician": self._is_clinician(practice_id, subject_id) if subject_id else False,
-                }
-            )
+            current = rows.get(email) or {
+                "key": email,
+                "name": email,
+                "email": email,
+                "specialties": [],
+                "clinician": False,
+            }
+            preferred = str(record.get("preferred_name") or "").strip()
+            if preferred:
+                current["name"] = preferred
+            current["specialties"] = list(record.get("specialties") or [])
+            current["clinician"] = self._is_clinician(practice_id, subject_id) if subject_id else False
+            rows[email] = current
         for item in credentialing_store.list_subject_names(practice_id):
             if item["kind"] != "clinician" or item["id"] in linked:
                 continue
-            rows.append(
-                {
-                    "key": item["id"],
-                    "name": item["name"],
-                    "email": "",
-                    "specialties": [],
-                    "clinician": True,
-                }
-            )
-        rows.sort(key=lambda item: item["name"].casefold())
-        return rows
+            rows[item["id"]] = {
+                "key": item["id"],
+                "name": item["name"],
+                "email": "",
+                "specialties": [],
+                "clinician": True,
+            }
+        found = list(rows.values())
+        found.sort(key=lambda item: item["name"].casefold())
+        return found
 
     def view_record(self, practice_id: str, key: str, actor: str, *, reveal: bool) -> dict[str, Any]:
         from app.credentialing.store import credentialing_store
@@ -669,7 +830,8 @@ class EmployeesStore:
                 if isinstance(record, dict) and str(record.get("subject_id") or "") == key:
                     email = str(record.get("email") or "")
                     break
-        if email and email not in (row.get("records") or {}):
+        known_accounts = {person["email"] for person in self._workspace_people(practice_id)}
+        if email and email not in (row.get("records") or {}) and email not in known_accounts:
             raise KeyError(email)
         if email and email != (actor or "").strip().lower():
             self._audit(row, actor, "view_contact", email, "contact")
@@ -681,6 +843,11 @@ class EmployeesStore:
             snapshot = credentialing_store.public_subject(practice_id, key)
             if snapshot is None or snapshot.get("kind") != "clinician":
                 raise KeyError(key)
+            suggestion = self._suggest_workspace(practice_id, str(snapshot.get("name") or ""))
+            linked_email = ""
+            for record in (row.get("records") or {}).values():
+                if isinstance(record, dict) and str(record.get("subject_id") or "") == key:
+                    linked_email = str(record.get("email") or "")
             return {
                 "email": "",
                 "key": key,
@@ -690,10 +857,17 @@ class EmployeesStore:
                 "specialties": list(snapshot.get("specialties") or []),
                 "trainings": [],
                 "credentialing": {
+                    "name": snapshot.get("name") or "",
                     "license_type": snapshot.get("license_type") or "",
                     "npi_masked": snapshot.get("npi_masked") or "",
                     "license_number_masked": snapshot.get("license_number_masked") or "",
                     "caqh_id_masked": snapshot.get("caqh_id_masked") or "",
+                },
+                "workspace_link": {
+                    "linked_email": linked_email,
+                    "suggested_email": "" if linked_email else suggestion["email"],
+                    "suggested_name": "" if linked_email else suggestion["name"],
+                    "accounts": self._workspace_people(practice_id),
                 },
             }
         body = self._own_record(practice_id, email)
@@ -702,6 +876,45 @@ class EmployeesStore:
             record = self._existing(row, email)
             body["contact"] = self._contact_public(record, reveal=False)
         return body
+
+    def link_workspace_account(
+        self, practice_id: str, subject_id: str, email: str, actor: str
+    ) -> dict[str, str]:
+        """Confirm or clear the Workspace account on a credentialing profile.
+
+        Passing an email saves that link. An empty email unlinks. A suggested
+        name is never written unless the caller sends it as the confirmed email.
+        """
+        from app.credentialing.store import credentialing_store
+
+        known = {
+            item["id"]: item
+            for item in credentialing_store.list_subject_names(practice_id)
+            if item["kind"] == "clinician"
+        }
+        if subject_id not in known:
+            raise KeyError(subject_id)
+        payload, row = self._load(practice_id)
+        email = (email or "").strip().lower()
+        accounts = {person["email"] for person in self._workspace_people(practice_id)}
+        if email and email not in accounts and email not in (row.get("records") or {}):
+            raise ValueError("That Workspace account is not on the roster.")
+        for record in (row.get("records") or {}).values():
+            if not isinstance(record, dict):
+                continue
+            if str(record.get("subject_id") or "") != subject_id:
+                continue
+            if email and str(record.get("email") or "") == email:
+                continue
+            record["subject_id"] = ""
+            self._history(record, actor, "cleared", "workspace_link")
+        if email:
+            record = self._record(row, email)
+            record["subject_id"] = subject_id
+            self._history(record, actor, "updated", "workspace_link")
+            self._change(row, actor=actor, record_email=email, summary="Linked Workspace account")
+        self._save(payload)
+        return {"subject_id": subject_id, "email": email}
 
     def reveal_contact(self, practice_id: str, email: str, actor: str) -> dict[str, str]:
         payload, row = self._load(practice_id)
