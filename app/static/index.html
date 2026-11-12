@@ -742,8 +742,8 @@
         <input id="employees-rollout" type="checkbox" />
       </label>
       <p class="meta">Off until an Admin turns it on. Staff do not see Employee View while this is off.</p>
-      <div id="employees-directory" class="due-list"></div>
       <div id="employees-record"></div>
+      <div id="employees-directory" class="due-list"></div>
     </section>
 
     <section id="credentialing-panel" class="panel hidden">
@@ -1052,9 +1052,9 @@
 
     <footer>Clynotion</footer>
   </main>
-  <script src="/static/credentialing.js?v=0.19.1"></script>
-  <script src="/static/billing.js?v=0.19.1"></script>
-  <script src="/static/employee.js?v=0.19.1"></script>
+  <script src="/static/credentialing.js?v=0.19.2"></script>
+  <script src="/static/billing.js?v=0.19.2"></script>
+  <script src="/static/employee.js?v=0.19.2"></script>
   <script>
     const state = {
       token: null,
@@ -3868,11 +3868,19 @@
     };
 
     async function openEmployee() {
+      if ((window.location.hash || "") !== "#employee") {
+        window.location.hash = "#employee";
+        return;
+      }
       show("employee-panel");
       if (window.clyEmployee) await window.clyEmployee.openSelf();
     }
 
     async function openEmployees() {
+      if ((window.location.hash || "") !== "#employees") {
+        window.location.hash = "#employees";
+        return;
+      }
       show("employees-panel");
       if (window.clyEmployee) await window.clyEmployee.openDirectory();
     }

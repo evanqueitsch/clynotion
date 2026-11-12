@@ -482,6 +482,12 @@
 
   function renderDirectoryLink(root, key, data) {
     const block = document.createElement("div");
+    if (data.workspace_account && !data.workspace_link) {
+      const account = document.createElement("p");
+      account.className = "meta";
+      account.textContent = "Workspace account: " + data.workspace_account;
+      block.appendChild(account);
+    }
     if (data.workspace_link) {
       const link = data.workspace_link;
       const label = document.createElement("label");
@@ -641,7 +647,12 @@
         root.appendChild(snap);
       }
       renderDirectoryLink(root, key, data);
+      root.scrollIntoView({ block: "nearest" });
     } catch (error) {
+      const message = document.createElement("p");
+      message.className = "status error";
+      message.textContent = error.message || "Could not open that record";
+      root.appendChild(message);
       ui().setStatus($("employees-status"), error.message || "Could not open that record", "error");
     }
   }

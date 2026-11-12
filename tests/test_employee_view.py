@@ -333,7 +333,7 @@ def test_idle_logoff_and_small_health_are_in_the_ui(client: TestClient) -> None:
     assert "IDLE_LIMIT_MS = 20 * 60 * 1000" in page.text
     assert "20 minutes of inactivity" in page.text
     health = client.get("/health")
-    assert health.json()["version"] == "0.19.1"
+    assert health.json()["version"] == "0.19.2"
     assert "deepgram" not in health.text.casefold()
     assert "phi_path" not in health.json()
     script = client.get("/static/employee.js")
@@ -455,7 +455,7 @@ def test_multiple_trainings_save_remove_and_clear(client: TestClient) -> None:
     assert PHONE not in blob
     assert STREET not in blob
     assert PERSONAL not in blob
-    script = client.get("/static/employee.js?v=0.19.1").text
+    script = client.get("/static/employee.js?v=0.19.2").text
     assert "Add training" in script
     assert "Remove" in script
     assert "draft.clear" in script
@@ -511,15 +511,20 @@ def test_certifications_show_after_a_confirmed_link_and_save_like_trainings(clie
 def test_directory_lists_workspace_roster_and_suggestion_waits_for_confirm(client: TestClient) -> None:
     subject_id = _clinician(client, "Jamie Clinician")
     directory = client.get("/employee/directory", headers=_alice()).json()["people"]
-    emails = [person["email"] for person in directory]
-    assert "jamie.clinician@example.com" in emails
-    assert "alex.supervisor@example.com" in emails
+    names = [person["name"] for person in directory]
+    assert names.count("Jamie Clinician") == 1
+    jamie = next(person for person in directory if person["name"] == "Jamie Clinician")
+    assert jamie["key"] == subject_id
+    assert jamie["email"] == ""
+    assert "alex.supervisor@example.com" in [person["email"] for person in directory]
+    assert not any(person["email"] == "jamie.clinician@example.com" for person in directory)
     detail = client.get(f"/employee/people/{subject_id}", headers=_alice())
     assert detail.status_code == 200, detail.text
+    assert detail.json()["name"] == "Jamie Clinician"
     link = detail.json()["workspace_link"]
     assert link["suggested_email"] == "jamie.clinician@example.com"
     assert link["linked_email"] == ""
-    assert "Workspace account" in client.get("/static/employee.js?v=0.19.1").text
+    assert "Workspace account" in client.get("/static/employee.js?v=0.19.2").text
     records = employees_store._memory["practices"]["practice-a"].get("records") or {}
     assert not (records.get("jamie.clinician@example.com") or {}).get("subject_id")
     confirmed = client.put(
@@ -542,3 +547,37 @@ def test_directory_lists_workspace_roster_and_suggestion_waits_for_confirm(clien
     )
     assert cleared.status_code == 200, cleared.text
     assert employees_store._memory["practices"]["practice-a"]["records"]["jamie.clinician@example.com"]["subject_id"] == ""
+    again = client.get("/employee/directory", headers=_alice()).json()["people"]
+    assert [person["name"] for person in again].count("Jamie Clinician") == 1
+
+
+def test_directory_merges_email_match_and_leaves_workspace_only_rows(client: TestClient, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        employees_store,
+        "_workspace_people",
+        lambda practice_id: [
+            {"email": "alex.example@example.com", "name": "A Different Label"},
+            {"email": "evan.viewer@example.com", "name": "Evan Viewer"},
+        ],
+    )
+    subject_id = _clinician(client, "Alex Example")
+    directory = client.get("/employee/directory", headers=_alice()).json()["people"]
+    assert [person["name"] for person in directory].count("Alex Example") == 1
+    assert not any(person["name"] == "A Different Label" for person in directory)
+    clinician = client.get(f"/employee/people/{subject_id}", headers=_alice())
+    assert clinician.status_code == 200, clinician.text
+    link = clinician.json()["workspace_link"]
+    assert link["suggested_email"] == "alex.example@example.com"
+    assert link["linked_email"] == ""
+    records = (employees_store._memory or {}).get("practices", {}).get("practice-a", {}).get("records") or {}
+    assert not (records.get("alex.example@example.com") or {}).get("subject_id")
+    workspace = client.get("/employee/people/evan.viewer@example.com", headers=_alice())
+    assert workspace.status_code == 200, workspace.text
+    body = workspace.json()
+    assert body["workspace_account"] == "evan.viewer@example.com"
+    assert body["name"] == "Evan Viewer"
+    assert "workspace_link" not in body
+    assert "candidates" in body
+    page = client.get("/").text
+    assert 'window.location.hash = "#employee"' in page
+    assert 'window.location.hash = "#employees"' in page
