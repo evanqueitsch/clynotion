@@ -483,6 +483,34 @@ def test_short_roster_name_migrates_one_clock_date() -> None:
     assert clocks_migrated_total() == added_before + 1
 
 
+def test_compliance_home_due_is_the_eastern_date_without_a_time() -> None:
+    import subprocess
+    from pathlib import Path
+
+    html = Path("app/static/index.html").read_text(encoding="utf-8")
+    start = html.index("function dateOnlyDue")
+    end = html.index("function renderDueRow")
+    script = html[start:end] + """
+const cases = [
+  ["2026-11-13T22:57:00Z", "comply", "compliance_registry", "Nov 13, 2026"],
+  ["2026-11-16T22:57:00Z", "comply", "compliance_registry", "Nov 16, 2026"],
+  ["2026-11-13T22:57:00Z", "comply", "credential_clocks", "Nov 13, 2026"],
+];
+for (const [iso, domain, source, expected] of cases) {
+  const text = formatDue(iso, domain, source);
+  if (text !== expected) {
+    console.error("expected", expected, "got", text);
+    process.exit(2);
+  }
+  if (/\\d:\\d\\d|AM|PM|5:57|7:00|8:00/.test(text)) process.exit(3);
+}
+const timed = formatDue("2026-11-13T22:57:00Z", "people", "supervision");
+if (!/PM|AM|\\d:\\d\\d/.test(timed)) process.exit(4);
+"""
+    completed = subprocess.run(["node", "-e", script], capture_output=True, text=True)
+    assert completed.returncode == 0, completed.stderr or completed.stdout
+
+
 def test_workflow_rules_are_local_and_jev_is_off() -> None:
     assert isinstance(workflow_engine(), RulesEngine)
     assert workflow_engine().suggest("which stalled file is next")["source"] == "rules"

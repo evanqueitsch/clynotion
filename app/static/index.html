@@ -2346,12 +2346,19 @@
       wrap.classList.toggle("hidden", !(items && items.length));
     }
 
-    function formatDue(iso, domain) {
+    function dateOnlyDue(domain, source) {
+      return domain === "credentialing"
+        || domain === "comply"
+        || source === "compliance_registry"
+        || source === "credential_clocks";
+    }
+
+    function formatDue(iso, domain, source) {
       if (!iso) return "";
       try {
         const d = new Date(iso);
         if (Number.isNaN(d.getTime())) return "";
-        if (domain === "credentialing") {
+        if (dateOnlyDue(domain, source)) {
           return d.toLocaleDateString("en-US", {
             timeZone: "America/New_York",
             month: "short",
@@ -2379,7 +2386,7 @@
       title.textContent = ob.title || "Open item";
       const meta = document.createElement("span");
       meta.className = "due-meta";
-      const dueLabel = formatDue(ob.due_at, ob.domain);
+      const dueLabel = formatDue(ob.due_at, ob.domain, ob.source);
       meta.textContent = dueLabel
         ? `${ob.domain || "people"} · due ${dueLabel}`
         : (ob.domain || "people");
