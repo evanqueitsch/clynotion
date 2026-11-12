@@ -118,7 +118,10 @@ def credentialing_grid(user: CurrentUser) -> dict[str, Any]:
 
 @router.get("/audit")
 def credentialing_audit(user: CurrentUser, subject_id: str = "") -> dict[str, Any]:
-    return {"events": credentialing_store.audit_for(user.practice_id, subject_id)}
+    return {
+        "events": credentialing_store.audit_for(user.practice_id, subject_id),
+        "links": credentialing_store.link_events(user.practice_id),
+    }
 
 
 @router.put("/subjects")
@@ -209,6 +212,57 @@ def restore_payer(payer_id: str, user: CurrentUser) -> dict[str, Any]:
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Payer not found.") from exc
+    except ValueError as exc:
+        raise _value_error(exc) from exc
+
+
+class LinkChoice(BaseModel):
+    source_id: str = ""
+    combine: bool = False
+    blank: bool = False
+
+
+class LinkBody(BaseModel):
+    payer_ids: list[str] = Field(default_factory=list)
+    keep_id: str = ""
+    choices: dict[str, LinkChoice] = Field(default_factory=dict)
+    enrollment_choices: dict[str, dict[str, LinkChoice]] = Field(default_factory=dict)
+
+
+def _link_body(body: LinkBody) -> dict[str, Any]:
+    payload = body.model_dump()
+    payload["choices"] = {
+        key: value for key, value in (payload.get("choices") or {}).items() if isinstance(value, dict)
+    }
+    nested: dict[str, Any] = {}
+    for subject_id, fields in (payload.get("enrollment_choices") or {}).items():
+        if isinstance(fields, dict):
+            nested[subject_id] = {
+                key: value for key, value in fields.items() if isinstance(value, dict)
+            }
+    payload["enrollment_choices"] = nested
+    return payload
+
+
+@router.post("/payers/link/preview")
+def preview_payer_link(body: LinkBody, user: CurrentUser) -> dict[str, Any]:
+    _need(user, CREDENTIALING_MANAGE)
+    _need(user, CREDENTIALING_PAYERS)
+    return credentialing_store.preview_payer_link(user.practice_id, _link_body(body))
+
+
+@router.post("/payers/link")
+def commit_payer_link(body: LinkBody, user: CurrentUser) -> dict[str, Any]:
+    _need(user, CREDENTIALING_MANAGE)
+    _need(user, CREDENTIALING_PAYERS)
+    try:
+        return credentialing_store.commit_payer_link(
+            user.practice_id,
+            _link_body(body),
+            actor=user.email or user.username,
+        )
+    except ValueError as exc:
+        raise _value_error(exc) from exc
 
 
 @router.put("/enrollments")
@@ -321,13 +375,25 @@ async def _parsed(
 ) -> tuple[Any, dict[str, Any]]:
     current = credentialing_store.public_grid(user.practice_id)
     active_payers = [row for row in current["payers"] if not row.get("archived")]
+    aliases: set[str] = set()
+    payer_types: dict[str, str] = {}
+    for payer in active_payers:
+        kind = str(payer.get("type") or "")
+        payer_types[str(payer.get("name") or "")] = kind
+        for alias in payer.get("aliases") or []:
+            text = str(alias or "").strip()
+            if not text:
+                continue
+            aliases.add(text)
+            payer_types[text] = kind
     plan = build_plan(
         payers_csv=await _upload_text(payers),
         people_csv=await _upload_text(people),
         grid_csv=await _upload_text(grid),
         existing_payers={row["name"] for row in active_payers},
         existing_subjects={row["name"] for row in current["subjects"]},
-        existing_payer_types={row["name"]: row.get("type") or "" for row in active_payers},
+        existing_payer_types=payer_types,
+        existing_payer_aliases=aliases,
     )
     return plan, {
         "errors": plan.errors,

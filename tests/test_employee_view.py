@@ -708,7 +708,7 @@ def test_employee_file_ui_hides_history_and_keeps_sections(client: TestClient) -
     assert "btn-employee-directory" in panel
     assert "Staff directory" in panel
     assert "employee.js?v=0.19.7" in page
-    assert "credentialing.js?v=0.19.5" in page
+    assert "credentialing.js?v=0.19.8" in page
     script = client.get("/static/employee.js").text
     assert "Change history" in script
     assert "JSON.stringify" not in script

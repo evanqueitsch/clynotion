@@ -401,7 +401,7 @@ def test_export_round_trip_keeps_playbook_and_does_not_duplicate_notes(client: T
 def test_drawer_script_reads_playbook_fields() -> None:
     script = Path("app/static/credentialing.js").read_text(encoding="utf-8")
     page = Path("app/static/index.html").read_text(encoding="utf-8")
-    assert 'src="/static/credentialing.js?v=0.19.5"' in page
+    assert 'src="/static/credentialing.js?v=0.19.8"' in page
     assert 'panel.id = "cg-playbook"' in script
     assert "Electronic payer ID" in script
     assert "Practice network" in script

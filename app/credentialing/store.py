@@ -19,6 +19,7 @@ from app.credentialing.csvio import (
     normalize_payer_name,
     union_labels,
 )
+from app.credentialing.link import apply_payer_link, build_link_plan
 from app.crypto import decrypt_utf8, encrypt_utf8
 from app.dates import DATE_HINT, calendar_date, parse_calendar_date, shift_calendar_date
 from app.history_text import format_history_line
@@ -228,21 +229,39 @@ class CredentialingStore:
         return None
 
     def _by_payer_name(self, bucket: dict[str, Any], name: str) -> Optional[dict[str, Any]]:
-        """Payer match: trimmed, collapsed whitespace, case-insensitive. Active rows win."""
+        """Payer match: trimmed, collapsed whitespace, case-insensitive.
+
+        The stored name and any link aliases count. An active payer wins over
+        an archived one, and an exact name wins over an alias, so a linked
+        alias updates the kept payer instead of reviving the archived source.
+        """
         key = normalize_payer_name(name)
         if not key:
             return None
-        archived: Optional[dict[str, Any]] = None
+        name_active: Optional[dict[str, Any]] = None
+        alias_active: Optional[dict[str, Any]] = None
+        name_archived: Optional[dict[str, Any]] = None
+        alias_archived: Optional[dict[str, Any]] = None
         for row in bucket.values():
             if not isinstance(row, dict):
                 continue
-            if normalize_payer_name(str(row.get("name") or "")) != key:
+            name_match = normalize_payer_name(str(row.get("name") or "")) == key
+            alias_match = any(
+                normalize_payer_name(str(alias or "")) == key for alias in (row.get("aliases") or [])
+            )
+            if not name_match and not alias_match:
                 continue
             if not row.get("archived"):
-                return row
-            if archived is None:
-                archived = row
-        return archived
+                if name_match and name_active is None:
+                    name_active = row
+                elif alias_match and not name_match and alias_active is None:
+                    alias_active = row
+                continue
+            if name_match and name_archived is None:
+                name_archived = row
+            elif alias_match and alias_archived is None:
+                alias_archived = row
+        return name_active or alias_active or name_archived or alias_archived
 
     def reminder_view(self, practice_id: str) -> dict[str, Any]:
         """Non-secret fields the reminder pass needs."""
@@ -726,11 +745,43 @@ class CredentialingStore:
         current = row["payers"].get(payer_id)
         if not isinstance(current, dict):
             raise KeyError(payer_id)
+        if current.get("merged_into"):
+            raise ValueError("This payer was linked into another payer. It stays archived.")
         current["archived"] = False
         current["updated_by"] = actor
         current["updated_at"] = _now()
         self._save(payload)
         return _public_payer(current)
+
+    def preview_payer_link(self, practice_id: str, body: dict[str, Any]) -> dict[str, Any]:
+        """Compute a link preview. Does not write."""
+        _, row = self._load_practice(practice_id)
+        preview, _resolved = build_link_plan(row, body)
+        return preview
+
+    def commit_payer_link(self, practice_id: str, body: dict[str, Any], *, actor: str) -> dict[str, Any]:
+        """Link payers after a ready preview. Archives the other payer records."""
+        payload, row = self._load_practice(practice_id)
+        preview, resolved = build_link_plan(row, body)
+        if not preview.get("ready"):
+            if preview.get("errors"):
+                raise ValueError(str(preview["errors"][0]))
+            pending = "; ".join(str(item) for item in (preview.get("unresolved") or []))
+            raise ValueError("Resolve every conflict before linking. " + pending)
+        self._backup()
+        apply_payer_link(row, resolved, actor=(actor or "").strip().lower(), when=_now())
+        self._save(payload)
+        kept = row["payers"][str(resolved.get("keep_id") or "")]
+        return {
+            "ok": True,
+            "payer": _public_payer(kept),
+            "archived_ids": list(resolved.get("archived_ids") or []),
+            "aliases": list(kept.get("aliases") or []),
+        }
+
+    def link_events(self, practice_id: str) -> list[dict[str, Any]]:
+        _, row = self._load_practice(practice_id)
+        return [dict(item) for item in (row.get("link_audit") or []) if isinstance(item, dict)]
 
     def record_people_export(self, practice_id: str, *, actor: str) -> None:
         """Log a sensitive people.csv export. The values themselves are not stored."""
@@ -1155,6 +1206,12 @@ def _public_payer(row: dict[str, Any]) -> dict[str, Any]:
         interval = 14
     if interval <= 0:
         interval = 14
+    try:
+        recredential = int(row.get("recredential_days") or 0)
+    except (TypeError, ValueError):
+        recredential = 0
+    if recredential < 0:
+        recredential = 0
     return {
         "id": row.get("id") or "",
         "name": row.get("name") or "",
@@ -1167,9 +1224,12 @@ def _public_payer(row: dict[str, Any]) -> dict[str, Any]:
         "archived": bool(row.get("archived")),
         "credentials_expire": flag if isinstance(flag, bool) else None,
         "follow_up_days": interval,
+        "recredential_days": recredential,
         "electronic_payer_id": str(row.get("electronic_payer_id") or "").strip(),
         "practice_network": _practice_network(row.get("practice_network"), strict=False),
         "practice_network_note": str(row.get("practice_network_note") or "").strip(),
+        "aliases": [str(item).strip() for item in (row.get("aliases") or []) if str(item).strip()],
+        "merged_into": str(row.get("merged_into") or ""),
     }
 
 

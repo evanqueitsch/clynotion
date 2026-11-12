@@ -34,6 +34,11 @@ MA name (``MA``, ``Medicaid``, ``... (MA)``) -> ``medicaid_mco``. Medicaid and
 Medicare together stay ``commercial`` with a warning. Anything else is
 ``commercial``. An existing type is left as-is; a different incoming type is a
 warning, not an overwrite.
+
+A payer linked in the app stores the other names as aliases. A later
+payers-only row matches an alias with the same normalization and updates the
+kept payer. The stored spelling changes only when someone picks a new
+canonical name during a link.
 """
 
 from __future__ import annotations
@@ -587,16 +592,18 @@ def build_plan(
     existing_payers: set[str],
     existing_subjects: set[str],
     existing_payer_types: Optional[dict[str, str]] = None,
+    existing_payer_aliases: Optional[set[str]] = None,
 ) -> ImportPlan:
     plan = ImportPlan()
+    match_names = set(existing_payers) | set(existing_payer_aliases or set())
     if payers_csv is None and people_csv is None and grid_csv is None:
         plan.errors.append("Upload at least one CSV.")
         plan.summary = summarize_plan(
-            plan, existing_payers=existing_payers, existing_subjects=existing_subjects
+            plan, existing_payers=match_names, existing_subjects=existing_subjects
         )
         return plan
     payers, payer_errors, payer_warnings, payer_changes = parse_payers(
-        payers_csv, existing=existing_payers, existing_types=existing_payer_types
+        payers_csv, existing=match_names, existing_types=existing_payer_types
     )
     people, people_errors, warnings, people_changes = parse_people(people_csv, existing=existing_subjects)
     plan.errors.extend(payer_errors)
@@ -616,6 +623,6 @@ def build_plan(
     plan.cells = cells
     plan.changes.extend(grid_changes)
     plan.summary = summarize_plan(
-        plan, existing_payers=existing_payers, existing_subjects=existing_subjects
+        plan, existing_payers=match_names, existing_subjects=existing_subjects
     )
     return plan

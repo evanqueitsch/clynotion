@@ -8,6 +8,8 @@
     ["in_progress", "In progress"],
   ];
   let payerEditRequest = "";
+  let linkDraft = null;
+  let linkToken = 0;
   const STATUSES = [
     ["unknown", "Unknown"],
     ["pending", "Pending"],
@@ -956,6 +958,238 @@
     return box;
   }
 
+  function canLinkPayers() {
+    return !!(payload && payload.can_manage && payload.can_payers);
+  }
+
+  function choiceFromToken(token) {
+    if (token === "combine") return { source_id: "", combine: true, blank: false };
+    if (token === "blank") return { source_id: "", combine: false, blank: true };
+    if (String(token || "").indexOf("source:") === 0) {
+      return { source_id: String(token).slice(7), combine: false, blank: false };
+    }
+    return { source_id: "", combine: false, blank: false };
+  }
+
+  function linkBody() {
+    return {
+      payer_ids: (linkDraft && linkDraft.ids) || [],
+      keep_id: (linkDraft && linkDraft.keepId) || "",
+      choices: (linkDraft && linkDraft.choices) || {},
+      enrollment_choices: (linkDraft && linkDraft.enrollmentChoices) || {},
+    };
+  }
+
+  function linkFieldBlock(field, groupName, onPick) {
+    const block = document.createElement("fieldset");
+    block.className = "cg-expire";
+    const legend = document.createElement("legend");
+    legend.textContent = field.label;
+    block.appendChild(legend);
+    if (field.status === "kept") {
+      const kept = document.createElement("p");
+      kept.className = "cg-kept";
+      kept.textContent = "Keeping: " + (field.display || "(blank)");
+      block.appendChild(kept);
+    } else if (field.status === "conflict") {
+      const hint = document.createElement("p");
+      hint.className = "meta";
+      hint.textContent = "Choose which value to keep.";
+      block.appendChild(hint);
+    } else if (field.display) {
+      const result = document.createElement("p");
+      result.className = "cg-kept";
+      result.textContent = "Result: " + field.display;
+      block.appendChild(result);
+    }
+    (field.options || []).forEach((option) => {
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = groupName;
+      input.value = option.value;
+      input.checked = field.selected === option.value;
+      input.addEventListener("change", () => onPick(option.value));
+      const label = document.createElement("label");
+      label.className = "cg-choice";
+      label.appendChild(input);
+      let text = option.label + ": " + option.display;
+      if (option.value === "blank") text = "Clear value";
+      else if (option.value === "combine") text = "Combine: " + option.display;
+      label.appendChild(document.createTextNode(text));
+      block.appendChild(label);
+    });
+    return block;
+  }
+
+  function drawLinkPanel(preview) {
+    const panel = document.createElement("section");
+    panel.id = "cg-link-panel";
+    panel.className = "cg-link";
+    const title = document.createElement("h3");
+    title.textContent = "Link payers";
+    panel.appendChild(title);
+    const intro = document.createElement("p");
+    intro.className = "meta";
+    intro.textContent = "Nothing is saved until you confirm. Other names become aliases on the payer you keep.";
+    panel.appendChild(intro);
+    (preview.errors || []).forEach((item) => {
+      const error = document.createElement("p");
+      error.className = "meta";
+      error.textContent = item;
+      panel.appendChild(error);
+    });
+
+    const nameHeading = document.createElement("h4");
+    nameHeading.textContent = "Name to keep";
+    panel.appendChild(nameHeading);
+    (preview.names || []).forEach((item) => {
+      const input = document.createElement("input");
+      input.type = "radio";
+      input.name = "cg-link-keep";
+      input.value = item.id;
+      input.checked = preview.keep_id === item.id;
+      input.addEventListener("change", () => {
+        if (!linkDraft) return;
+        linkDraft.keepId = item.id;
+        refreshLinkPreview();
+      });
+      const label = document.createElement("label");
+      label.className = "cg-choice";
+      label.appendChild(input);
+      label.appendChild(document.createTextNode(item.name));
+      panel.appendChild(label);
+    });
+    const aliasLine = document.createElement("p");
+    aliasLine.id = "cg-link-aliases";
+    aliasLine.textContent = preview.keep_id
+      ? "Aliases: " + ((preview.aliases || []).join(", ") || "(none)")
+      : "The names you do not keep are saved as aliases.";
+    panel.appendChild(aliasLine);
+
+    const fieldHeading = document.createElement("h4");
+    fieldHeading.textContent = "Payer fields";
+    panel.appendChild(fieldHeading);
+    if (!(preview.fields || []).length) {
+      const empty = document.createElement("p");
+      empty.textContent = "No payer fields differ.";
+      panel.appendChild(empty);
+    }
+    (preview.fields || []).forEach((field) => {
+      panel.appendChild(linkFieldBlock(field, "cg-link-field-" + field.field, (token) => {
+        if (!linkDraft) return;
+        linkDraft.choices[field.field] = choiceFromToken(token);
+        refreshLinkPreview();
+      }));
+    });
+
+    const moveHeading = document.createElement("h4");
+    moveHeading.textContent = "Enrollment moves";
+    panel.appendChild(moveHeading);
+    if (!(preview.enrollment_moves || []).length) {
+      const empty = document.createElement("p");
+      empty.textContent = "No enrollments to move.";
+      panel.appendChild(empty);
+    }
+    (preview.enrollment_moves || []).forEach((move) => {
+      const line = document.createElement("p");
+      line.textContent = move.subject_name + ": " + move.summary;
+      panel.appendChild(line);
+    });
+
+    const conflictHeading = document.createElement("h4");
+    conflictHeading.textContent = "Enrollment conflicts";
+    panel.appendChild(conflictHeading);
+    if (!(preview.enrollment_conflicts || []).length) {
+      const empty = document.createElement("p");
+      empty.id = "cg-link-no-enrollment-conflict";
+      empty.textContent = "No enrollment conflicts.";
+      panel.appendChild(empty);
+    }
+    (preview.enrollment_conflicts || []).forEach((conflict) => {
+      const block = document.createElement("div");
+      const who = document.createElement("p");
+      who.textContent = conflict.subject_name;
+      block.appendChild(who);
+      (conflict.fields || []).forEach((field) => {
+        block.appendChild(linkFieldBlock(field, "cg-link-enr-" + conflict.subject_id + "-" + field.field, (token) => {
+          if (!linkDraft) return;
+          const current = linkDraft.enrollmentChoices[conflict.subject_id] || {};
+          current[field.field] = choiceFromToken(token);
+          linkDraft.enrollmentChoices[conflict.subject_id] = current;
+          refreshLinkPreview();
+        }));
+      });
+      panel.appendChild(block);
+    });
+
+    const actions = document.createElement("div");
+    actions.className = "cg-link-actions";
+    const confirm = document.createElement("button");
+    confirm.type = "button";
+    confirm.id = "cg-link-confirm";
+    confirm.className = "primary";
+    confirm.textContent = "Confirm link";
+    confirm.disabled = !preview.ready;
+    confirm.addEventListener("click", async () => {
+      confirm.disabled = true;
+      setMessage("Linking…");
+      try {
+        await bridge().api("/credentialing/payers/link", { method: "POST", json: linkBody() });
+        linkDraft = null;
+        setMessage("Payers linked", "ok");
+        await reload();
+      } catch (error) {
+        confirm.disabled = false;
+        setMessage(errText(error), "error");
+      }
+    });
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.id = "cg-link-cancel";
+    cancel.className = "ghost";
+    cancel.textContent = "Cancel";
+    cancel.addEventListener("click", async () => {
+      linkDraft = null;
+      linkToken += 1;
+      setMessage("Link canceled. Nothing was saved.", "ok");
+      await reload();
+    });
+    actions.appendChild(confirm);
+    actions.appendChild(cancel);
+    panel.appendChild(actions);
+
+    const root = $("cg-payers-section");
+    const existing = $("cg-link-panel");
+    if (existing) existing.remove();
+    const form = $("cg-payer-form");
+    if (form && form.parentNode === root) root.insertBefore(panel, form.nextSibling);
+    else root.appendChild(panel);
+    panel.scrollIntoView({ block: "nearest" });
+  }
+
+  async function refreshLinkPreview() {
+    if (!linkDraft) return;
+    const token = ++linkToken;
+    setMessage("Updating link preview…");
+    try {
+      const preview = await bridge().api("/credentialing/payers/link/preview", {
+        method: "POST",
+        json: linkBody(),
+      });
+      if (token !== linkToken || !linkDraft) return;
+      drawLinkPanel(preview);
+      setMessage(preview.ready ? "Preview ready. Nothing is saved yet." : "Preview updated. Nothing is saved yet.", "");
+    } catch (error) {
+      if (token !== linkToken) return;
+      setMessage(errText(error), "error");
+    }
+  }
+
+  async function openLink(ids) {
+    linkDraft = { ids: ids.slice(), keepId: "", choices: {}, enrollmentChoices: {} };
+    await refreshLinkPreview();
+  }
+
   function renderPayers() {
     const root = $("cg-payers-section");
     root.innerHTML = "";
@@ -964,8 +1198,18 @@
     add.id = "cg-add-payer";
     add.className = "primary";
     add.textContent = "Add payer";
-    add.disabled = !(payload.can_manage && payload.can_payers);
-    root.appendChild(add);
+    add.disabled = !canLinkPayers();
+    const link = document.createElement("button");
+    link.type = "button";
+    link.id = "cg-link-payers";
+    link.className = "ghost";
+    link.textContent = "Link selected";
+    link.disabled = true;
+    const tools = document.createElement("div");
+    tools.className = "cg-actions";
+    tools.appendChild(add);
+    if (canLinkPayers()) tools.appendChild(link);
+    root.appendChild(tools);
     const form = document.createElement("div");
     form.className = "cg-form hidden";
     form.id = "cg-payer-form";
@@ -1014,7 +1258,11 @@
     form.appendChild(notes.wrap);
     form.appendChild(parent.wrap);
     form.appendChild(counties.wrap);
+    const aliasNote = document.createElement("p");
+    aliasNote.id = "cg-payer-alias-note";
+    aliasNote.className = "meta hidden";
     form.appendChild(labeled("New enrollments", expireDefault));
+    form.appendChild(aliasNote);
     const save = document.createElement("button");
     save.type = "button";
     save.id = "cg-payer-save";
@@ -1065,6 +1313,8 @@
       counties.input.value = "";
       type.selectedIndex = 0;
       expireDefault.value = "";
+      aliasNote.textContent = "";
+      aliasNote.classList.add("hidden");
     };
     add.addEventListener("click", () => {
       clearForm();
@@ -1083,9 +1333,24 @@
       parent.input.value = payer.parent_payer || "";
       counties.input.value = (payer.counties || []).join("; ");
       expireDefault.value = payer.credentials_expire === true ? "yes" : payer.credentials_expire === false ? "no" : "";
+      const aliases = (payer.aliases || []).map((item) => String(item).trim()).filter(Boolean);
+      aliasNote.textContent = aliases.length ? "Also known as " + aliases.join(", ") : "";
+      aliasNote.classList.toggle("hidden", !aliases.length);
       form.dataset.id = payer.id;
       form.classList.remove("hidden");
     };
+    const syncLinkButton = () => {
+      const selected = root.querySelectorAll(".cg-link-pick:checked").length;
+      link.disabled = !canLinkPayers() || selected < 2;
+    };
+    link.addEventListener("click", () => {
+      const ids = Array.from(root.querySelectorAll(".cg-link-pick:checked")).map((box) => box.value);
+      if (ids.length < 2) {
+        setMessage("Select two or more payers.", "error");
+        return;
+      }
+      openLink(ids);
+    });
     const active = (payload.payers || []).filter((payer) => !payer.archived);
     const archived = (payload.payers || []).filter((payer) => payer.archived);
     active.forEach((payer) => root.appendChild(payerRow(payer, false)));
@@ -1105,12 +1370,40 @@
 
     function payerRow(payer, isArchived) {
       const row = document.createElement("div");
-      row.className = "due-row";
+      row.className = "due-row cg-payer-row";
+      row.setAttribute("data-payer-id", payer.id);
+      if (!isArchived && canLinkPayers()) {
+        const pick = document.createElement("input");
+        pick.type = "checkbox";
+        pick.className = "cg-link-pick";
+        pick.value = payer.id;
+        pick.setAttribute("aria-label", "Select " + payer.name);
+        pick.addEventListener("change", syncLinkButton);
+        row.appendChild(pick);
+      }
       const label = document.createElement("span");
-      label.textContent = payer.name + " · " + payer.type;
+      label.className = "cg-payer-name";
+      const title = document.createElement("span");
+      title.textContent = payer.name + " · " + payer.type;
+      label.appendChild(title);
+      const aliases = (payer.aliases || []).map((item) => String(item).trim()).filter(Boolean);
+      if (aliases.length) {
+        const meta = document.createElement("span");
+        meta.className = "due-meta";
+        meta.textContent = "Also known as " + aliases.join(", ");
+        label.appendChild(meta);
+      }
+      if (isArchived && payer.merged_into) {
+        const into = (payload.payers || []).find((item) => item.id === payer.merged_into);
+        const meta = document.createElement("span");
+        meta.className = "due-meta";
+        meta.textContent = "Linked into " + (into ? into.name : "another payer");
+        label.appendChild(meta);
+      }
       row.appendChild(label);
       if (payload.can_manage && payload.can_payers) {
         if (isArchived) {
+          if (payer.merged_into) return row;
           const restore = document.createElement("button");
           restore.type = "button";
           restore.className = "ghost";
