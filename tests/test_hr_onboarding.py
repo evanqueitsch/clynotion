@@ -183,4 +183,4 @@ def test_catalog_onboarding_retired(client: TestClient) -> None:
 
 
 def test_health_version_014(client: TestClient) -> None:
-    assert client.get("/health").json()["version"] == "0.19.5"
+    assert client.get("/health").json()["version"] == "0.19.7"

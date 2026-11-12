@@ -18,7 +18,7 @@ from app.employees.store import employees_store
 from app.main import app
 
 STREET = "1 QA Street"
-PHONE = "555-0100"
+PHONE = "(555)010-0100"
 PERSONAL = "qa@example.com"
 NPI = "1234567890"
 
@@ -110,9 +110,9 @@ def test_own_contact_saves_and_clears_without_printing_or_emailing(
             zip="00000",
             personal_phone=PHONE,
             personal_email=PERSONAL,
-            work_phone="555-0101",
+            work_phone="(555)010-0101",
             emergency_name="QA Contact",
-            emergency_phone="555-0102",
+            emergency_phone="(555)010-0102",
         ),
     )
     assert saved.status_code == 200, saved.text
@@ -334,7 +334,7 @@ def test_idle_logoff_and_small_health_are_in_the_ui(client: TestClient) -> None:
     assert "IDLE_LIMIT_MS = 20 * 60 * 1000" in page.text
     assert "20 minutes of inactivity" in page.text
     health = client.get("/health")
-    assert health.json()["version"] == "0.19.5"
+    assert health.json()["version"] == "0.19.7"
     assert "deepgram" not in health.text.casefold()
     assert "phi_path" not in health.json()
     script = client.get("/static/employee.js")
@@ -707,7 +707,7 @@ def test_employee_file_ui_hides_history_and_keeps_sections(client: TestClient) -
     assert panel.index("employee-credentialing") < panel.index("employee-history")
     assert "btn-employee-directory" in panel
     assert "Staff directory" in panel
-    assert "employee.js?v=0.19.5" in page
+    assert "employee.js?v=0.19.7" in page
     assert "credentialing.js?v=0.19.5" in page
     script = client.get("/static/employee.js").text
     assert "Change history" in script

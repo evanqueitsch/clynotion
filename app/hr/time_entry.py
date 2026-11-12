@@ -2775,7 +2775,7 @@ def nav_for_user(user: User) -> dict[str, Any]:
         return {
             "href": "/#time",
             "status": "live",
-            "description": "Enter your hours for last week.",
+            "description": "Enter your weekly hours",
             "open_label": "Enter weekly hours",
         }
     return {

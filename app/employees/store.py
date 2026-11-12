@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 from cryptography.fernet import Fernet
 
 from app.crypto import decrypt_utf8, encrypt_utf8
+from app.employees.contact_format import normalize_contact
 from app.history_text import (
     change_fields,
     clock_labels,
@@ -380,9 +381,11 @@ class EmployeesStore:
         self, practice_id: str, email: str, fields: dict[str, str], actor: str
     ) -> dict[str, Any]:
         payload, row = self._load(practice_id)
+        existing = self._existing(row, email)
+        old = {field: str(existing.get(field) or "") for field in CONTACT_FIELDS}
+        clipped = {field: _clip(str(fields.get(field) or "")) for field in CONTACT_FIELDS}
+        new = normalize_contact(clipped, previous=old)
         record = self._record(row, email)
-        old = {field: str(record.get(field) or "") for field in CONTACT_FIELDS}
-        new = {field: _clip(str(fields.get(field) or "")) for field in CONTACT_FIELDS}
         for field, value in new.items():
             record[field] = value
         summary = self._summary_for_contact(old, new)
