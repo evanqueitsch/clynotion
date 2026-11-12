@@ -6,12 +6,13 @@ import json
 import os
 import re
 import shutil
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
 from app.credentialing.csvio import ImportPlan
 from app.crypto import decrypt_utf8, encrypt_utf8
+from app.dates import DATE_HINT, calendar_date, parse_calendar_date, shift_calendar_date
 
 ENV_PATH = "ATTUNE_CREDENTIALING_DATA_PATH"
 ENV_MODE = "ATTUNE_CREDENTIALING_PERSISTENCE"
@@ -240,18 +241,21 @@ class CredentialingStore:
         for item in row["payers"].values():
             if not isinstance(item, dict) or item.get("archived"):
                 continue
+            flag = item.get("credentials_expire", None)
             payers.append(
                 {
                     "id": item.get("id") or "",
                     "name": item.get("name") or "",
                     "follow_up_days": item.get("follow_up_days") or 0,
                     "recredential_days": item.get("recredential_days") or 0,
+                    "credentials_expire": flag if isinstance(flag, bool) else None,
                 }
             )
         enrollments = []
         for item in row["enrollments"].values():
             if not isinstance(item, dict):
                 continue
+            flag = item.get("has_expiration", None)
             enrollments.append(
                 {
                     "subject_id": item.get("subject_id") or "",
@@ -259,6 +263,9 @@ class CredentialingStore:
                     "status": item.get("status") or "",
                     "submitted_on": item.get("submitted_on") or "",
                     "effective_on": item.get("effective_on") or "",
+                    "expires_on": item.get("expires_on") or "",
+                    "next_follow_up": item.get("next_follow_up") or "",
+                    "has_expiration": flag if isinstance(flag, bool) else None,
                 }
             )
         self.overlay_clocks(practice_id, subjects)
@@ -634,6 +641,12 @@ class CredentialingStore:
                 "updated_at": _now(),
             }
         )
+        if "credentials_expire" in body:
+            flag = body.get("credentials_expire")
+            if isinstance(flag, bool):
+                current["credentials_expire"] = flag
+            else:
+                current.pop("credentials_expire", None)
         self._save(payload)
         return _public_payer(current)
 
@@ -716,6 +729,7 @@ class CredentialingStore:
         if conflict and status not in {"not_eligible", "unknown"} and not note.strip():
             raise ValueError("Overriding not eligible requires a note.")
         key = f"{subject['id']}|{payer['id']}"
+        updated = _enrollment_dates(body, status=status, note=note)
         current = row["enrollments"].get(key)
         if not isinstance(current, dict):
             current = {
@@ -724,23 +738,20 @@ class CredentialingStore:
                 "status": "unknown",
                 "submitted_on": "",
                 "effective_on": "",
+                "expires_on": "",
                 "payer_provider_id": "",
                 "next_follow_up": "",
                 "note": "",
                 "history": [],
             }
             row["enrollments"][key] = current
-        updated = {
-            "status": status,
-            "submitted_on": _date_or_blank(str(body.get("submitted_on") or "")),
-            "effective_on": _date_or_blank(str(body.get("effective_on") or "")),
-            "next_follow_up": _date_or_blank(str(body.get("next_follow_up") or "")),
-            "note": note.strip(),
-        }
         changes: dict[str, Any] = {}
         for field, value in updated.items():
-            if current.get(field) != value:
-                changes[field] = {"old": current.get(field) or "", "new": value}
+            old = current.get(field, None)
+            if _same_enrollment_value(old, value):
+                current[field] = value
+                continue
+            changes[field] = {"old": "" if old is None else old, "new": value}
             current[field] = value
         if "payer_provider_id" in body and body.get("payer_provider_id") is not None:
             new_secret = str(body.get("payer_provider_id") or "").strip()
@@ -929,11 +940,85 @@ class CredentialingStore:
 
 
 def _date_or_blank(value: str) -> str:
-    raw = (value or "").strip()
-    if not raw:
-        return ""
-    datetime.strptime(raw, "%Y-%m-%d")
-    return raw
+    return parse_calendar_date(value)
+
+
+def _same_enrollment_value(old: Any, new: Any) -> bool:
+    if isinstance(new, bool):
+        return old is new
+    return ("" if old is None else old) == new
+
+
+def _enrollment_dates(body: dict[str, Any], *, status: str, note: str) -> dict[str, Any]:
+    """Normalize the dates the form showed. An empty field is stored empty."""
+    updated: dict[str, Any] = {
+        "status": status,
+        "submitted_on": parse_calendar_date(str(body.get("submitted_on") or "")),
+        "effective_on": parse_calendar_date(str(body.get("effective_on") or "")),
+        "note": note.strip(),
+    }
+    if "has_expiration" not in body:
+        updated["next_follow_up"] = parse_calendar_date(str(body.get("next_follow_up") or ""))
+        return updated
+    if body.get("has_expiration") is None:
+        raise ValueError("Choose whether credentials expire.")
+    has_exp = bool(body.get("has_expiration"))
+    if not has_exp:
+        updated["has_expiration"] = False
+        updated["expires_on"] = ""
+        updated["next_follow_up"] = ""
+        return updated
+    expires_on = parse_calendar_date(str(body.get("expires_on") or ""))
+    if not expires_on:
+        raise ValueError("Enter an expiration date. " + DATE_HINT)
+    follow_raw = str(body.get("next_follow_up") or "").strip()
+    follow_on = parse_calendar_date(follow_raw) if follow_raw else ""
+    if not follow_on:
+        follow_on = shift_calendar_date(expires_on, -90)
+    updated["has_expiration"] = True
+    updated["expires_on"] = expires_on
+    updated["next_follow_up"] = follow_on
+    return updated
+
+
+def _enrollment_saved(enrollment: dict[str, Any]) -> bool:
+    if not enrollment:
+        return False
+    if enrollment.get("updated_at"):
+        return True
+    if isinstance(enrollment.get("has_expiration"), bool):
+        return True
+    status = str(enrollment.get("status") or "")
+    if status and status != "unknown":
+        return True
+    for key in ("submitted_on", "effective_on", "expires_on", "next_follow_up", "note", "payer_provider_id"):
+        if str(enrollment.get(key) or "").strip():
+            return True
+    return False
+
+
+def resolved_has_expiration(enrollment: dict[str, Any]) -> Optional[bool]:
+    """Choice for the editor. Does not write the record.
+
+    A stored expiration date means credentials expire. A saved enrollment with
+    no expiration date means they do not. A cell nobody has saved yet is unset
+    so a payer default can pre-fill it.
+    """
+    flag = enrollment.get("has_expiration", None)
+    if isinstance(flag, bool):
+        return flag
+    if calendar_date(str(enrollment.get("expires_on") or "")) is not None:
+        return True
+    if _enrollment_saved(enrollment):
+        return False
+    return None
+
+
+def expiration_day(enrollment: dict[str, Any]):
+    """Expiration date that may generate renewal tasks. None when it does not apply."""
+    if enrollment.get("has_expiration") is False:
+        return None
+    return calendar_date(str(enrollment.get("expires_on") or ""))
 
 
 def _csv(value: Any) -> str:
@@ -987,6 +1072,13 @@ def _public_subject(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _public_payer(row: dict[str, Any]) -> dict[str, Any]:
+    flag = row.get("credentials_expire", None)
+    try:
+        interval = int(row.get("follow_up_days") or 14)
+    except (TypeError, ValueError):
+        interval = 14
+    if interval <= 0:
+        interval = 14
     return {
         "id": row.get("id") or "",
         "name": row.get("name") or "",
@@ -997,6 +1089,8 @@ def _public_payer(row: dict[str, Any]) -> dict[str, Any]:
         "parent_payer": row.get("parent_payer") or "",
         "counties": list(row.get("counties") or []),
         "archived": bool(row.get("archived")),
+        "credentials_expire": flag if isinstance(flag, bool) else None,
+        "follow_up_days": interval,
     }
 
 
@@ -1016,36 +1110,37 @@ def _public_history(events: list[Any]) -> list[dict[str, Any]]:
     return out
 
 
-def _follow_up_on(enrollment: dict[str, Any], payer: dict[str, Any]) -> str:
-    saved = str(enrollment.get("next_follow_up") or "").strip()
-    if len(saved) >= 10:
-        return saved[:10]
+def _application_follow_up(enrollment: dict[str, Any], payer: dict[str, Any]) -> str:
+    """Pending-application follow-up. Submitted date plus the payer interval."""
     status = str(enrollment.get("status") or "")
-    submitted = str(enrollment.get("submitted_on") or "").strip()[:10]
-    if status not in {"pending", "submitted"} or len(submitted) < 10:
+    if status not in {"pending", "submitted"}:
+        return ""
+    day = calendar_date(str(enrollment.get("submitted_on") or ""))
+    if day is None:
         return ""
     try:
-        day = datetime.strptime(submitted, "%Y-%m-%d").date()
         interval = int(payer.get("follow_up_days") or 14)
     except (TypeError, ValueError):
-        return ""
+        interval = 14
     if interval <= 0:
         interval = 14
-    from datetime import timedelta
-
     return (day + timedelta(days=interval)).isoformat()
 
 
-def _follow_up_is_overdue(day: str) -> bool:
-    if len(day) < 10:
-        return False
-    try:
-        from zoneinfo import ZoneInfo
+def _expiration_follow_up(enrollment: dict[str, Any]) -> str:
+    if expiration_day(enrollment) is None:
+        return ""
+    day = calendar_date(str(enrollment.get("next_follow_up") or ""))
+    return "" if day is None else day.isoformat()
 
-        due = datetime.strptime(day[:10], "%Y-%m-%d").date()
-        today = datetime.now(ZoneInfo("America/New_York")).date()
-    except ValueError:
+
+def _follow_up_is_overdue(day: str) -> bool:
+    due = calendar_date(day)
+    if due is None:
         return False
+    from zoneinfo import ZoneInfo
+
+    today = datetime.now(ZoneInfo("America/New_York")).date()
     return due < today
 
 
@@ -1054,7 +1149,13 @@ def _public_cell(row: dict[str, Any], subject: dict[str, Any], payer: dict[str, 
     enrollment = row["enrollments"].get(key) or {}
     reason = license_conflict(payer, subject)
     status = str(enrollment.get("status") or "unknown")
-    follow_on = _follow_up_on(enrollment, payer)
+    application = _application_follow_up(enrollment, payer)
+    if application:
+        follow_on = application
+    elif expiration_day(enrollment) is not None:
+        follow_on = _expiration_follow_up(enrollment)
+    else:
+        follow_on = ""
     follow_overdue = _follow_up_is_overdue(follow_on)
     blank = status in {"", "unknown"}
     confirmed = status == "not_eligible"
@@ -1070,7 +1171,11 @@ def _public_cell(row: dict[str, Any], subject: dict[str, Any], payer: dict[str, 
         "status": status,
         "submitted_on": enrollment.get("submitted_on") or "",
         "effective_on": enrollment.get("effective_on") or "",
+        "expires_on": enrollment.get("expires_on") or "",
+        "has_expiration": resolved_has_expiration(enrollment),
+        "enrollment_saved": _enrollment_saved(enrollment),
         "next_follow_up": enrollment.get("next_follow_up") or "",
+        "application_follow_up": application,
         "note": enrollment.get("note") or "",
         "payer_provider_id_masked": mask_secret(str(enrollment.get("payer_provider_id") or "")),
         "updated_by": enrollment.get("updated_by") or "",

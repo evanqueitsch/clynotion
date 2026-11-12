@@ -333,7 +333,7 @@ def test_idle_logoff_and_small_health_are_in_the_ui(client: TestClient) -> None:
     assert "IDLE_LIMIT_MS = 20 * 60 * 1000" in page.text
     assert "20 minutes of inactivity" in page.text
     health = client.get("/health")
-    assert health.json()["version"] == "0.19.2"
+    assert health.json()["version"] == "0.19.3"
     assert "deepgram" not in health.text.casefold()
     assert "phi_path" not in health.json()
     script = client.get("/static/employee.js")

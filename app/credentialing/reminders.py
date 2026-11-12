@@ -9,7 +9,8 @@ EASTERN = ZoneInfo("America/New_York")
 from typing import Any, Optional
 
 from app.credentialing.backup import backup_once
-from app.credentialing.store import credentialing_store
+from app.credentialing.store import credentialing_store, expiration_day
+from app.dates import calendar_date
 from app.platform.catalog import CREDENTIAL_CLOCKS
 from app.platform.due import due_engine
 from app.platform.due_persist import due_persist_mode, due_persist_path
@@ -18,7 +19,6 @@ SOURCE = "credentialing"
 SUBMITTED = {"pending", "submitted"}
 FOLLOW_UP_DAYS = 14
 STALL_DAYS = 90
-RECRED_DAYS = 1095
 CAQH_DAYS = 120
 CAQH_LEAD_DAYS = 14
 
@@ -39,13 +39,7 @@ def _today(now: Optional[datetime]) -> date:
 
 
 def _parse_day(value: str) -> Optional[date]:
-    raw = (value or "").strip()
-    if len(raw) < 10:
-        return None
-    try:
-        return datetime.strptime(raw[:10], "%Y-%m-%d").date()
-    except ValueError:
-        return None
+    return calendar_date(value)
 
 
 def _due(day: date) -> str:
@@ -153,21 +147,26 @@ def _enrollment_reminders(
                 "due_at": _due(submitted + timedelta(days=STALL_DAYS)),
                 "href": href,
             }
-    effective = _parse_day(str(enrollment.get("effective_on") or ""))
-    if status == "in_network" and effective is not None:
-        cycle = _days(payer, "recredential_days", RECRED_DAYS)
-        recred = effective + timedelta(days=cycle)
-        stamp = effective.isoformat()
+    expires = expiration_day(enrollment) if status == "in_network" else None
+    if expires is not None:
+        stamp = expires.isoformat()
         desired[f"recredential_90|{subject_id}|{payer_id}|{stamp}"] = {
             "title": f"Recredential in 90 days {label}",
-            "due_at": _due(recred - timedelta(days=90)),
+            "due_at": _due(expires - timedelta(days=90)),
             "href": href,
         }
         desired[f"recredential_30|{subject_id}|{payer_id}|{stamp}"] = {
             "title": f"Recredential in 30 days {label}",
-            "due_at": _due(recred - timedelta(days=30)),
+            "due_at": _due(expires - timedelta(days=30)),
             "href": href,
         }
+        follow = _parse_day(str(enrollment.get("next_follow_up") or ""))
+        if follow is not None:
+            desired[f"expiration_follow_up|{subject_id}|{payer_id}|{follow.isoformat()}"] = {
+                "title": f"Expiration follow-up {label}",
+                "due_at": _due(follow),
+                "href": href,
+            }
 
 
 def _profile_reminders(

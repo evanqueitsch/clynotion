@@ -6,8 +6,9 @@ import csv
 import io
 import re
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, Optional
+
+from app.dates import DATE_HINT, parse_calendar_date
 
 PAYER_HEADERS = ["payer", "family_members", "type", "accepts_licenses", "notes"]
 PEOPLE_HEADERS = [
@@ -57,11 +58,10 @@ def _iso(value: str, label: str, errors: list[str]) -> str:
     if not raw:
         return ""
     try:
-        datetime.strptime(raw, "%Y-%m-%d")
+        return parse_calendar_date(raw)
     except ValueError:
-        errors.append(f"{label} must be an ISO date (YYYY-MM-DD).")
+        errors.append(f"{label}: {DATE_HINT}")
         return ""
-    return raw
 
 
 def _status_words(status: str, submitted: str) -> str:
@@ -188,10 +188,10 @@ def _cell(value: str) -> tuple[str, str, Optional[str]]:
     if raw == "?":
         return "needs_review", "", None
     try:
-        datetime.strptime(raw, "%Y-%m-%d")
+        stored = parse_calendar_date(raw)
     except ValueError:
-        return "", "", f"cell {raw!r} must be Y, X, an ISO date, ?, or blank."
-    return "pending", raw, None
+        return "", "", f"cell {raw!r} must be Y, X, a date such as 11/09/2026, ?, or blank."
+    return "pending", stored, None
 
 
 def parse_grid(
