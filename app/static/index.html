@@ -2289,13 +2289,13 @@
         if (fullCatalog) {
           renderPulse(home.pulse || {});
           renderAttention(home.attention || []);
-          renderHomeBands(home.bands || { overdue: [], this_week: [] });
         } else {
-          ["home-pulse", "home-attention-wrap", "home-overdue-wrap", "home-week-wrap", "home-due-empty"].forEach((id) => {
+          ["home-pulse", "home-attention-wrap"].forEach((id) => {
             const el = $(id);
             if (el) el.classList.add("hidden");
           });
         }
+        renderHomeBands(home.bands || { overdue: [], this_week: [] });
         renderHomeUnits(home.units || []);
         show("home-panel");
         window.history.replaceState({}, "", "/");

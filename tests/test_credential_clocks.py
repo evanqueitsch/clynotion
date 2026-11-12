@@ -89,4 +89,4 @@ def test_crosswalk_includes_credential_clocks(client: TestClient) -> None:
 
 
 def test_health_version_013(client: TestClient) -> None:
-    assert client.get("/health").json()["version"] == "0.19.7"
+    assert client.get("/health").json()["version"] == "0.19.8"

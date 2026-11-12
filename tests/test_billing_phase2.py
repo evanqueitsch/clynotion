@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from fastapi.testclient import TestClient
 
@@ -246,6 +247,42 @@ def test_billing_role_sees_home_items_and_staff_is_blocked() -> None:
     assert {link["href"] for link in body["links"]} == {"/#credentialing", "/#eligibility"}
     assert any(item["code"] == "o4" for item in body["obligations"])
     assert any(item["code"] == "o12" for item in body["obligations"])
+
+
+def _js_block(source: str, open_brace: int) -> tuple[str, int]:
+    """Return the interior of the `{` at open_brace and the index just after its close."""
+    if source[open_brace] != "{":
+        raise AssertionError("expected a block")
+    depth = 0
+    for index in range(open_brace, len(source)):
+        if source[index] == "{":
+            depth += 1
+        elif source[index] == "}":
+            depth -= 1
+            if depth == 0:
+                return source[open_brace + 1 : index], index + 1
+    raise AssertionError("unclosed block")
+
+
+def test_home_bands_render_when_full_catalog_is_false() -> None:
+    """Credentialing Home must paint overdue and this-week rows without Admin catalog."""
+    html = Path("app/static/index.html").read_text(encoding="utf-8")
+    start = html.index("async function enterHome()")
+    body, _end = _js_block(html, html.index("{", start))
+    gate = body.index("if (fullCatalog)")
+    if_body, after_if = _js_block(body, body.index("{", gate))
+    tail = body[after_if:].lstrip()
+    assert tail.startswith("else"), tail[:80]
+    else_body, after_else = _js_block(tail, tail.index("{"))
+    outside = body[:gate] + tail[after_else:]
+    assert "renderHomeBands(home.bands || { overdue: [], this_week: [] })" in outside
+    assert "renderPulse" in if_body
+    assert "renderAttention" in if_body
+    assert "home-pulse" in else_body
+    assert "home-attention-wrap" in else_body
+    for element_id in ("home-overdue-wrap", "home-week-wrap", "home-due-empty"):
+        assert element_id not in else_body
+    assert 'rolesCard.classList.toggle("hidden", !fullCatalog)' in body[:gate]
 
 
 def test_o4_completion_is_the_same_record_as_the_registry() -> None:
