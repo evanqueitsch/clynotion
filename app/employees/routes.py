@@ -51,6 +51,20 @@ class LinkBody(BaseModel):
     subject_id: str = ""
 
 
+class WorkspaceLinkBody(BaseModel):
+    email: str = ""
+
+
+class CertificationItem(BaseModel):
+    name: str = ""
+    issued_on: str = ""
+    expires_on: str = ""
+
+
+class CertificationsBody(BaseModel):
+    items: list[CertificationItem] = Field(default_factory=list)
+
+
 class ChangeBody(BaseModel):
     field: str
     value: str = ""
@@ -125,6 +139,15 @@ def save_my_trainings(body: TrainingsBody, user: CurrentUser) -> dict[str, Any]:
     return _call(lambda: employees_store.save_trainings(user.practice_id, _actor(user), items, _actor(user)))
 
 
+@router.put("/me/certifications")
+def save_my_certifications(body: CertificationsBody, user: CurrentUser) -> dict[str, Any]:
+    _open(user)
+    items = [item.model_dump() for item in body.items]
+    return _call(
+        lambda: employees_store.save_certifications(user.practice_id, _actor(user), items, _actor(user))
+    )
+
+
 @router.put("/me/link")
 def save_my_link(body: LinkBody, user: CurrentUser) -> dict[str, Any]:
     _open(user)
@@ -162,6 +185,24 @@ def employee_person(key: str, user: CurrentUser) -> dict[str, Any]:
         raise HTTPException(status_code=403, detail="You do not have access to that.")
     reveal = sees_every_module(user) or has_permission(user, HR_SENSITIVE)
     return _call(lambda: employees_store.view_record(user.practice_id, key, _actor(user), reveal=reveal))
+
+
+@router.put("/people/{key}/workspace")
+def link_workspace(key: str, body: WorkspaceLinkBody, user: CurrentUser) -> dict[str, str]:
+    _open(user)
+    _manage(user)
+    return _call(
+        lambda: employees_store.link_workspace_account(user.practice_id, key, body.email, _actor(user))
+    )
+
+
+@router.put("/people/{email}/profile")
+def link_profile(email: str, body: LinkBody, user: CurrentUser) -> dict[str, Any]:
+    _open(user)
+    _manage(user)
+    return _call(
+        lambda: employees_store.set_link(user.practice_id, email, body.subject_id, _actor(user))
+    )
 
 
 @router.post("/people/{email}/reveal")

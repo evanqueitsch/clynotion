@@ -199,8 +199,13 @@ def _visible_units(user: CurrentUser) -> list[dict]:
     for unit in units:
         kept: list[dict] = []
         for tool in unit.get("tools") or []:
-            if tool.get("id") == "employee_view" and not full and not _employee_rollout_on(user):
-                continue
+            if tool.get("id") == "employee_view":
+                if not full and not _employee_rollout_on(user):
+                    continue
+                tool["status"] = "live"
+                tool["href"] = "/#employee"
+                tool["coming_soon"] = False
+                tool["open_label"] = "Open Employee View"
             if tool.get("status") == "planned":
                 if not full:
                     continue
