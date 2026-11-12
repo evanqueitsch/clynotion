@@ -1,6 +1,13 @@
 /* Credentialing grid. Full IDs are fetched one at a time and never kept in the page payload. */
 (function () {
   const TYPES = ["commercial", "medicaid_mco", "chip", "medicare", "tricare", "eap"];
+  const PRACTICE_NETWORKS = [
+    ["unknown", "Unknown"],
+    ["in_network", "In network"],
+    ["needs_ma_first", "Need MA first"],
+    ["in_progress", "In progress"],
+  ];
+  let payerEditRequest = "";
   const STATUSES = [
     ["unknown", "Unknown"],
     ["pending", "Pending"],
@@ -347,6 +354,7 @@
     const title = document.createElement("h3");
     title.textContent = payer.name + " · " + subject.name;
     drawer.appendChild(title);
+    appendPlaybook(drawer, payer);
     if (cell && cell.suggestion_reason) {
       const reason = document.createElement("p");
       reason.textContent = "Suggested not eligible: " + cell.suggestion_reason + " Overriding it requires a note.";
@@ -500,6 +508,96 @@
     drawer.appendChild(historyBlock(cell && cell.history));
   }
 
+  function networkLabel(value) {
+    const pair = PRACTICE_NETWORKS.find((item) => item[0] === value);
+    return pair ? pair[1] : "";
+  }
+
+  function linkify(text) {
+    const span = document.createElement("span");
+    span.className = "cg-howto";
+    const source = String(text || "");
+    const re = /https?:\/\/[^\s<>"']+/gi;
+    let last = 0;
+    let match;
+    while ((match = re.exec(source))) {
+      span.appendChild(document.createTextNode(source.slice(last, match.index)));
+      const raw = match[0];
+      const href = raw.replace(/[),.;:]+$/g, "");
+      const anchor = document.createElement("a");
+      anchor.href = href;
+      anchor.textContent = href;
+      anchor.target = "_blank";
+      anchor.rel = "noopener noreferrer";
+      span.appendChild(anchor);
+      if (href.length < raw.length) {
+        span.appendChild(document.createTextNode(raw.slice(href.length)));
+      }
+      last = match.index + raw.length;
+    }
+    span.appendChild(document.createTextNode(source.slice(last)));
+    return span;
+  }
+
+  function playbookRow(label, value) {
+    const row = document.createElement("p");
+    const strong = document.createElement("strong");
+    strong.textContent = label;
+    row.appendChild(strong);
+    row.appendChild(document.createTextNode(" "));
+    if (typeof value === "string") {
+      row.appendChild(document.createTextNode(value));
+    } else {
+      row.appendChild(value);
+    }
+    return row;
+  }
+
+  function appendPlaybook(drawer, payer) {
+    const lines = [];
+    const payerId = String((payer && payer.electronic_payer_id) || "").trim();
+    if (payerId) lines.push(playbookRow("Electronic payer ID", payerId));
+    const network = payer && payer.practice_network;
+    if (network && network !== "unknown") {
+      lines.push(playbookRow("Practice network", networkLabel(network) || network));
+    }
+    const networkNote = String((payer && payer.practice_network_note) || "").trim();
+    if (networkNote) lines.push(playbookRow("Network note", networkNote));
+    const licenses = ((payer && payer.accepts_licenses) || []).map((item) => String(item).trim()).filter(Boolean);
+    if (licenses.length) lines.push(playbookRow("Licenses", licenses.join(", ")));
+    const notes = String((payer && payer.notes) || "").trim();
+    if (notes) lines.push(playbookRow("How-to", linkify(notes)));
+    const canEdit = !!(payload && payload.can_manage && payload.can_payers);
+    if (!lines.length && !canEdit) return;
+    const panel = document.createElement("section");
+    panel.id = "cg-playbook";
+    panel.className = "cg-playbook";
+    if (lines.length) {
+      const heading = document.createElement("h4");
+      heading.textContent = "Payer playbook";
+      panel.appendChild(heading);
+      lines.forEach((line) => panel.appendChild(line));
+    }
+    if (canEdit) {
+      const edit = document.createElement("button");
+      edit.type = "button";
+      edit.id = "cg-edit-payer";
+      edit.className = "ghost";
+      edit.textContent = "Edit payer";
+      edit.addEventListener("click", () => openPayerEditor(payer.id));
+      panel.appendChild(edit);
+    }
+    drawer.appendChild(panel);
+  }
+
+  function openPayerEditor(payerId) {
+    payerEditRequest = payerId;
+    showSection("payers");
+    renderPayers();
+    const form = $("cg-payer-form");
+    if (form) form.scrollIntoView({ block: "nearest" });
+  }
+
   function expirationChoice(cell, payer) {
     if (cell && cell.enrollment_saved) return cell.has_expiration ? "yes" : "no";
     if (payer && payer.credentials_expire === true) return "yes";
@@ -517,6 +615,14 @@
     wrap.appendChild(input);
     wrap.appendChild(document.createTextNode(text));
     return { wrap: wrap, input: input };
+  }
+
+  function area(label, value) {
+    const input = document.createElement("textarea");
+    input.rows = 4;
+    input.className = "cg-howto-input";
+    input.value = value || "";
+    return { wrap: labeled(label, input), input: input };
   }
 
   function field(label, value, type) {
@@ -842,16 +948,31 @@
     form.className = "cg-form hidden";
     form.id = "cg-payer-form";
     const name = field("Payer", "");
+    name.input.id = "cg-payer-name";
     const type = document.createElement("select");
+    type.id = "cg-payer-type";
     TYPES.forEach((value) => {
       const option = document.createElement("option");
       option.value = value;
       option.textContent = value;
       type.appendChild(option);
     });
+    const electronic = field("Electronic payer ID", "");
+    electronic.input.id = "cg-payer-electronic-id";
+    const network = document.createElement("select");
+    network.id = "cg-payer-network";
+    PRACTICE_NETWORKS.forEach((pair) => {
+      const option = document.createElement("option");
+      option.value = pair[0];
+      option.textContent = pair[1];
+      network.appendChild(option);
+    });
+    const networkNote = field("Network note", "");
+    networkNote.input.id = "cg-payer-network-note";
     const family = field("Family members (; separated)", "");
     const licenses = field("Accepts licenses (; separated, ALL, or masters)", "");
-    const notes = field("Notes", "");
+    const notes = area("How-to notes", "");
+    notes.input.id = "cg-payer-notes";
     const parent = field("Parent payer", "");
     const counties = field("Counties (; separated)", "");
     const expireDefault = document.createElement("select");
@@ -863,6 +984,9 @@
     });
     form.appendChild(name.wrap);
     form.appendChild(labeled("Type", type));
+    form.appendChild(electronic.wrap);
+    form.appendChild(labeled("Practice network", network));
+    form.appendChild(networkNote.wrap);
     form.appendChild(family.wrap);
     form.appendChild(licenses.wrap);
     form.appendChild(notes.wrap);
@@ -871,6 +995,7 @@
     form.appendChild(labeled("New enrollments", expireDefault));
     const save = document.createElement("button");
     save.type = "button";
+    save.id = "cg-payer-save";
     save.className = "primary";
     save.textContent = "Save changes";
     save.disabled = !(payload.can_manage && payload.can_payers);
@@ -879,6 +1004,9 @@
       const body = {
         name: name.input.value.trim(),
         type: type.value,
+        electronic_payer_id: electronic.input.value.trim(),
+        practice_network: network.value || "unknown",
+        practice_network_note: networkNote.input.value.trim(),
         family_members: splitList(family.input.value),
         accepts_licenses: splitList(licenses.input.value),
         notes: notes.input.value.trim(),
@@ -905,6 +1033,9 @@
     const clearForm = () => {
       form.dataset.id = "";
       name.input.value = "";
+      electronic.input.value = "";
+      network.value = "unknown";
+      networkNote.input.value = "";
       family.input.value = "";
       licenses.input.value = "";
       notes.input.value = "";
@@ -921,6 +1052,9 @@
     const fillForm = (payer) => {
       name.input.value = payer.name;
       type.value = payer.type;
+      electronic.input.value = payer.electronic_payer_id || "";
+      network.value = payer.practice_network || "unknown";
+      networkNote.input.value = payer.practice_network_note || "";
       family.input.value = (payer.family_members || []).join("; ");
       licenses.input.value = (payer.accepts_licenses || []).join("; ");
       notes.input.value = payer.notes || "";
@@ -940,6 +1074,11 @@
       details.appendChild(summary);
       archived.forEach((payer) => details.appendChild(payerRow(payer, true)));
       root.appendChild(details);
+    }
+    if (payerEditRequest) {
+      const requested = (payload.payers || []).find((item) => item.id === payerEditRequest);
+      payerEditRequest = "";
+      if (requested) fillForm(requested);
     }
 
     function payerRow(payer, isArchived) {

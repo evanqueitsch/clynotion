@@ -519,6 +519,12 @@
     .cg-form label.cg-choice, #cg-drawer label.cg-choice { display: flex; align-items: center; gap: 0.45rem; color: var(--ink); font-weight: 500; }
     .cg-choice input { width: auto; margin: 0; }
     .cg-history { font-size: 0.82rem; color: var(--muted); white-space: pre-wrap; }
+    textarea.cg-howto-input { min-height: 6.5rem; }
+    .cg-playbook { margin: 0.35rem 0 0.9rem; padding: 0.7rem 0.8rem; border: 1px solid var(--line); border-radius: 10px; background: #f4f8f6; }
+    .cg-playbook h4 { margin: 0 0 0.35rem; font-size: 0.95rem; }
+    .cg-playbook p { margin: 0.2rem 0; }
+    .cg-howto { white-space: pre-wrap; }
+    .cg-howto a { word-break: break-all; }
     .cg-confirm { margin-top: 0.5rem; padding: 0.6rem 0.7rem; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
     .cg-confirm p { margin: 0 0 0.5rem; }
     details > summary { cursor: pointer; margin: 0.6rem 0; }
@@ -799,7 +805,8 @@
       <div id="cg-profiles-section" class="hidden"></div>
       <div id="cg-payers-section" class="hidden"></div>
       <div id="cg-import-section" class="hidden">
-        <p class="meta">Upload payers.csv, people.csv, and grid.csv. Nothing is saved until you confirm. The encrypted file is backed up first.</p>
+        <p class="meta">Upload payers.csv, people.csv, and/or grid.csv. A payers-only file updates the playbook and does not change people or enrollments. Nothing is saved until you confirm. The encrypted file is backed up first.</p>
+        <p class="meta">Preferred payers.csv header: payer, family_members, type, accepts_licenses, notes, electronic_payer_id, practice_network, practice_network_note. The first five columns still work. Blank cells do not erase stored notes, licenses, payer IDs, or network status. A blank payer name with how-to text continues the previous payer.</p>
         <label>payers.csv<input id="cg-file-payers" type="file" accept=".csv,text/csv" /></label>
         <label>people.csv<input id="cg-file-people" type="file" accept=".csv,text/csv" /></label>
         <label>grid.csv<input id="cg-file-grid" type="file" accept=".csv,text/csv" /></label>
@@ -1056,7 +1063,7 @@
 
     <footer>Clynotion</footer>
   </main>
-  <script src="/static/credentialing.js?v=0.19.3"></script>
+  <script src="/static/credentialing.js?v=0.19.4"></script>
   <script src="/static/billing.js?v=0.19.2"></script>
   <script src="/static/employee.js?v=0.19.2"></script>
   <script>
