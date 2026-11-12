@@ -10,7 +10,15 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Optional
 
-from app.credentialing.csvio import ImportPlan
+from app.credentialing.csvio import (
+    PAYER_HEADERS_EXTENDED,
+    PRACTICE_NETWORKS,
+    ImportPlan,
+    append_howto,
+    display_payer_name,
+    normalize_payer_name,
+    union_labels,
+)
 from app.crypto import decrypt_utf8, encrypt_utf8
 from app.dates import DATE_HINT, calendar_date, parse_calendar_date, shift_calendar_date
 
@@ -217,6 +225,23 @@ class CredentialingStore:
             if isinstance(row, dict) and row.get("name") == name:
                 return row
         return None
+
+    def _by_payer_name(self, bucket: dict[str, Any], name: str) -> Optional[dict[str, Any]]:
+        """Payer match: trimmed, collapsed whitespace, case-insensitive. Active rows win."""
+        key = normalize_payer_name(name)
+        if not key:
+            return None
+        archived: Optional[dict[str, Any]] = None
+        for row in bucket.values():
+            if not isinstance(row, dict):
+                continue
+            if normalize_payer_name(str(row.get("name") or "")) != key:
+                continue
+            if not row.get("archived"):
+                return row
+            if archived is None:
+                archived = row
+        return archived
 
     def reminder_view(self, practice_id: str) -> dict[str, Any]:
         """Non-secret fields the reminder pass needs."""
@@ -647,6 +672,18 @@ class CredentialingStore:
                 current["credentials_expire"] = flag
             else:
                 current.pop("credentials_expire", None)
+        if "electronic_payer_id" in body:
+            current["electronic_payer_id"] = str(body.get("electronic_payer_id") or "").strip()
+        else:
+            current.setdefault("electronic_payer_id", "")
+        if "practice_network" in body:
+            current["practice_network"] = _practice_network(body.get("practice_network"))
+        else:
+            current["practice_network"] = _practice_network(current.get("practice_network"))
+        if "practice_network_note" in body:
+            current["practice_network_note"] = str(body.get("practice_network_note") or "").strip()
+        else:
+            current.setdefault("practice_network_note", "")
         self._save(payload)
         return _public_payer(current)
 
@@ -784,26 +821,58 @@ class CredentialingStore:
         return backup
 
     def _upsert_payer(self, row: dict[str, Any], item: dict[str, Any], *, actor: str, when: str) -> None:
-        current = self._by_name(row["payers"], item["name"])
-        if current is None:
-            payer_id = self._unique_id(row["payers"], item["name"])
-            current = {"id": payer_id, "archived": False}
-            row["payers"][payer_id] = current
-        current.update(
-            {
-                "name": item["name"],
-                "family_members": list(item["family_members"]),
-                "type": item["type"],
-                "accepts_licenses": list(item["accepts_licenses"]),
-                "notes": item["notes"],
-                "parent_payer": str(current.get("parent_payer") or ""),
-                "counties": list(current.get("counties") or []),
+        """Additive payer playbook write. Blank incoming fields keep the stored value.
+
+        Does not touch subjects, enrollments, counties, parent payer, credential
+        expiration, or secret fields. A matched payer keeps its stored name.
+        """
+        current = self._by_payer_name(row["payers"], item["name"])
+        creating = current is None
+        if creating:
+            shown = display_payer_name(str(item.get("name") or ""))
+            payer_id = self._unique_id(row["payers"], shown)
+            current = {
+                "id": payer_id,
+                "name": shown,
+                "type": str(item.get("type") or "").strip() or "commercial",
+                "family_members": [],
+                "accepts_licenses": [],
+                "notes": "",
+                "parent_payer": "",
+                "counties": [],
+                "electronic_payer_id": "",
+                "practice_network": "unknown",
+                "practice_network_note": "",
                 "archived": False,
-                "updated_by": actor,
-                "updated_at": when,
             }
-        )
-        current.setdefault("id", self._unique_id(row["payers"], item["name"]))
+            row["payers"][payer_id] = current
+        incoming_type = str(item.get("type") or "").strip()
+        if not creating and incoming_type and not str(current.get("type") or "").strip():
+            current["type"] = incoming_type
+        family = [str(part).strip() for part in (item.get("family_members") or []) if str(part).strip()]
+        if family:
+            current["family_members"] = union_labels(list(current.get("family_members") or []), family)
+        licenses = [str(part).strip() for part in (item.get("accepts_licenses") or []) if str(part).strip()]
+        if licenses:
+            current["accepts_licenses"] = union_labels(list(current.get("accepts_licenses") or []), licenses)
+        incoming_notes = str(item.get("notes") or "")
+        if incoming_notes.strip():
+            current["notes"] = append_howto(str(current.get("notes") or ""), incoming_notes)
+        electronic = str(item.get("electronic_payer_id") or "").strip()
+        if electronic:
+            current["electronic_payer_id"] = electronic
+        network = str(item.get("practice_network") or "").strip()
+        if network in PRACTICE_NETWORKS:
+            current["practice_network"] = network
+        elif creating:
+            current["practice_network"] = "unknown"
+        network_note = str(item.get("practice_network_note") or "").strip()
+        if network_note:
+            current["practice_network_note"] = network_note
+        current["archived"] = False
+        current["updated_by"] = actor
+        current["updated_at"] = when
+        current.setdefault("id", self._unique_id(row["payers"], str(current.get("name") or item["name"])))
 
     def _upsert_subject(self, row: dict[str, Any], item: dict[str, Any], *, actor: str, when: str) -> None:
         current = self._by_name(row["subjects"], item["name"])
@@ -884,8 +953,11 @@ class CredentialingStore:
         subjects = [item for item in row["subjects"].values() if isinstance(item, dict) and not item.get("archived")]
         payers.sort(key=lambda item: str(item.get("name") or "").casefold())
         subjects.sort(key=lambda item: (0 if item.get("kind") == "practice" else 1, str(item.get("name") or "").casefold()))
-        payer_lines = ["payer,family_members,type,accepts_licenses,notes"]
+        payer_lines = [",".join(PAYER_HEADERS_EXTENDED)]
         for payer in payers:
+            network = str(payer.get("practice_network") or "unknown")
+            if network not in PRACTICE_NETWORKS:
+                network = "unknown"
             payer_lines.append(
                 ",".join(
                     [
@@ -894,6 +966,9 @@ class CredentialingStore:
                         _csv(payer.get("type")),
                         _csv("; ".join(payer.get("accepts_licenses") or [])),
                         _csv(payer.get("notes")),
+                        _csv(payer.get("electronic_payer_id")),
+                        _csv(network),
+                        _csv(payer.get("practice_network_note")),
                     ]
                 )
             )
@@ -1091,7 +1166,21 @@ def _public_payer(row: dict[str, Any]) -> dict[str, Any]:
         "archived": bool(row.get("archived")),
         "credentials_expire": flag if isinstance(flag, bool) else None,
         "follow_up_days": interval,
+        "electronic_payer_id": str(row.get("electronic_payer_id") or "").strip(),
+        "practice_network": _practice_network(row.get("practice_network"), strict=False),
+        "practice_network_note": str(row.get("practice_network_note") or "").strip(),
     }
+
+
+def _practice_network(value: Any, *, strict: bool = True) -> str:
+    text = str(value or "").strip().lower()
+    if not text:
+        return "unknown"
+    if text not in PRACTICE_NETWORKS:
+        if strict:
+            raise ValueError("Practice network is not one of the allowed values.")
+        return "unknown"
+    return text
 
 
 def _public_history(events: list[Any]) -> list[dict[str, Any]]:

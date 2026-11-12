@@ -54,6 +54,9 @@ class PayerBody(BaseModel):
     parent_payer: str = ""
     counties: list[str] = Field(default_factory=list)
     credentials_expire: Optional[bool] = None
+    electronic_payer_id: str = ""
+    practice_network: str = "unknown"
+    practice_network_note: str = ""
 
 
 class EnrollmentBody(BaseModel):
@@ -317,12 +320,14 @@ async def _parsed(
     grid: Optional[UploadFile],
 ) -> tuple[Any, dict[str, Any]]:
     current = credentialing_store.public_grid(user.practice_id)
+    active_payers = [row for row in current["payers"] if not row.get("archived")]
     plan = build_plan(
         payers_csv=await _upload_text(payers),
         people_csv=await _upload_text(people),
         grid_csv=await _upload_text(grid),
-        existing_payers={row["name"] for row in current["payers"] if not row.get("archived")},
+        existing_payers={row["name"] for row in active_payers},
         existing_subjects={row["name"] for row in current["subjects"]},
+        existing_payer_types={row["name"]: row.get("type") or "" for row in active_payers},
     )
     return plan, {
         "errors": plan.errors,
