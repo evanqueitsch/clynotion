@@ -532,6 +532,15 @@
     .history-toggle { margin-top: 0.35rem; }
     .cg-confirm { margin-top: 0.5rem; padding: 0.6rem 0.7rem; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
     .cg-confirm p { margin: 0 0 0.5rem; }
+    .cg-link { border: 1px solid var(--line); border-radius: 12px; padding: 0.9rem 1rem; margin: 0.75rem 0; background: #fff; }
+    .cg-link h3 { margin: 0 0 0.35rem; font-size: 1.05rem; }
+    .cg-link h4 { margin: 0.9rem 0 0.3rem; font-size: 0.95rem; }
+    .cg-link p { margin: 0.25rem 0; }
+    .cg-link .cg-kept, .cg-link .cg-choice { white-space: pre-wrap; }
+    .cg-link-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; margin-top: 0.85rem; }
+    .cg-payer-row { justify-content: flex-start; }
+    .cg-payer-row .cg-link-pick { width: auto; margin: 0; flex: 0 0 auto; }
+    .cg-payer-name { flex: 1 1 auto; }
     details > summary { cursor: pointer; margin: 0.6rem 0; }
   </style>
 </head>
@@ -815,7 +824,7 @@
       <div id="cg-payers-section" class="hidden"></div>
       <div id="cg-import-section" class="hidden">
         <p class="meta">Upload payers.csv, people.csv, and/or grid.csv. A payers-only file updates the playbook and does not change people or enrollments. Nothing is saved until you confirm. The encrypted file is backed up first.</p>
-        <p class="meta">Preferred payers.csv header: payer, family_members, type, accepts_licenses, notes, electronic_payer_id, practice_network, practice_network_note. The first five columns still work. Blank cells do not erase stored notes, licenses, payer IDs, or network status. A blank payer name with how-to text continues the previous payer.</p>
+        <p class="meta">Preferred payers.csv header: payer, family_members, type, accepts_licenses, notes, electronic_payer_id, practice_network, practice_network_note. The first five columns still work. Blank cells do not erase stored notes, licenses, payer IDs, or network status. A blank payer name with how-to text continues the previous payer. A linked alias matches on a later payers-only import and updates the kept payer.</p>
         <label>payers.csv<input id="cg-file-payers" type="file" accept=".csv,text/csv" /></label>
         <label>people.csv<input id="cg-file-people" type="file" accept=".csv,text/csv" /></label>
         <label>grid.csv<input id="cg-file-grid" type="file" accept=".csv,text/csv" /></label>
@@ -1072,7 +1081,7 @@
 
     <footer>Clynotion</footer>
   </main>
-  <script src="/static/credentialing.js?v=0.19.5"></script>
+  <script src="/static/credentialing.js?v=0.19.9"></script>
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.19.7"></script>
   <script>
