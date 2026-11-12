@@ -334,7 +334,7 @@ def test_idle_logoff_and_small_health_are_in_the_ui(client: TestClient) -> None:
     assert "IDLE_LIMIT_MS = 20 * 60 * 1000" in page.text
     assert "20 minutes of inactivity" in page.text
     health = client.get("/health")
-    assert health.json()["version"] == "0.19.8"
+    assert health.json()["version"] == "0.19.9"
     assert "deepgram" not in health.text.casefold()
     assert "phi_path" not in health.json()
     script = client.get("/static/employee.js")
@@ -708,7 +708,7 @@ def test_employee_file_ui_hides_history_and_keeps_sections(client: TestClient) -
     assert "btn-employee-directory" in panel
     assert "Staff directory" in panel
     assert "employee.js?v=0.19.7" in page
-    assert "credentialing.js?v=0.19.8" in page
+    assert "credentialing.js?v=0.19.9" in page
     script = client.get("/static/employee.js").text
     assert "Change history" in script
     assert "JSON.stringify" not in script
