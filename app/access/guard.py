@@ -33,6 +33,10 @@ def required_permission(path: str) -> str | None:
         return None
     if path.startswith("/credentialing"):
         return "tool:credentialing"
+    if path.startswith("/employee/me"):
+        return "tool:employee_view"
+    if path.startswith("/employee"):
+        return "capability:hr_records_view"
     if path.startswith("/billing"):
         return "tool:billing"
     if path.startswith("/quickbooks"):

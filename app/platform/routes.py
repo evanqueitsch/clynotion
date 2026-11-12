@@ -182,6 +182,12 @@ def _open_tools(units: list[dict]) -> list[dict[str, str]]:
     return tools
 
 
+def _employee_rollout_on(user: CurrentUser) -> bool:
+    from app.employees.store import employees_store
+
+    return employees_store.rollout_enabled(user.practice_id)
+
+
 def _visible_units(user: CurrentUser) -> list[dict]:
     """Admin sees every catalog module. Everyone else sees granted live modules."""
     from app.access.resolve import permissions_for, sees_every_module
@@ -193,6 +199,8 @@ def _visible_units(user: CurrentUser) -> list[dict]:
     for unit in units:
         kept: list[dict] = []
         for tool in unit.get("tools") or []:
+            if tool.get("id") == "employee_view" and not full and not _employee_rollout_on(user):
+                continue
             if tool.get("status") == "planned":
                 if not full:
                     continue

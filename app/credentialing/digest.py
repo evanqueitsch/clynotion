@@ -11,7 +11,11 @@ def digest_enabled(practice_id: str) -> bool:
 
 
 def digest_preview(practice_id: str) -> str:
-    """Text only. No identifiers beyond reminder titles already on the due list."""
+    """Credentialing due titles only.
+
+    Never include Employee View fields: address, personal phone, personal
+    email, emergency contact, or other HR record values.
+    """
     lines = ["Credentialing items this week:"]
     bands = due_engine.bands(practice_id)
     items = [

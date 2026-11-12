@@ -20,7 +20,7 @@ def backup_once(path: Path) -> str:
     if key in _done or not path.is_file():
         return ""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-    dest = path.with_name(f"{path.name}.bak-0.18.0-{stamp}")
+    dest = path.with_name(f"{path.name}.bak-0.19.0-{stamp}")
     shutil.copy2(path, dest)
     _done.add(key)
     _names.append(dest.name)

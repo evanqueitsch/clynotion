@@ -19,6 +19,16 @@ CREDENTIALING_MANAGE = "capability:credentialing_manage"
 CREDENTIALING_PAYERS = "capability:credentialing_payers"
 CREDENTIALING_SENSITIVE = "capability:credentialing_sensitive"
 BILLING_TOOL = "tool:billing"
+HR_RECORDS_VIEW = "capability:hr_records_view"
+HR_RECORDS_MANAGE = "capability:hr_records_manage"
+HR_SENSITIVE = "capability:hr_sensitive"
+# Not applied in this deploy. When an Admin turns Employee View on, Roles &
+# access can add these to Billing. Manage stays off that list on purpose.
+BILLING_HR_WHEN_ROLLOUT = (
+    "tool:employee_view",
+    HR_RECORDS_VIEW,
+    HR_SENSITIVE,
+)
 QUICKBOOKS_MONEY = "capability:quickbooks_money"
 PAYROLL_QUICKBOOKS_PUSH = "capability:payroll_quickbooks_push"
 
@@ -121,6 +131,24 @@ def permission_registry() -> list[dict[str, Any]]:
                 "grantable": True,
                 "sensitive": True,
                 "note": "No route uses this yet. Grant it by name.",
+            },
+            {
+                "id": HR_RECORDS_VIEW,
+                "name": "View staff HR records",
+                "group": "capability",
+                "grantable": True,
+            },
+            {
+                "id": HR_RECORDS_MANAGE,
+                "name": "Edit staff HR records",
+                "group": "capability",
+                "grantable": True,
+            },
+            {
+                "id": HR_SENSITIVE,
+                "name": "See and export HR addresses and contacts",
+                "group": "capability",
+                "grantable": True,
             },
         ]
     )

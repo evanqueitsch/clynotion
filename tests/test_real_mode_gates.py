@@ -165,11 +165,14 @@ def client() -> TestClient:
     return TestClient(app)
 
 
-def test_health_reports_mode_and_phi_path_mock(client: TestClient) -> None:
+def test_health_reports_mode_without_internal_paths(client: TestClient) -> None:
     r = client.get("/health")
     assert r.status_code == 200
     body = r.json()
+    assert body["status"] == "ok"
     assert body["mode"] == "mock"
-    assert body["phi_path"] is False
-    assert body["asr"] == "mock"
-    assert body["llm"] == "mock"
+    assert set(body) == {"status", "version", "auth", "mode"}
+    text = r.text.casefold()
+    assert "phi_path" not in body
+    assert "deepgram" not in text
+    assert "anthropic" not in text

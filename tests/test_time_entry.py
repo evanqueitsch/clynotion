@@ -225,22 +225,22 @@ def test_health_shows_scheduled_mail_only_when_the_checkbox_and_cron_are_on(
     client: TestClient, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     health = client.get("/health").json()
-    assert health["scheduled_mail"] == "off"
-    assert health["time_mail_mode"] == "off"
-    assert health["cron_configured"] is False
+    assert "scheduled_mail" not in health
+    assert "time_mail_mode" not in health
+    assert "cron_configured" not in health
+    assert "phi_path" not in health
     monkeypatch.setenv("CRON_SECRET", "present-not-a-real-secret")
     armed = client.get("/health").json()
-    assert armed["scheduled_mail"] == "off"
-    assert armed["cron_configured"] is True
+    assert "cron_configured" not in armed
+    assert "present-not-a-real-secret" not in client.get("/health").text
     _roster()
     set_clock(WED)
     time_store.save_settings(_alice_user(), _settings(automation_enabled=True), WED)
     health = client.get("/health").json()
-    assert health["scheduled_mail"] == "on"
+    assert "scheduled_mail" not in health
     view = time_store.settings_view(_alice_user(), WED)
     assert view["scheduled_mail"] == "on"
     assert view["automation_enabled"] is True
-    assert health["time_mail_mode"] == "off"
     assert "present-not-a-real-secret" not in client.get("/health").text
 
 

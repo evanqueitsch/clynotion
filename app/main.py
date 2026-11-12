@@ -18,6 +18,7 @@ from app.access.guard import access_middleware
 from app.access.routes import router as access_router
 from app.billing.routes import router as billing_router
 from app.credentialing.routes import router as credentialing_router
+from app.employees.routes import router as employee_router
 from app.platform.routes import legacy as attune_legacy_router
 from app.platform.routes import router as platform_router
 from app.platform.due import (
@@ -97,6 +98,7 @@ app.include_router(platform_router)
 app.include_router(attune_legacy_router)
 app.include_router(access_router)
 app.include_router(credentialing_router)
+app.include_router(employee_router)
 app.include_router(billing_router)
 app.middleware("http")(access_middleware)
 
@@ -253,56 +255,13 @@ def _parse_present_form(present_json: Optional[str]) -> list[PresentMember]:
 
 @app.get("/health")
 def health() -> dict[str, Any]:
-    from app.hr.time_entry import scheduled_mail_status, time_store
-
-    # File mode loads the hours checkbox only inside the store lock.
-    if time_store._mode == "file":
-        with time_store.exclusive():
-            scheduled = scheduled_mail_status()
-    else:
-        scheduled = scheduled_mail_status()
-    modes = provider_modes()
-    data_path = os.environ.get("ATTUNE_CLINICIAN_DATA_PATH", "")
+    """Uptime check. No vendor names, data paths, or PHI-path details."""
     return {
         "status": "ok",
         "version": APP_VERSION,
         "auth": auth_mode(),
-        "product": "clynotion",
-        "tool": "supervision",
-        "shell": "clynotion",
-        "modality": "supervision",
-        "mode": modes["mode"],
-        "phi_path": modes["phi_path"],
-        "asr": modes["asr"],
-        "llm": modes["llm"],
-        "clinician_persistence": os.environ.get("ATTUNE_CLINICIAN_PERSISTENCE", "memory"),
-        "session_persistence": os.environ.get("ATTUNE_PERSISTENCE", "memory"),
-        "data_path": data_path,
-        "time_persistence": os.environ.get("ATTUNE_HR_TIME_PERSISTENCE", "memory"),
-        "time_data_path": os.environ.get("ATTUNE_HR_TIME_DATA_PATH", ""),
-        "time_mail_mode": _public_time_mail_mode(),
-        "cron_configured": bool((os.environ.get("CRON_SECRET") or "").strip()),
-        "scheduled_mail": scheduled,
-        "clocks_migrated": _clocks_migrated(),
+        "mode": provider_modes()["mode"],
     }
-
-
-def _clocks_migrated() -> int:
-    try:
-        from app.credentialing.store import clocks_migrated_total
-
-        return clocks_migrated_total()
-    except Exception:
-        return 0
-
-
-def _public_time_mail_mode() -> str:
-    mode = (os.environ.get("TIME_MAIL_MODE") or "off").strip().lower()
-    if mode in ("", "mock", "off"):
-        return "off"
-    if mode == "gmail":
-        return "gmail"
-    return "off"
 
 
 @app.get("/auth/config", response_model=AuthConfigResponse)
