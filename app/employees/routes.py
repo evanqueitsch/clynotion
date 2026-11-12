@@ -184,7 +184,78 @@ def employee_person(key: str, user: CurrentUser) -> dict[str, Any]:
     if not (sees_every_module(user) or has_permission(user, HR_RECORDS_VIEW)):
         raise HTTPException(status_code=403, detail="You do not have access to that.")
     reveal = sees_every_module(user) or has_permission(user, HR_SENSITIVE)
-    return _call(lambda: employees_store.view_record(user.practice_id, key, _actor(user), reveal=reveal))
+    body = _call(lambda: employees_store.view_record(user.practice_id, key, _actor(user), reveal=reveal))
+    return _with_access(body, user)
+
+
+def _with_access(body: dict[str, Any], user: CurrentUser) -> dict[str, Any]:
+    body["can_edit"] = bool(
+        sees_every_module(user)
+        or has_permission(user, HR_RECORDS_MANAGE)
+        or has_permission(user, CREDENTIALING_MANAGE)
+    )
+    body["can_reveal"] = bool(sees_every_module(user) or has_permission(user, HR_SENSITIVE))
+    return body
+
+
+def _people_file(user: CurrentUser, key: str) -> dict[str, Any]:
+    reveal = sees_every_module(user) or has_permission(user, HR_SENSITIVE)
+    body = employees_store.view_record(user.practice_id, key, _actor(user), reveal=reveal)
+    return _with_access(body, user)
+
+
+@router.put("/people/{key}/specialties")
+def save_person_specialties(key: str, body: SpecialtiesBody, user: CurrentUser) -> dict[str, Any]:
+    _open(user)
+    _manage(user)
+
+    def run() -> dict[str, Any]:
+        from app.credentialing.store import credentialing_store
+
+        email = employees_store.email_for_key(user.practice_id, key)
+        if email:
+            employees_store.save_specialties(user.practice_id, email, body.names, _actor(user))
+        elif "@" not in key:
+            credentialing_store.set_specialties(
+                user.practice_id, key.strip(), body.names, actor=_actor(user)
+            )
+        else:
+            employees_store.save_specialties(user.practice_id, key, body.names, _actor(user))
+        return _people_file(user, key)
+
+    return _call(run)
+
+
+@router.put("/people/{key}/trainings")
+def save_person_trainings(key: str, body: TrainingsBody, user: CurrentUser) -> dict[str, Any]:
+    _open(user)
+    _manage(user)
+
+    def run() -> dict[str, Any]:
+        email = employees_store.email_for_key(user.practice_id, key)
+        if not email:
+            raise ValueError("Link a Workspace account before saving trainings.")
+        items = [item.model_dump() for item in body.items]
+        employees_store.save_trainings(user.practice_id, email, items, _actor(user))
+        return _people_file(user, key)
+
+    return _call(run)
+
+
+@router.put("/people/{key}/certifications")
+def save_person_certifications(key: str, body: CertificationsBody, user: CurrentUser) -> dict[str, Any]:
+    _open(user)
+    _manage(user)
+
+    def run() -> dict[str, Any]:
+        email = employees_store.email_for_key(user.practice_id, key)
+        if not email:
+            raise ValueError("Link a Workspace account before saving certifications.")
+        items = [item.model_dump() for item in body.items]
+        employees_store.save_certifications(user.practice_id, email, items, _actor(user))
+        return _people_file(user, key)
+
+    return _call(run)
 
 
 @router.put("/people/{key}/workspace")

@@ -21,6 +21,7 @@ from app.credentialing.csvio import (
 )
 from app.crypto import decrypt_utf8, encrypt_utf8
 from app.dates import DATE_HINT, calendar_date, parse_calendar_date, shift_calendar_date
+from app.history_text import format_history_line
 
 ENV_PATH = "ATTUNE_CREDENTIALING_DATA_PATH"
 ENV_MODE = "ATTUNE_CREDENTIALING_PERSISTENCE"
@@ -1184,16 +1185,21 @@ def _practice_network(value: Any, *, strict: bool = True) -> str:
 
 
 def _public_history(events: list[Any]) -> list[dict[str, Any]]:
+    """Keep the stored change object and add a display line. Do not rewrite history."""
     out = []
     for event in events:
         if not isinstance(event, dict):
             continue
+        changes = event.get("changes") or {}
+        if not isinstance(changes, dict):
+            changes = {}
         out.append(
             {
                 "at": event.get("at") or "",
                 "by": event.get("by") or "",
                 "source": event.get("source") or "",
-                "changes": event.get("changes") or {},
+                "changes": changes,
+                "line": format_history_line(event),
             }
         )
     return out

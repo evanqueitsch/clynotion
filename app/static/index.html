@@ -525,6 +525,11 @@
     .cg-playbook p { margin: 0.2rem 0; }
     .cg-howto { white-space: pre-wrap; }
     .cg-howto a { word-break: break-all; }
+    .cg-history p, .history-log p { margin: 0.28rem 0; }
+    .history-log { font-size: 0.82rem; color: var(--muted); margin: 0.35rem 0 1rem; }
+    .file-identity { margin: 0.15rem 0 0.85rem; }
+    .file-identity h3 { margin: 0 0 0.15rem; }
+    .history-toggle { margin-top: 0.35rem; }
     .cg-confirm { margin-top: 0.5rem; padding: 0.6rem 0.7rem; border: 1px solid var(--line); border-radius: 8px; background: #fff; }
     .cg-confirm p { margin: 0 0 0.5rem; }
     details > summary { cursor: pointer; margin: 0.6rem 0; }
@@ -725,21 +730,25 @@
 
     <section id="employee-panel" class="panel hidden">
       <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
-        <h2 style="margin:0;">My record</h2>
-        <button class="ghost" id="btn-employee-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+        <h2 style="margin:0;">My employee file</h2>
+        <div style="display:flex;gap:0.5rem;align-items:center;">
+          <button class="ghost" id="btn-employee-directory" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Staff directory</button>
+          <button class="ghost" id="btn-employee-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+        </div>
       </div>
       <p class="status" id="employee-status"></p>
-      <div id="employee-link"></div>
-      <h3>Contact</h3>
+      <div id="employee-identity" class="file-identity"></div>
+      <h3>Contact and emergency contacts</h3>
       <div id="employee-contact"></div>
-      <div id="employee-credentialing"></div>
       <h3>Specialties</h3>
       <div id="employee-specialties"></div>
       <h3>Trainings</h3>
       <div id="employee-trainings"></div>
+      <h3>Certifications</h3>
+      <p class="meta">Examples: CPR/First Aid and mandated reporter. These save on the employee file and do not change credentialing.</p>
       <div id="employee-certifications"></div>
-      <h3>History</h3>
-      <div id="employee-history" class="due-list"></div>
+      <div id="employee-credentialing"></div>
+      <div id="employee-history"></div>
     </section>
 
     <section id="employees-panel" class="panel hidden">
@@ -1063,9 +1072,9 @@
 
     <footer>Clynotion</footer>
   </main>
-  <script src="/static/credentialing.js?v=0.19.4"></script>
-  <script src="/static/billing.js?v=0.19.2"></script>
-  <script src="/static/employee.js?v=0.19.2"></script>
+  <script src="/static/credentialing.js?v=0.19.5"></script>
+  <script src="/static/billing.js?v=0.19.5"></script>
+  <script src="/static/employee.js?v=0.19.5"></script>
   <script>
     const state = {
       token: null,

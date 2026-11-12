@@ -211,6 +211,7 @@ def test_license_change_waits_for_approval_and_return_needs_a_note(client: TestC
     assert credentialing_store.public_subject("practice-a", subject_id)["license_type"] == "LCSW"
     pending = client.get("/billing", headers=_alice()).json()["employee_pending"]
     assert pending[0]["field"] == "license_type"
+    assert pending[0]["field_label"] == "License type"
     assert pending[0]["proposed"] == "LSW"
     missing = client.post(
         f"/billing/employee-pending/{pending[0]['id']}/return",
@@ -333,7 +334,7 @@ def test_idle_logoff_and_small_health_are_in_the_ui(client: TestClient) -> None:
     assert "IDLE_LIMIT_MS = 20 * 60 * 1000" in page.text
     assert "20 minutes of inactivity" in page.text
     health = client.get("/health")
-    assert health.json()["version"] == "0.19.4"
+    assert health.json()["version"] == "0.19.5"
     assert "deepgram" not in health.text.casefold()
     assert "phi_path" not in health.json()
     script = client.get("/static/employee.js")
@@ -481,27 +482,28 @@ def test_history_lines_are_readable_and_omit_contact_values(client: TestClient) 
     assert any("Emergency contact name" in line for line in lines)
 
 
-def test_certifications_show_after_a_confirmed_link_and_save_like_trainings(client: TestClient) -> None:
-    blocked = client.put(
-        "/employee/me/certifications",
-        headers=_alice(),
-        json={"items": [{"name": "NCC", "issued_on": "2026-01-01", "expires_on": ""}]},
-    )
-    assert blocked.status_code == 422
-    assert client.get("/employee/me", headers=_alice()).json()["certifications"] == []
-    subject_id = _clinician(client)
-    client.put("/employee/me/link", headers=_alice(), json={"subject_id": subject_id})
+def test_certifications_save_for_any_staff_and_do_not_change_credentialing(client: TestClient) -> None:
     saved = client.put(
         "/employee/me/certifications",
         headers=_alice(),
-        json={"items": [{"name": "NCC", "issued_on": "2026-01-01", "expires_on": "2028-01-01"}]},
+        json={"items": [{"name": "CPR/First Aid", "issued_on": "2026-01-01", "expires_on": ""}]},
     )
     assert saved.status_code == 200, saved.text
-    assert saved.json()["is_clinician"] is True
-    assert saved.json()["credentialing"]["name"] == "QA Test Clinician"
-    assert saved.json()["certifications"][0]["name"] == "NCC"
+    assert saved.json()["is_clinician"] is False
+    assert "credentialing" not in saved.json()
+    assert saved.json()["certifications"][0]["name"] == "CPR/First Aid"
+    subject_id = _clinician(client)
+    profile = credentialing_store.public_subject("practice-a", subject_id)
+    assert profile is not None
+    assert not profile.get("certifications")
+    client.put("/employee/me/link", headers=_alice(), json={"subject_id": subject_id})
+    linked = client.get("/employee/me", headers=_alice()).json()
+    assert linked["is_clinician"] is True
+    assert linked["credentialing"]["name"] == "QA Test Clinician"
+    assert linked["certifications"][0]["name"] == "CPR/First Aid"
+    assert linked["credentialing"]["clock_labels"]["license_renewal"] == "License renewal"
     summaries = [item["summary"] for item in client.get("/billing", headers=_alice()).json()["employee_changes"]]
-    assert "Updated certifications: NCC" in summaries
+    assert "Updated certifications: CPR/First Aid" in summaries
     assert PHONE not in "\n".join(summaries)
     cleared = client.put("/employee/me/certifications", headers=_alice(), json={"items": []})
     assert cleared.json()["certifications"] == []
@@ -581,3 +583,140 @@ def test_directory_merges_email_match_and_leaves_workspace_only_rows(client: Tes
     page = client.get("/").text
     assert 'window.location.hash = "#employee"' in page
     assert 'window.location.hash = "#employees"' in page
+    assert body["specialties"] == []
+    assert body["trainings"] == []
+    assert body["certifications"] == []
+    assert "history" in body
+    assert "credentialing" not in body
+    assert body["show_credentialing"] is False
+
+
+def test_non_clinician_file_includes_sections_and_clinician_keeps_credentialing(
+    client: TestClient,
+) -> None:
+    specialties = client.put(
+        "/employee/me/specialties",
+        headers=_alice(),
+        json={"names": ["Front desk"]},
+    )
+    assert specialties.status_code == 200, specialties.text
+    trainings = client.put(
+        "/employee/me/trainings",
+        headers=_alice(),
+        json={"items": [{"name": "Safety", "completed_on": "2026-03-01"}]},
+    )
+    assert trainings.status_code == 200, trainings.text
+    certifications = client.put(
+        "/employee/me/certifications",
+        headers=_alice(),
+        json={"items": [{"name": "Mandated reporter", "issued_on": "2026-02-01", "expires_on": ""}]},
+    )
+    assert certifications.status_code == 200, certifications.text
+    me = client.get("/employee/me", headers=_alice()).json()
+    assert me["is_clinician"] is False
+    assert me["show_credentialing"] is False
+    assert "credentialing" not in me
+    assert me["specialties"] == ["Front desk"]
+    assert me["trainings"][0]["name"] == "Safety"
+    assert me["certifications"][0]["name"] == "Mandated reporter"
+    assert employees_store.rollout_enabled("practice-a") is False
+    person = client.get("/employee/people/alice@example.com", headers=_alice())
+    assert person.status_code == 200, person.text
+    opened = person.json()
+    assert opened["specialties"] == ["Front desk"]
+    assert opened["trainings"][0]["name"] == "Safety"
+    assert opened["certifications"][0]["name"] == "Mandated reporter"
+    assert "credentialing" not in opened
+    assert opened["can_edit"] is True
+    assert opened["history"]
+    assert PHONE not in json.dumps(opened["history"])
+    subject_id = _clinician(client)
+    linked = client.put("/employee/me/link", headers=_alice(), json={"subject_id": subject_id})
+    assert linked.status_code == 200, linked.text
+    clinician = linked.json()
+    assert clinician["is_clinician"] is True
+    assert clinician["show_credentialing"] is True
+    assert clinician["credentialing"]["license_type"] == "LCSW"
+    assert clinician["change_fields"][0] == {"id": "license_type", "label": "License type"}
+    again = client.get("/employee/people/alice@example.com", headers=_alice()).json()
+    assert again["credentialing"]["name"] == "QA Test Clinician"
+    assert again["certifications"][0]["name"] == "Mandated reporter"
+    assert again["credentialing"]["clock_labels"]["caqh_reattestation"] == "CAQH re-attestation"
+
+
+def test_hr_view_can_reveal_without_edit_and_manage_can_edit(client: TestClient) -> None:
+    client.put(
+        "/employee/me/contact",
+        headers=_alice(),
+        json=_contact(street=STREET, personal_phone=PHONE),
+    )
+    access_store.update_role_permissions(
+        "practice-a",
+        "clinician",
+        ["tool:employee_view", "capability:hr_records_view", "capability:hr_sensitive"],
+    )
+    access_store.set_assignment("practice-a", "viewer@example.com", "clinician")
+    client.put("/employee/rollout", headers=_alice(), json={"enabled": True})
+    viewer = _user("viewer@example.com", "viewer")
+    opened = client.get("/employee/people/alice@example.com", headers=viewer)
+    assert opened.status_code == 200, opened.text
+    body = opened.json()
+    assert body["can_edit"] is False
+    assert body["can_reveal"] is True
+    assert body["contact"]["street"] == STREET
+    assert body["contact_revealed"] is True
+    denied = client.put(
+        "/employee/people/alice@example.com/trainings",
+        headers=viewer,
+        json={"items": [{"name": "Safety", "completed_on": ""}]},
+    )
+    assert denied.status_code == 403
+    access_store.update_role_permissions(
+        "practice-a",
+        "clinician",
+        [
+            "tool:employee_view",
+            "capability:hr_records_view",
+            "capability:hr_sensitive",
+            "capability:hr_records_manage",
+        ],
+    )
+    managed = client.get("/employee/people/alice@example.com", headers=viewer).json()
+    assert managed["can_edit"] is True
+    saved = client.put(
+        "/employee/people/alice@example.com/specialties",
+        headers=viewer,
+        json={"names": ["Scheduling"]},
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["specialties"] == ["Scheduling"]
+    assert saved.json()["can_edit"] is True
+    client.put("/employee/rollout", headers=_alice(), json={"enabled": False})
+    assert employees_store.rollout_enabled("practice-a") is False
+
+
+def test_employee_file_ui_hides_history_and_keeps_sections(client: TestClient) -> None:
+    page = client.get("/").text
+    panel = page.split('id="employee-panel"', 1)[1].split('id="employees-panel"', 1)[0]
+    assert "My employee file" in panel
+    assert panel.index("employee-identity") < panel.index("employee-contact")
+    assert panel.index("employee-contact") < panel.index("employee-specialties")
+    assert panel.index("employee-specialties") < panel.index("employee-trainings")
+    assert panel.index("employee-trainings") < panel.index("employee-certifications")
+    assert panel.index("employee-certifications") < panel.index("employee-credentialing")
+    assert panel.index("employee-credentialing") < panel.index("employee-history")
+    assert "btn-employee-directory" in panel
+    assert "Staff directory" in panel
+    assert "employee.js?v=0.19.5" in page
+    assert "credentialing.js?v=0.19.5" in page
+    script = client.get("/static/employee.js").text
+    assert "Change history" in script
+    assert "JSON.stringify" not in script
+    assert 'window.location.hash = "#employees"' in script
+    credentialing = client.get("/static/credentialing.js").text
+    assert "event.line" in credentialing
+    assert "JSON.stringify(event.changes" not in credentialing
+    assert "Change history" in credentialing
+    billing = client.get("/static/billing.js").text
+    assert "field_label" in billing
+    assert "item.line" in billing

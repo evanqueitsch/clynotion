@@ -85,7 +85,7 @@
           const row = document.createElement("div");
           row.className = "due-row";
           const label = document.createElement("span");
-          label.textContent = item.summary + " (" + (item.actor || "") + ")";
+          label.textContent = item.line || ((item.summary || "Updated the record") + " (" + (item.actor || "") + ")");
           const done = document.createElement("button");
           done.type = "button";
           done.className = "ghost";
@@ -112,7 +112,7 @@
           const row = document.createElement("div");
           row.className = "due-row";
           const label = document.createElement("span");
-          label.textContent = item.field + (item.proposed ? ": " + item.proposed : "");
+          label.textContent = (item.field_label || item.field) + (item.proposed ? ": " + item.proposed : "");
           if (item.overdue) {
             const badge = document.createElement("span");
             badge.className = "badge";
