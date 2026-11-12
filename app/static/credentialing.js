@@ -523,6 +523,13 @@
       form.appendChild(name.wrap);
       form.appendChild(labeled("Kind", kind));
       form.appendChild(license.wrap);
+      const specialties = document.createElement("p");
+      specialties.className = "meta";
+      const specialtyNames = (subject.specialties || []).filter(Boolean);
+      specialties.textContent = specialtyNames.length
+        ? "Specialties: " + specialtyNames.join(", ")
+        : "Specialties: none yet";
+      form.appendChild(specialties);
       form.appendChild(hire.wrap);
       form.appendChild(device.wrap);
       form.appendChild(expires.wrap);

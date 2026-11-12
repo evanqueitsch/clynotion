@@ -52,6 +52,12 @@ def _coerce_reason(reason: Union[AuditReason, str, None]) -> Optional[AuditReaso
 
 
 class AuditLog:
+    """Supervision events stay in process memory. Persisting them is still open.
+
+    HR access events are not stored here. They live in the employees file and
+    are not discarded after a count.
+    """
+
     def __init__(self) -> None:
         self._events: list[dict[str, Any]] = []
 

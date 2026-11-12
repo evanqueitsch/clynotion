@@ -21,6 +21,8 @@ os.environ["ATTUNE_AUTH"] = "dev"
 os.environ["ATTUNE_HR_TIME_PERSISTENCE"] = "memory"
 os.environ["ATTUNE_ACCESS_PERSISTENCE"] = "memory"
 os.environ["ATTUNE_CREDENTIALING_PERSISTENCE"] = "memory"
+os.environ["ATTUNE_EMPLOYEES_PERSISTENCE"] = "memory"
+os.environ.pop("ATTUNE_EMPLOYEES_ENCRYPTION_KEY", None)
 os.environ["TIME_MAIL_MODE"] = "off"
 os.environ.pop("CRON_SECRET", None)
 os.environ.pop("GOOGLE_SA_JSON", None)
@@ -41,9 +43,11 @@ def _reset_clinician_store():
     time_store.reset()
     from app.access.store import access_store
     from app.credentialing.store import credentialing_store
+    from app.employees.store import employees_store
 
     access_store.reset()
     credentialing_store.reset()
+    employees_store.reset()
     access_store.set_assignment("practice-b", "bob@example.com", "clinician")
     access_store.update_role_permissions(
         "practice-b",
@@ -63,6 +67,7 @@ def _reset_clinician_store():
     time_store.reset()
     access_store.reset()
     credentialing_store.reset()
+    employees_store.reset()
     set_clock(None)
     clear_mailer_for_tests()
     clinician_store.reset()

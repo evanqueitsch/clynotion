@@ -405,8 +405,6 @@ class CredentialingStore:
                 "action": action,
             }
         )
-        if len(audit) > 500:
-            del audit[:-500]
         self._save(payload)
         return value
 
@@ -499,6 +497,108 @@ class CredentialingStore:
             )
         self._save(payload)
         return _public_subject(current)
+
+    def backup_store(self) -> None:
+        if not _file_mode():
+            return
+        from app.credentialing.backup import backup_once
+
+        backup_once(_path())
+
+    def list_subject_names(self, practice_id: str) -> list[dict[str, str]]:
+        _, row = self._load_practice(practice_id)
+        found: list[dict[str, str]] = []
+        for subject in row["subjects"].values():
+            if not isinstance(subject, dict) or subject.get("archived"):
+                continue
+            found.append(
+                {
+                    "id": str(subject.get("id") or ""),
+                    "name": str(subject.get("name") or ""),
+                    "kind": str(subject.get("kind") or ""),
+                }
+            )
+        return found
+
+    def public_subject(self, practice_id: str, subject_id: str) -> Optional[dict[str, Any]]:
+        _, row = self._load_practice(practice_id)
+        subject = row["subjects"].get(subject_id)
+        if not isinstance(subject, dict):
+            return None
+        return _public_subject(subject)
+
+    def set_specialties(
+        self, practice_id: str, subject_id: str, names: list[str], *, actor: str
+    ) -> None:
+        """Narrow write: specialties only. Other credentialing fields stay as they are."""
+        self.backup_store()
+        payload, row = self._load_practice(practice_id)
+        subject = row["subjects"].get(subject_id)
+        if not isinstance(subject, dict):
+            raise KeyError(subject_id)
+        cleaned: list[str] = []
+        for name in names:
+            text = str(name or "").strip()
+            if text and text not in cleaned:
+                cleaned.append(text)
+        old = [str(item) for item in (subject.get("specialties") or []) if str(item).strip()]
+        if old != cleaned:
+            subject.setdefault("history", []).append(
+                {
+                    "at": _now(),
+                    "by": (actor or "").strip().lower(),
+                    "source": "employee_view",
+                    "changes": {"specialties": {"old": ", ".join(old), "new": ", ".join(cleaned)}},
+                }
+            )
+        subject["specialties"] = cleaned
+        subject["updated_by"] = (actor or "").strip().lower()
+        subject["updated_at"] = _now()
+        self._save(payload)
+
+    def apply_approved_field(
+        self, practice_id: str, subject_id: str, field: str, value: str, *, actor: str
+    ) -> None:
+        """Apply one approved field through the normal subject save. Backs up first."""
+        self.backup_store()
+        _, row = self._load_practice(practice_id)
+        subject = row["subjects"].get(subject_id)
+        if not isinstance(subject, dict):
+            raise KeyError(subject_id)
+        from app.platform.catalog import CREDENTIAL_CLOCKS
+
+        clocks_allowed = {str(item["id"]) for item in CREDENTIAL_CLOCKS}
+        raw_clocks = subject.get("clocks") if isinstance(subject.get("clocks"), dict) else {}
+        body: dict[str, Any] = {
+            "id": subject_id,
+            "name": subject.get("name") or "",
+            "kind": subject.get("kind") or "clinician",
+            "license_type": subject.get("license_type") or "",
+            "hire_date": subject.get("hire_date") or "",
+            "device": subject.get("device") or "",
+            "license_state": subject.get("license_state") or "",
+            "license_expires_on": subject.get("license_expires_on") or "",
+            "caqh_attested_on": subject.get("caqh_attested_on") or "",
+            "supervisor_id": subject.get("supervisor_id") or "",
+            "legal_name": subject.get("legal_name") or "",
+            "service_address": subject.get("service_address") or "",
+            "active": bool(subject.get("active", True)),
+            "npi": subject.get("npi") or "",
+            "tin": subject.get("tin") or "",
+            "license_number": subject.get("license_number") or "",
+            "caqh_id": subject.get("caqh_id") or "",
+            "taxonomy": subject.get("taxonomy") or "",
+            "promise_id": subject.get("promise_id") or "",
+            "clocks": {str(key): "" if item is None else str(item) for key, item in raw_clocks.items()},
+        }
+        text = "" if value is None else str(value).strip()
+        if field in clocks_allowed:
+            body["clocks"][field] = text
+        elif field in body and field not in {"id", "name", "kind", "clocks"}:
+            body[field] = text
+        else:
+            raise ValueError("That field cannot be approved here.")
+        self.save_subject(practice_id, body, actor=actor)
 
     def save_payer(self, practice_id: str, body: dict[str, Any], *, actor: str) -> dict[str, Any]:
         payload, row = self._load_practice(practice_id)
@@ -600,8 +700,6 @@ class CredentialingStore:
                     "action": "export",
                 }
             )
-        if len(audit) > 500:
-            del audit[:-500]
         self._save(payload)
 
     def save_enrollment(self, practice_id: str, body: dict[str, Any], *, actor: str) -> dict[str, Any]:
@@ -876,6 +974,7 @@ def _public_subject(row: dict[str, Any]) -> dict[str, Any]:
         "active": bool(row.get("active", True)),
         "archived": bool(row.get("archived")),
         "clinician_id": row.get("clinician_id") or "",
+        "specialties": [str(item) for item in (row.get("specialties") or []) if str(item).strip()],
         "clocks": {str(key): str(value) for key, value in raw_clocks.items()},
         "npi_masked": mask_secret(str(row.get("npi") or "")),
         "tin_masked": mask_secret(str(row.get("tin") or "")),

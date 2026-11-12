@@ -19,7 +19,7 @@ from app.access.permissions import (
 from app.crypto import decrypt_utf8, encrypt_utf8
 
 # Bumped once. The migration only appends Billing grants.
-GRANTS_VERSION = 1
+GRANTS_VERSION = 2
 
 ENV_PATH = "ATTUNE_ACCESS_DATA_PATH"
 DEFAULT_PATH = ".attune_data/access_roles.enc"
@@ -72,30 +72,36 @@ class AccessStore:
         return payload
 
     def _upgrade_grants(self, row: dict[str, Any]) -> bool:
-        """Append new Billing grants. Never deletes a permission or an assignment."""
-        if int(row.get("grants_version") or 0) >= GRANTS_VERSION:
+        """Version 1 appends Billing grants. Version 2 only stamps the file.
+
+        Never deletes a permission or an assignment. Employee View capabilities
+        are not added to Billing here.
+        """
+        version = int(row.get("grants_version") or 0)
+        if version >= GRANTS_VERSION:
             return False
-        roles = row.setdefault("roles", {})
-        billing = roles.get("billing")
-        if not isinstance(billing, dict):
-            billing = {"name": "Billing", "permissions": [TIME_ENTRY]}
-            roles["billing"] = billing
-        perms = [item for item in (billing.get("permissions") or []) if isinstance(item, str)]
-        for item in NEW_BILLING_GRANTS:
-            if item not in perms:
-                perms.append(item)
-        billing["permissions"] = perms
-        billing.setdefault("name", "Billing")
+        if version < 1:
+            roles = row.setdefault("roles", {})
+            billing = roles.get("billing")
+            if not isinstance(billing, dict):
+                billing = {"name": "Billing", "permissions": [TIME_ENTRY]}
+                roles["billing"] = billing
+            perms = [item for item in (billing.get("permissions") or []) if isinstance(item, str)]
+            for item in NEW_BILLING_GRANTS:
+                if item not in perms:
+                    perms.append(item)
+            billing["permissions"] = perms
+            billing.setdefault("name", "Billing")
         row["grants_version"] = GRANTS_VERSION
         return True
 
-    def _backup_before_grants(self) -> None:
+    def _backup_before_grants(self, suffix: str) -> None:
         if os.environ.get("ATTUNE_ACCESS_PERSISTENCE") == "memory":
             return
         path = _path()
         if not path.is_file():
             return
-        dest = path.with_name(path.name + ".bak-grants-v1")
+        dest = path.with_name(path.name + suffix)
         if dest.exists():
             return
         shutil.copy2(path, dest)
@@ -103,11 +109,23 @@ class AccessStore:
     def _load(self) -> dict[str, Any]:
         payload = self._read()
         changed = False
+        needs_v1 = False
+        needs_v2 = False
         for row in (payload.get("practices") or {}).values():
-            if isinstance(row, dict) and self._upgrade_grants(row):
+            if not isinstance(row, dict):
+                continue
+            version = int(row.get("grants_version") or 0)
+            if self._upgrade_grants(row):
                 changed = True
+                if version < 1:
+                    needs_v1 = True
+                if version < 2:
+                    needs_v2 = True
         if changed:
-            self._backup_before_grants()
+            if needs_v1:
+                self._backup_before_grants(".bak-grants-v1")
+            if needs_v2:
+                self._backup_before_grants(".bak-grants-v2")
             self._save(payload)
         return payload
 
@@ -239,8 +257,6 @@ class AccessStore:
                         "action": "remove",
                     }
                 )
-        if len(events) > 200:
-            del events[:-200]
 
     def assignments_public(self, practice_id: str) -> list[dict[str, str]]:
         row = self.ensure(practice_id)

@@ -7,13 +7,14 @@ from typing import Any
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 
-from app.access.permissions import QUICKBOOKS_MONEY
+from app.access.permissions import CREDENTIALING_MANAGE, CREDENTIALING_SENSITIVE, HR_RECORDS_MANAGE, QUICKBOOKS_MONEY
 from app.access.resolve import has_permission, is_owner
 from app.auth import CurrentUser
 from app.comply.registry import ensure_seeded_clocks
 from app.credentialing.digest import digest_enabled, send_weekly_digest
 from app.credentialing.reminders import sync_reminders
 from app.credentialing.store import credentialing_store
+from app.employees.store import employees_store
 from app.platform.due import due_engine
 
 router = APIRouter(tags=["billing"])
@@ -23,6 +24,10 @@ BILLING_CODES = {"o4": "Encounter form reconciliation against notes", "o12": "Cl
 
 class DigestBody(BaseModel):
     enabled: bool
+
+
+class ReturnBody(BaseModel):
+    note: str = ""
 
 
 def _admin(user: CurrentUser) -> None:
@@ -84,6 +89,8 @@ def billing_home(user: CurrentUser) -> dict[str, Any]:
             {"name": "Credentialing grid", "href": "/#credentialing"},
             {"name": "Eligibility", "href": "/#eligibility"},
         ],
+        "employee_changes": employees_store.recent_changes(user.practice_id),
+        "employee_pending": employees_store.pending_queue(user.practice_id, reveal=False),
     }
 
 
@@ -111,6 +118,59 @@ def preview_digest(user: CurrentUser) -> dict[str, str | bool]:
     _admin(user)
     result = send_weekly_digest(user.practice_id)
     return result
+
+
+def _can_decide(user: CurrentUser) -> None:
+    if is_owner(user) or has_permission(user, CREDENTIALING_MANAGE) or has_permission(user, HR_RECORDS_MANAGE):
+        return
+    raise HTTPException(status_code=403, detail="You do not have access to that.")
+
+
+@router.post("/billing/employee-changes/{change_id}/review")
+def review_employee_change(change_id: str, user: CurrentUser) -> dict[str, bool]:
+    try:
+        employees_store.mark_reviewed(user.practice_id, change_id, (user.email or "").strip().lower())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Change not found.") from exc
+    return {"ok": True}
+
+
+@router.post("/billing/employee-pending/{pending_id}/approve")
+def approve_employee_pending(pending_id: str, user: CurrentUser) -> dict[str, bool]:
+    _can_decide(user)
+    try:
+        employees_store.approve(user.practice_id, pending_id, (user.email or "").strip().lower())
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Change not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@router.post("/billing/employee-pending/{pending_id}/return")
+def return_employee_pending(pending_id: str, body: ReturnBody, user: CurrentUser) -> dict[str, bool]:
+    _can_decide(user)
+    try:
+        employees_store.return_pending(
+            user.practice_id, pending_id, (user.email or "").strip().lower(), body.note
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Change not found.") from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    return {"ok": True}
+
+
+@router.post("/billing/employee-pending/{pending_id}/reveal")
+def reveal_employee_pending(pending_id: str, user: CurrentUser) -> dict[str, str]:
+    if not (is_owner(user) or has_permission(user, CREDENTIALING_SENSITIVE)):
+        raise HTTPException(status_code=403, detail="You do not have access to that.")
+    try:
+        return employees_store.reveal_pending(
+            user.practice_id, pending_id, (user.email or "").strip().lower()
+        )
+    except KeyError as exc:
+        raise HTTPException(status_code=404, detail="Change not found.") from exc
 
 
 @router.get("/quickbooks")

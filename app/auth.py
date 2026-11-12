@@ -18,6 +18,7 @@ ENV_JWT_SECRET = "ATTUNE_JWT_SECRET"
 ENV_AUTH_MODE = "ATTUNE_AUTH"
 COOKIE_NAME = "attune_token"
 _ALGORITHM = "HS256"
+# Absolute cap stays 12 hours. The signed-in UI also signs out after 20 minutes idle.
 _TOKEN_TTL_SEC = 60 * 60 * 12
 
 _security = HTTPBearer(auto_error=False)

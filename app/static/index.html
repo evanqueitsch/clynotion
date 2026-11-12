@@ -528,6 +528,7 @@
       </div>
       <div class="topbar-user hidden" id="topbar-user">
         <span class="who" id="signed-in-as"></span>
+        <span class="meta" id="idle-note">Signs out after 20 minutes of inactivity.</span>
         <button id="btn-top-roles" class="primary" type="button">Roles &amp; access</button>
         <button id="btn-logout" type="button">Sign out</button>
       </div>
@@ -704,7 +705,44 @@
       <label id="billing-digest-wrap">Weekly digest
         <input id="billing-digest" type="checkbox" />
       </label>
-      <p class="meta">Off until an Admin turns it on. Turning it on does not send mail by itself.</p>
+      <p class="meta">Off until an Admin turns it on. Turning it on does not send mail by itself. The digest never includes addresses, personal phone, personal email, or emergency contacts.</p>
+      <h3>Recent employee changes</h3>
+      <div id="billing-employee-changes" class="due-list"></div>
+      <h3>Credentialing changes waiting on approval</h3>
+      <p class="meta">These do not change the credentialing record until approved. Returning one requires a note. Nothing here is emailed.</p>
+      <div id="billing-employee-pending" class="due-list"></div>
+    </section>
+
+    <section id="employee-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">My record</h2>
+        <button class="ghost" id="btn-employee-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <p class="status" id="employee-status"></p>
+      <div id="employee-link"></div>
+      <h3>Contact</h3>
+      <div id="employee-contact"></div>
+      <div id="employee-credentialing"></div>
+      <h3>Specialties</h3>
+      <div id="employee-specialties"></div>
+      <h3>Trainings</h3>
+      <div id="employee-trainings"></div>
+      <h3>History</h3>
+      <div id="employee-history" class="due-list"></div>
+    </section>
+
+    <section id="employees-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">Staff directory</h2>
+        <button class="ghost" id="btn-employees-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <p class="status" id="employees-status"></p>
+      <label id="employees-rollout-wrap" class="hidden">Employee View for staff
+        <input id="employees-rollout" type="checkbox" />
+      </label>
+      <p class="meta">Off until an Admin turns it on. Staff do not see Employee View while this is off.</p>
+      <div id="employees-directory" class="due-list"></div>
+      <div id="employees-record"></div>
     </section>
 
     <section id="credentialing-panel" class="panel hidden">
@@ -1013,8 +1051,9 @@
 
     <footer>Clynotion</footer>
   </main>
-  <script src="/static/credentialing.js?v=0.18.2"></script>
-  <script src="/static/billing.js?v=0.18.2"></script>
+  <script src="/static/credentialing.js?v=0.19.0"></script>
+  <script src="/static/billing.js?v=0.19.0"></script>
+  <script src="/static/employee.js?v=0.19.0"></script>
   <script>
     const state = {
       token: null,
@@ -1128,17 +1167,42 @@
       return map[code] || "Sign-in failed.";
     }
 
+    const IDLE_LIMIT_MS = 20 * 60 * 1000;
+    let idleTimer = 0;
+
+    function clearIdle() {
+      if (idleTimer) window.clearTimeout(idleTimer);
+      idleTimer = 0;
+    }
+
+    function armIdle() {
+      clearIdle();
+      if (!state.user && !state.token) return;
+      idleTimer = window.setTimeout(() => {
+        idleTimer = 0;
+        doLogout("Signed out after 20 minutes of inactivity.");
+      }, IDLE_LIMIT_MS);
+    }
+
     function setSignedInChrome(me) {
       const bar = $("topbar-user");
       const who = $("signed-in-as");
       if (me) {
         if (who) who.textContent = me.email || me.username || "Signed in";
         if (bar) bar.classList.remove("hidden");
+        armIdle();
       } else {
         if (who) who.textContent = "";
         if (bar) bar.classList.add("hidden");
+        clearIdle();
       }
     }
+
+    ["click", "keydown", "mousemove", "touchstart"].forEach((name) => {
+      document.addEventListener(name, () => {
+        if (state.user || state.token) armIdle();
+      }, { passive: true });
+    });
 
     const ROLE_OPTIONS = [
       { value: "admin", label: "Admin" },
@@ -1176,7 +1240,8 @@
       return head;
     }
 
-    async function doLogout() {
+    async function doLogout(reason) {
+      clearIdle();
       try {
         await api("/auth/logout", { method: "POST" });
       } catch {
@@ -1186,7 +1251,7 @@
       state.user = null;
       setSignedInChrome(null);
       show("auth-panel");
-      setStatus($("auth-status"), "Signed out", "ok");
+      setStatus($("auth-status"), reason || "Signed out", "ok");
       await bootstrapAuth();
     }
 
@@ -2112,6 +2177,8 @@
         const wantOnboarding = hash === "#onboarding";
         const wantCredentialing = hash === "#credentialing" || hash.indexOf("#credentialing?") === 0;
         const wantBilling = hash === "#billing";
+        const wantEmployee = hash === "#employee";
+        const wantEmployees = hash === "#employees";
         const timeRoute = hashRoute();
         if (timeRoute.path === "time-admin" && timeRoute.params.get("v") && $("time-admin-version")) {
           $("time-admin-version").value = timeRoute.params.get("v");
@@ -2149,6 +2216,10 @@
           await openCredentialing();
         } else if (wantBilling) {
           await openBilling();
+        } else if (wantEmployee) {
+          await openEmployee();
+        } else if (wantEmployees) {
+          await openEmployees();
         } else if (wantOnboarding) {
           await openOnboarding();
         } else if (wantTime) {
@@ -2171,7 +2242,7 @@
     }
 
     function show(panel) {
-      ["auth-panel", "no-access-panel", "access-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel", "credentialing-panel", "billing-panel", "time-panel", "time-admin-panel", "time-settings-panel", "time-self-test-panel"].forEach((id) => {
+      ["auth-panel", "no-access-panel", "access-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel", "credentialing-panel", "billing-panel", "employee-panel", "employees-panel", "time-panel", "time-admin-panel", "time-settings-panel", "time-self-test-panel"].forEach((id) => {
         $(id).classList.toggle("hidden", id !== panel);
       });
       document.body.classList.toggle("credentialing-open", panel === "credentialing-panel");
@@ -2222,6 +2293,8 @@
       if (href.includes("eligibility")) return openEligibility();
       if (href.includes("credentialing")) return window.openCredentialing();
       if (href.includes("#billing")) return window.openBilling();
+      if (href.includes("#employees")) return window.openEmployees();
+      if (href.includes("#employee")) return window.openEmployee();
       if (href.includes("onboarding")) return openOnboarding();
       if (href.includes("time-self-test")) return openTimeSelfTest();
       if (href.includes("time-settings")) return openTimeSettings();
@@ -3792,12 +3865,24 @@
       show("capture-panel");
     };
 
+    async function openEmployee() {
+      show("employee-panel");
+      if (window.clyEmployee) await window.clyEmployee.openSelf();
+    }
+
+    async function openEmployees() {
+      show("employees-panel");
+      if (window.clyEmployee) await window.clyEmployee.openDirectory();
+    }
+
+    window.openEmployee = openEmployee;
+    window.openEmployees = openEmployees;
     window.clynotion = { api, show, setStatus, $, state };
 
     window.addEventListener("hashchange", () => {
       if (!state.user || !state.access || state.access.landing === "none") return;
       const route = hashRoute();
-      if (state.access.landing === "time" && route.path !== "time" && route.path !== "onboarding" && route.path !== "credentialing") return;
+      if (state.access.landing === "time" && route.path !== "time" && route.path !== "onboarding" && route.path !== "credentialing" && route.path !== "employee" && route.path !== "employees") return;
       if (route.path === "roles") openAccess();
       else if (route.path === "time-settings") openTimeSettings();
       else if (route.path === "time-admin") openTimeAdmin(route.params.get("week") || "");
@@ -3810,6 +3895,8 @@
       else if (route.path === "eligibility") openEligibility();
       else if (route.path === "credentialing") openCredentialing();
       else if (route.path === "billing") openBilling();
+      else if (route.path === "employee") openEmployee();
+      else if (route.path === "employees") openEmployees();
       else if (route.path === "onboarding") openOnboarding();
       else if (route.path === "supervision" || route.path === "clynotion") openSupervision();
       else if (!route.path) enterHome();

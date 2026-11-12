@@ -95,7 +95,10 @@ def test_catalog_order_retired_tool_and_billing_placeholder(client: TestClient) 
         "credentialing",
         "hiring_onboarding",
     ]
-    assert hr["tools"][0]["coming_soon"] is True
+    assert hr["tools"][0]["status"] == "live"
+    assert hr["tools"][0]["href"] == "/#employee"
+    assert hr["tools"][0].get("coming_soon") is not True
+    assert hr["tools"][0]["requires_explicit_grant"] is True
     assert hr["tools"][1]["id"] == "time_entry"
     cred = hr["tools"][2]
     assert cred["status"] == "live"
