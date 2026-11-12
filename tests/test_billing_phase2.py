@@ -53,6 +53,9 @@ def _seed_pair(
     clocks: dict | None = None,
     subject_id: str = "",
     payer_id: str = "",
+    has_expiration: bool | None = None,
+    enrollment_expires: str = "",
+    follow: str = "",
 ) -> tuple[str, str]:
     payer = credentialing_store.save_payer(
         "practice-a",
@@ -77,18 +80,19 @@ def _seed_pair(
         },
         actor="qa",
     )
-    credentialing_store.save_enrollment(
-        "practice-a",
-        {
-            "subject_id": subject["id"],
-            "payer_id": payer["id"],
-            "status": status,
-            "submitted_on": submitted,
-            "effective_on": effective,
-            "note": "QA note",
-        },
-        actor="qa",
-    )
+    enrollment = {
+        "subject_id": subject["id"],
+        "payer_id": payer["id"],
+        "status": status,
+        "submitted_on": submitted,
+        "effective_on": effective,
+        "note": "QA note",
+    }
+    if has_expiration is not None:
+        enrollment["has_expiration"] = has_expiration
+        enrollment["expires_on"] = enrollment_expires
+        enrollment["next_follow_up"] = follow
+    credentialing_store.save_enrollment("practice-a", enrollment, actor="qa")
     return subject["id"], payer["id"]
 
 
@@ -124,20 +128,40 @@ def test_follow_up_and_stalled_clear_when_status_changes() -> None:
     assert not any(ref.startswith("follow_up|") or ref.startswith("stalled|") for ref in _refs())
 
 
-def test_recredential_reminders_clear_on_new_effective_date() -> None:
+def test_recredential_reminders_follow_the_expiration_date() -> None:
     due_engine.reset()
     credentialing_store.reset()
     subject_id, payer_id = _seed_pair(status="in_network", effective=_day(-(1095 - 40)))
+    counts = sync_reminders("practice-a", "qa-user")
+    assert "recredential_90" not in counts
+    assert "recredential_30" not in counts
+    _seed_pair(
+        status="in_network",
+        effective=_day(-10),
+        has_expiration=True,
+        enrollment_expires=_day(40),
+        subject_id=subject_id,
+        payer_id=payer_id,
+    )
     counts = sync_reminders("practice-a", "qa-user")
     assert counts.get("recredential_90") == 1
     assert counts.get("recredential_30") == 1
     old = {ref for ref in _refs() if ref.startswith("recredential_")}
     assert old
-    _seed_pair(status="in_network", effective=_day(-1), subject_id=subject_id, payer_id=payer_id)
+    _seed_pair(
+        status="in_network",
+        has_expiration=True,
+        enrollment_expires=_day(400),
+        subject_id=subject_id,
+        payer_id=payer_id,
+    )
     sync_reminders("practice-a", "qa-user")
     new = {ref for ref in _refs() if ref.startswith("recredential_")}
     assert new
     assert new.isdisjoint(old)
+    _seed_pair(status="in_network", has_expiration=False, subject_id=subject_id, payer_id=payer_id)
+    sync_reminders("practice-a", "qa-user")
+    assert not any(ref.startswith("recredential_") or ref.startswith("expiration_follow_up|") for ref in _refs())
 
 
 def test_license_caqh_and_clock_reminders_clear_on_new_dates() -> None:
@@ -339,7 +363,9 @@ def test_clock_fields_save_on_the_clinician_and_survive_reload() -> None:
     assert again["clocks"]["license_renewal"] == "2026-01-15"
     assert "malpractice_rider" not in (other.get("clocks") or {})
     script = open("app/static/credentialing.js", encoding="utf-8").read()
-    assert 'type === "date"' in script
+    assert 'placeholder = "MM/DD/YYYY"' in script
+    assert "Use Nov 9, 2026 as 11/09/2026." in script
+    assert 'input.type = "date"' not in script
     assert "cg-profile-pick" in script and "previous" in script
 
 

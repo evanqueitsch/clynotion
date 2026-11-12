@@ -53,6 +53,7 @@ class PayerBody(BaseModel):
     notes: str = ""
     parent_payer: str = ""
     counties: list[str] = Field(default_factory=list)
+    credentials_expire: Optional[bool] = None
 
 
 class EnrollmentBody(BaseModel):
@@ -61,7 +62,9 @@ class EnrollmentBody(BaseModel):
     status: str = "unknown"
     submitted_on: str = ""
     effective_on: str = ""
+    expires_on: str = ""
     next_follow_up: str = ""
+    has_expiration: Optional[bool] = None
     note: str = ""
     payer_provider_id: Optional[str] = None
 
@@ -157,7 +160,9 @@ def post_payer(body: PayerBody, user: CurrentUser) -> dict[str, Any]:
     _need(user, CREDENTIALING_PAYERS)
     try:
         return credentialing_store.save_payer(
-            user.practice_id, body.model_dump(), actor=user.email or user.username
+            user.practice_id,
+            body.model_dump(exclude_unset=True),
+            actor=user.email or user.username,
         )
     except ValueError as exc:
         raise _value_error(exc) from exc
@@ -167,7 +172,7 @@ def post_payer(body: PayerBody, user: CurrentUser) -> dict[str, Any]:
 def put_payer(payer_id: str, body: PayerBody, user: CurrentUser) -> dict[str, Any]:
     _need(user, CREDENTIALING_MANAGE)
     _need(user, CREDENTIALING_PAYERS)
-    payload = body.model_dump()
+    payload = body.model_dump(exclude_unset=True)
     payload["id"] = payer_id
     try:
         return credentialing_store.save_payer(
@@ -208,7 +213,9 @@ def put_enrollment(body: EnrollmentBody, user: CurrentUser) -> dict[str, Any]:
     _need(user, CREDENTIALING_MANAGE)
     try:
         return credentialing_store.save_enrollment(
-            user.practice_id, body.model_dump(), actor=user.email or user.username
+            user.practice_id,
+            body.model_dump(exclude_unset=True),
+            actor=user.email or user.username,
         )
     except KeyError as exc:
         raise HTTPException(status_code=404, detail="Enrollment not found.") from exc

@@ -66,7 +66,7 @@
   function cellLabel(cell) {
     let warn = cell && cell.display === "warning" ? (cell.license_warning || "") : "";
     if (cell && cell.follow_up_overdue) {
-      warn = (warn ? warn + " " : "") + "Follow-up due " + (cell.follow_up_on || "");
+      warn = (warn ? warn + " " : "") + "Follow-up due " + (formatUsDate(cell.follow_up_on) || cell.follow_up_on || "");
     }
     if (!cell || cell.status === "unknown" || cell.display === "suggested") {
       if (cell && (cell.display === "suggested" || cell.suggestion_reason)) {
@@ -76,7 +76,9 @@
     }
     if (cell.status === "in_network") return { text: "Y", cls: "cg-y", title: "In network", warn: warn };
     if (cell.status === "not_eligible") return { text: "X", cls: "cg-x", title: "Not eligible", warn: "" };
-    if (cell.status === "pending") return { text: cell.submitted_on || "Pending", cls: "cg-pending", title: "Pending", warn: warn };
+    if (cell.status === "pending") {
+      return { text: formatUsDate(cell.submitted_on) || cell.submitted_on || "Pending", cls: "cg-pending", title: "Pending", warn: warn };
+    }
     if (cell.status === "needs_review") return { text: "?", cls: "cg-review", title: "Needs review", warn: warn };
     return { text: cell.status, cls: "", title: cell.status, warn: warn };
   }
@@ -296,6 +298,48 @@
     return pre;
   }
 
+  const DATE_HINT = "Use Nov 9, 2026 as 11/09/2026.";
+
+  function normalizeCalendarDate(value) {
+    const raw = String(value == null ? "" : value).trim();
+    if (!raw) return "";
+    let match = raw.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T ].+)?$/);
+    if (!match) match = raw.match(/^(\d{4})[./](\d{1,2})[./](\d{1,2})$/);
+    if (match) return ymd(Number(match[1]), Number(match[2]), Number(match[3]));
+    match = raw.match(/^(\d{1,2})[./](\d{1,2})[./](\d{2}|\d{4})$/) || raw.match(/^(\d{1,2})-(\d{1,2})-(\d{2}|\d{4})$/);
+    if (!match) return null;
+    return ymd(expandYear(match[3]), Number(match[1]), Number(match[2]));
+  }
+
+  function expandYear(token) {
+    const number = Number(token);
+    if (String(token).length === 2) return number <= 68 ? 2000 + number : 1900 + number;
+    return number;
+  }
+
+  function ymd(year, month, day) {
+    if (month < 1 || month > 12 || day < 1 || day > 31) return null;
+    const dt = new Date(Date.UTC(year, month - 1, day));
+    if (dt.getUTCFullYear() !== year || dt.getUTCMonth() !== month - 1 || dt.getUTCDate() !== day) return null;
+    return String(year) + "-" + String(month).padStart(2, "0") + "-" + String(day).padStart(2, "0");
+  }
+
+  function formatUsDate(value) {
+    const iso = normalizeCalendarDate(value);
+    if (iso === "") return "";
+    if (!iso) return String(value || "").trim();
+    const parts = iso.split("-");
+    return parts[1] + "/" + parts[2] + "/" + parts[0];
+  }
+
+  function readDate(input) {
+    const raw = String(input.value || "").trim();
+    if (!raw) return "";
+    const iso = normalizeCalendarDate(raw);
+    if (!iso) throw new Error(DATE_HINT);
+    return iso;
+  }
+
   function openDrawer(payer, subject, cell) {
     const drawer = $("cg-drawer");
     drawer.classList.remove("hidden");
@@ -321,23 +365,77 @@
       status.appendChild(option);
     });
     status.value = (cell && cell.status) || "unknown";
-    const submitted = field("Submitted on", (cell && cell.submitted_on) || "");
-    const effective = field("Effective on", (cell && cell.effective_on) || "");
-    const follow = fieldDate("Next follow-up", (cell && (cell.next_follow_up || cell.follow_up_on)) || "", "");
+    const submitted = fieldDate("Submitted on", (cell && cell.submitted_on) || "", "", "");
+    const effective = fieldDate("Effective on", (cell && cell.effective_on) || "", "", "");
+    const expires = fieldDate("Expiration date", (cell && cell.expires_on) || "", "", "");
+    const follow = fieldDate("Follow-up date", (cell && cell.next_follow_up) || "", "", "90 days before expiration unless you change it.");
     const provider = field("Payer provider ID", "");
     provider.input.placeholder = (cell && cell.payer_provider_id_masked) || "Leave blank to keep";
     const note = document.createElement("textarea");
     note.value = (cell && cell.note) || "";
     note.rows = 3;
+    const appNote = document.createElement("p");
+    appNote.className = "meta";
+    const expireBox = document.createElement("fieldset");
+    expireBox.className = "cg-expire";
+    const legend = document.createElement("legend");
+    legend.textContent = "Credential expiration";
+    expireBox.appendChild(legend);
+    const yes = radioChoice("Credentials expire", "yes");
+    const no = radioChoice("No expiration", "no");
+    expireBox.appendChild(yes.wrap);
+    expireBox.appendChild(no.wrap);
+    const initial = expirationChoice(cell, payer);
+    if (initial === "yes") yes.input.checked = true;
+    if (initial === "no") no.input.checked = true;
     drawer.appendChild(labeled("Status", status));
     drawer.appendChild(submitted.wrap);
     drawer.appendChild(effective.wrap);
+    drawer.appendChild(appNote);
+    drawer.appendChild(expireBox);
+    drawer.appendChild(expires.wrap);
     drawer.appendChild(follow.wrap);
     drawer.appendChild(provider.wrap);
     drawer.appendChild(labeled("Note", note));
     if (cell && cell.payer_provider_id_masked) {
       drawer.appendChild(secretRow("Payer provider ID", cell.payer_provider_id_masked, "payer_provider_id", subject.id, payer.id));
     }
+    function selectedExpiration() {
+      if (yes.input.checked) return "yes";
+      if (no.input.checked) return "no";
+      return "";
+    }
+    function refreshExpiration() {
+      const show = selectedExpiration() === "yes";
+      expires.wrap.classList.toggle("hidden", !show);
+      follow.wrap.classList.toggle("hidden", !show);
+      if (show && !follow.input.value.trim()) {
+        const iso = normalizeCalendarDate(expires.input.value);
+        if (iso) follow.input.value = formatUsDate(addDays(iso, -90));
+      }
+    }
+    function refreshApplication() {
+      const pending = status.value === "pending" || status.value === "submitted";
+      const iso = normalizeCalendarDate(submitted.input.value);
+      const days = Number(payer.follow_up_days) > 0 ? Number(payer.follow_up_days) : 14;
+      if (!pending || !iso) {
+        appNote.textContent = "";
+        appNote.classList.add("hidden");
+        return;
+      }
+      appNote.classList.remove("hidden");
+      appNote.textContent = "Application follow-up " + formatUsDate(addDays(iso, days)) + ", from the submitted date.";
+    }
+    yes.input.addEventListener("change", refreshExpiration);
+    no.input.addEventListener("change", refreshExpiration);
+    expires.input.addEventListener("change", () => {
+      if (follow.input.value.trim()) return;
+      refreshExpiration();
+    });
+    status.addEventListener("change", refreshApplication);
+    submitted.input.addEventListener("change", refreshApplication);
+    refreshExpiration();
+    refreshApplication();
     const save = document.createElement("button");
     save.type = "button";
     save.className = "primary";
@@ -349,16 +447,34 @@
       result.className = "status";
       result.textContent = "Saving…";
       setMessage("Saving…");
-      const body = {
-        subject_id: subject.id,
-        payer_id: payer.id,
-        status: status.value,
-        submitted_on: submitted.input.value.trim(),
-        effective_on: effective.input.value.trim(),
-        next_follow_up: follow.input.value.trim(),
-        note: note.value,
-        payer_provider_id: provider.input.value.trim() ? provider.input.value.trim() : null,
-      };
+      let body;
+      try {
+        const choice = selectedExpiration();
+        if (!choice) throw new Error("Choose whether credentials expire.");
+        body = {
+          subject_id: subject.id,
+          payer_id: payer.id,
+          status: status.value,
+          submitted_on: readDate(submitted.input),
+          effective_on: readDate(effective.input),
+          has_expiration: choice === "yes",
+          note: note.value,
+          payer_provider_id: provider.input.value.trim() ? provider.input.value.trim() : null,
+        };
+        if (choice === "yes") {
+          body.expires_on = readDate(expires.input);
+          if (!body.expires_on) throw new Error("Enter an expiration date. " + DATE_HINT);
+          body.next_follow_up = readDate(follow.input) || addDays(body.expires_on, -90);
+        } else {
+          body.expires_on = "";
+          body.next_follow_up = "";
+        }
+      } catch (error) {
+        result.className = "status error";
+        result.textContent = errText(error);
+        setMessage(errText(error), "error");
+        return;
+      }
       try {
         await bridge().api("/credentialing/enrollments", { method: "PUT", json: body });
         await reload();
@@ -384,10 +500,35 @@
     drawer.appendChild(historyBlock(cell && cell.history));
   }
 
+  function expirationChoice(cell, payer) {
+    if (cell && cell.enrollment_saved) return cell.has_expiration ? "yes" : "no";
+    if (payer && payer.credentials_expire === true) return "yes";
+    if (payer && payer.credentials_expire === false) return "no";
+    return "";
+  }
+
+  function radioChoice(text, value) {
+    const input = document.createElement("input");
+    input.type = "radio";
+    input.name = "cg-expire";
+    input.value = value;
+    const wrap = document.createElement("label");
+    wrap.className = "cg-choice";
+    wrap.appendChild(input);
+    wrap.appendChild(document.createTextNode(text));
+    return { wrap: wrap, input: input };
+  }
+
   function field(label, value, type) {
     const input = document.createElement("input");
-    input.type = type || "text";
-    input.value = type === "date" ? String(value || "").slice(0, 10) : (value || "");
+    input.type = "text";
+    if (type === "date") {
+      input.placeholder = "MM/DD/YYYY";
+      input.autocomplete = "off";
+      input.value = formatUsDate(value);
+    } else {
+      input.value = value || "";
+    }
     return { wrap: labeled(label, input), input: input };
   }
 
@@ -411,7 +552,7 @@
     if (dueOn) {
       const note = document.createElement("span");
       note.className = "meta";
-      note.textContent = " Due " + dueOn;
+      note.textContent = " Due " + (formatUsDate(dueOn) || dueOn);
       made.wrap.appendChild(note);
     }
     return made;
@@ -487,7 +628,7 @@
       });
       kind.value = subject.kind || "clinician";
       const license = field("License type", subject.license_type);
-      const hire = field("Hire date", subject.hire_date);
+      const hire = fieldDate("Hire date", subject.hire_date, "", "");
       const device = field("Device", subject.device);
       const expires = fieldDate(
         "License expires on",
@@ -554,23 +695,29 @@
       save.disabled = !payload.can_manage;
       save.addEventListener("click", async () => {
         setMessage("Saving…");
-        const body = {
-          id: subject.id,
-          name: name.input.value.trim(),
-          kind: kind.value,
-          license_type: license.input.value.trim(),
-          hire_date: hire.input.value.trim(),
-          device: device.input.value.trim(),
-          legal_name: legal.input.value.trim(),
-          service_address: address.input.value.trim(),
-          license_expires_on: expires.input.value.trim(),
-          caqh_attested_on: caqhDate.input.value.trim(),
-          clocks: {},
-          active: true,
-        };
-        Object.keys(clockInputs).forEach((key) => {
-          body.clocks[key] = clockInputs[key].input.value.trim();
-        });
+        let body;
+        try {
+          body = {
+            id: subject.id,
+            name: name.input.value.trim(),
+            kind: kind.value,
+            license_type: license.input.value.trim(),
+            hire_date: readDate(hire.input),
+            device: device.input.value.trim(),
+            legal_name: legal.input.value.trim(),
+            service_address: address.input.value.trim(),
+            license_expires_on: readDate(expires.input),
+            caqh_attested_on: readDate(caqhDate.input),
+            clocks: {},
+            active: true,
+          };
+          Object.keys(clockInputs).forEach((key) => {
+            body.clocks[key] = readDate(clockInputs[key].input);
+          });
+        } catch (error) {
+          setMessage(errText(error), "error");
+          return;
+        }
         if (npi.input.value.trim()) body.npi = npi.input.value.trim();
         if (tin.input.value.trim()) body.tin = tin.input.value.trim();
         if (licenseNo.input.value.trim()) body.license_number = licenseNo.input.value.trim();
@@ -707,6 +854,13 @@
     const notes = field("Notes", "");
     const parent = field("Parent payer", "");
     const counties = field("Counties (; separated)", "");
+    const expireDefault = document.createElement("select");
+    [["", "No default"], ["yes", "Credentials expire"], ["no", "No expiration"]].forEach((pair) => {
+      const option = document.createElement("option");
+      option.value = pair[0];
+      option.textContent = pair[1];
+      expireDefault.appendChild(option);
+    });
     form.appendChild(name.wrap);
     form.appendChild(labeled("Type", type));
     form.appendChild(family.wrap);
@@ -714,6 +868,7 @@
     form.appendChild(notes.wrap);
     form.appendChild(parent.wrap);
     form.appendChild(counties.wrap);
+    form.appendChild(labeled("New enrollments", expireDefault));
     const save = document.createElement("button");
     save.type = "button";
     save.className = "primary";
@@ -729,6 +884,7 @@
         notes: notes.input.value.trim(),
         parent_payer: parent.input.value.trim(),
         counties: splitList(counties.input.value),
+        credentials_expire: expireDefault.value === "yes" ? true : expireDefault.value === "no" ? false : null,
       };
       const editing = form.dataset.id || "";
       try {
@@ -755,6 +911,7 @@
       parent.input.value = "";
       counties.input.value = "";
       type.selectedIndex = 0;
+      expireDefault.value = "";
     };
     add.addEventListener("click", () => {
       clearForm();
@@ -769,6 +926,7 @@
       notes.input.value = payer.notes || "";
       parent.input.value = payer.parent_payer || "";
       counties.input.value = (payer.counties || []).join("; ");
+      expireDefault.value = payer.credentials_expire === true ? "yes" : payer.credentials_expire === false ? "no" : "";
       form.dataset.id = payer.id;
       form.classList.remove("hidden");
     };
