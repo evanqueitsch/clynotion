@@ -13,9 +13,12 @@ from app.auth import User
 from app.hr.time_entry import MELISSA_EMAIL, is_melissa
 
 from app.access.permissions import (
+    CHRISTINE_EMAIL,
+    DENIALS_TOOL,
     MANAGE_ROLES,
     PAYROLL_CORRECT,
     PAYROLL_DASHBOARD,
+    PHI_CLAIMS,
     TIME_ENTRY,
     admin_permissions,
 )
@@ -36,6 +39,11 @@ def _owner_emails() -> set[str]:
         ]
     )
     return {part.strip().lower() for part in raw.split(",") if part.strip()}
+
+
+def is_christine(user: User) -> bool:
+    """The billing mailbox. Denial analysis is bound here, not to the Billing role."""
+    return (user.email or "").strip().lower() == CHRISTINE_EMAIL
 
 
 def is_owner(user: User) -> bool:
@@ -64,8 +72,15 @@ def permissions_for(user: User) -> set[str]:
     if is_owner(user):
         perms = set(admin_permissions())
     else:
-        perms = set(access_store.permissions_for_role(user.practice_id, assigned_role_id(user)))
+        role_id = assigned_role_id(user)
+        perms = set(access_store.permissions_for_role(user.practice_id, role_id))
         perms.update(access_store.account_permissions_for(user.practice_id, user.email))
+        if is_christine(user):
+            perms.add(DENIALS_TOOL)
+            perms.add(PHI_CLAIMS)
+        elif role_id != "admin":
+            perms.discard(DENIALS_TOOL)
+            perms.discard(PHI_CLAIMS)
     if is_melissa(user):
         perms.add(TIME_ENTRY)
         perms.add(PAYROLL_DASHBOARD)

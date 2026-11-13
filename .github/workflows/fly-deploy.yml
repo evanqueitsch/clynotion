@@ -60,7 +60,7 @@ jobs:
           python3 - <<'PY'
           import json, urllib.request
           body = json.load(urllib.request.urlopen("https://clynotion.com/health", timeout=20))
-          if body.get("version") != "0.19.10":
+          if body.get("version") != "0.20.0":
               raise SystemExit(f"public version is {body.get('version')}")
           print("public version", body["version"])
           PY

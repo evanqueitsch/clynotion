@@ -11,10 +11,12 @@ from pathlib import Path
 from typing import Any, Optional
 
 from app.access.permissions import (
+    DENIALS_TOOL,
     MANAGE_ROLES,
     NEW_BILLING_GRANTS,
     PAYROLL_CORRECT,
     PAYROLL_DASHBOARD,
+    PHI_CLAIMS,
     PRACTICE_OWNER_PERMISSIONS,
     SENSITIVE_GRANT_IDS,
     TIME_ENTRY,
@@ -393,7 +395,11 @@ class AccessStore:
         allowed = set(grantable_ids())
         cleaned = []
         for item in permissions:
-            if item in allowed and item not in cleaned and item != "capability:payroll_correct":
+            if item in allowed and item not in cleaned and item not in {
+                "capability:payroll_correct",
+                DENIALS_TOOL,
+                PHI_CLAIMS,
+            }:
                 cleaned.append(item)
         payload = self._load()
         row = self._practice(practice_id, payload)

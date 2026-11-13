@@ -142,7 +142,7 @@ def main() -> None:
     report["files_unchanged"] = before == after_stats
     print("VERIFY " + json.dumps(report, sort_keys=True))
     ok = (
-        report["version"] == "0.19.10"
+        report["version"] == "0.20.0"
         and report["role_name"] == "Practice Owner"
         and role_permissions == YES
         and report["assigned"] is True

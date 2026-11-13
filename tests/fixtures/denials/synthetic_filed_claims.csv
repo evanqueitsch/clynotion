@@ -1,0 +1,7 @@
+Payer,CPT,Modifiers,POS,Diagnosis,Service month,Billed,Allowed,Paid,Claim status,CARC,RARC,Remark,Clinician code,Claim key
+Sample Payer A,90837,95,02,F41.1,2026-01,150.00,120.00,0.00,denied,16,N30,missing info,CLN-01,KEY-001
+Sample Payer A,90834,,11,F32.1,2026-01,100.00,80.00,80.00,paid,,,,CLN-01,KEY-002
+Sample Payer B,90837,95,10,F41.9,2026-02,150.00,0.00,0.00,rejected,,,clearinghouse reject,CLN-02,KEY-003
+Sample Payer B,90791,,11,F43.10,2026-02,200.00,150.00,0.00,denied,197,,auth missing,CLN-02,KEY-004
+Sample Payer A,90837,95,02,F41.1,2026-02,150.00,120.00,20.00,denied,1,,deductible,CLN-01,KEY-005
+Sample Payer C,90847,,11,Z63.0,2026-03,180.00,0.00,0.00,denied,B7,,not enrolled,CLN-03,KEY-006

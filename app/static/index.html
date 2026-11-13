@@ -149,6 +149,7 @@
     body.staff-only .tagline,
     body.staff-only footer,
     body.staff-only #btn-top-roles,
+    body.staff-only #btn-top-settings,
     body.staff-only #home-roles-card,
     body.no-access .tagline,
     body.no-access footer,
@@ -498,7 +499,10 @@
       color: var(--muted);
       animation: rise 0.7s ease-out 0.2s both;
     }
-    body.credentialing-open main { max-width: 1120px; }
+    body.credentialing-open main, body.denials-open main { max-width: 1120px; }
+    .denials-table { width: 100%; border-collapse: collapse; font-size: 0.88rem; }
+    .denials-table th, .denials-table td { border-bottom: 1px solid var(--line); padding: 0.35rem 0.4rem; text-align: left; vertical-align: top; }
+    .denials-banner { border: 1px solid var(--line); border-radius: 10px; padding: 0.7rem 0.8rem; background: #f4f8f6; margin: 0.4rem 0 0.9rem; }
     .cg-scroll { overflow-x: auto; margin: 0.75rem 0 1rem; }
     .cg-grid { border-collapse: collapse; width: 100%; font-size: 0.92rem; }
     .cg-grid th, .cg-grid td { border: 1px solid var(--line); padding: 0.35rem; text-align: center; min-width: 5.5rem; }
@@ -553,6 +557,7 @@
       <div class="topbar-user hidden" id="topbar-user">
         <span class="who" id="signed-in-as"></span>
         <span class="meta" id="idle-note">Signs out after 20 minutes of inactivity.</span>
+        <button id="btn-top-settings" class="ghost hidden" type="button">Settings</button>
         <button id="btn-top-roles" class="primary" type="button">Roles &amp; access</button>
         <button id="btn-logout" type="button">Sign out</button>
       </div>
@@ -712,6 +717,32 @@
       </div>
       <p class="status" id="elig-status"></p>
       <div class="due-list" id="elig-list"></div>
+    </section>
+
+    <section id="denials-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">Denial analysis</h2>
+        <button class="ghost" id="btn-denials-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <p class="denials-banner" id="denials-compliance">Suggestions never recommend changing a diagnosis or CPT to get paid. Documentation gaps are flagged for clinician review only.</p>
+      <p class="status" id="denials-status"></p>
+      <div id="denials-upload"></div>
+      <div id="denials-summary"></div>
+      <div id="denials-work"></div>
+      <div id="denials-files"></div>
+    </section>
+
+    <section id="settings-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">Settings</h2>
+        <button class="ghost" id="btn-settings-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <h3>Denial retention</h3>
+      <p class="meta">Original uploads default to 90 days. Claim rows default to 24 months. The audit log stays 6 years and cannot be changed. Shortening a period that would delete stored files asks you to type a confirmation.</p>
+      <p class="status" id="settings-status"></p>
+      <div id="settings-phi"></div>
+      <div id="settings-retention"></div>
+      <div id="settings-audit"></div>
     </section>
 
     <section id="billing-panel" class="panel hidden">
@@ -1084,6 +1115,7 @@
   <script src="/static/credentialing.js?v=0.19.9"></script>
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.19.7"></script>
+  <script src="/static/denials.js?v=0.20.0"></script>
   <script>
     const state = {
       token: null,
@@ -2207,6 +2239,8 @@
         const wantOnboarding = hash === "#onboarding";
         const wantCredentialing = hash === "#credentialing" || hash.indexOf("#credentialing?") === 0;
         const wantBilling = hash === "#billing";
+        const wantDenials = hash === "#denials";
+        const wantSettings = hash === "#settings";
         const wantEmployee = hash === "#employee";
         const wantEmployees = hash === "#employees";
         const timeRoute = hashRoute();
@@ -2246,6 +2280,10 @@
           await openCredentialing();
         } else if (wantBilling) {
           await openBilling();
+        } else if (wantDenials) {
+          await openDenials();
+        } else if (wantSettings) {
+          await openSettings();
         } else if (wantEmployee) {
           await openEmployee();
         } else if (wantEmployees) {
@@ -2272,10 +2310,11 @@
     }
 
     function show(panel) {
-      ["auth-panel", "no-access-panel", "access-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel", "credentialing-panel", "billing-panel", "employee-panel", "employees-panel", "time-panel", "time-admin-panel", "time-settings-panel", "time-self-test-panel"].forEach((id) => {
+      ["auth-panel", "no-access-panel", "access-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel", "credentialing-panel", "billing-panel", "denials-panel", "settings-panel", "employee-panel", "employees-panel", "time-panel", "time-admin-panel", "time-settings-panel", "time-self-test-panel"].forEach((id) => {
         $(id).classList.toggle("hidden", id !== panel);
       });
       document.body.classList.toggle("credentialing-open", panel === "credentialing-panel");
+      document.body.classList.toggle("denials-open", panel === "denials-panel");
       if (panel !== "credentialing-panel" && window.credentialingMask) window.credentialingMask();
     }
 
@@ -2295,6 +2334,8 @@
         if (rolesCard) rolesCard.classList.toggle("hidden", !fullCatalog);
         const topRoles = $("btn-top-roles");
         if (topRoles && state.accessLoaded) topRoles.classList.toggle("hidden", !fullCatalog);
+        const topSettings = $("btn-top-settings");
+        if (topSettings && state.accessLoaded) topSettings.classList.toggle("hidden", !fullCatalog);
         if (fullCatalog) {
           renderPulse(home.pulse || {});
           renderAttention(home.attention || []);
@@ -2323,6 +2364,8 @@
       if (href.includes("eligibility")) return openEligibility();
       if (href.includes("credentialing")) return window.openCredentialing();
       if (href.includes("#billing")) return window.openBilling();
+      if (href.includes("#denials")) return window.openDenials();
+      if (href.includes("#settings")) return window.openSettings();
       if (href.includes("#employees")) return window.openEmployees();
       if (href.includes("#employee")) return window.openEmployee();
       if (href.includes("onboarding")) return openOnboarding();
@@ -2367,6 +2410,12 @@
             card.appendChild(tag);
           }
           card.appendChild(meta);
+          if (typeof tool.count === "number") {
+            const countLine = document.createElement("p");
+            countLine.className = "meta";
+            countLine.textContent = (tool.count_label || "Count") + ": " + tool.count;
+            card.appendChild(countLine);
+          }
           if (comingSoon) {
             const btn = document.createElement("button");
             btn.type = "button";
@@ -3934,6 +3983,8 @@
       else if (route.path === "eligibility") openEligibility();
       else if (route.path === "credentialing") openCredentialing();
       else if (route.path === "billing") openBilling();
+      else if (route.path === "denials") openDenials();
+      else if (route.path === "settings") openSettings();
       else if (route.path === "employee") openEmployee();
       else if (route.path === "employees") openEmployees();
       else if (route.path === "onboarding") openOnboarding();

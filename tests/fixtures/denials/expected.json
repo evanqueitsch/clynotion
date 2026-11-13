@@ -1,0 +1,55 @@
+{
+  "label": "SYNTHETIC — fake payers and codes. Not a real claim file.",
+  "totals": {
+    "claims": 7,
+    "denied": 4,
+    "rejected": 1,
+    "denied_or_rejected": 5,
+    "billed": "1030.00",
+    "paid": "200.00",
+    "denial_rate": "0.7143",
+    "dollar_denial_rate": "0.7864"
+  },
+  "by_payer": [
+    {"key": "Sample Payer A", "claims": 4, "denied": 2, "rate": "0.5000"},
+    {"key": "Sample Payer B", "claims": 2, "denied": 2, "rate": "1.0000"},
+    {"key": "Sample Payer C", "claims": 1, "denied": 1, "rate": "1.0000"}
+  ],
+  "by_cpt": [
+    {"key": "90837", "claims": 3, "denied": 3, "rate": "1.0000"},
+    {"key": "90791", "claims": 1, "denied": 1, "rate": "1.0000"},
+    {"key": "90847", "claims": 1, "denied": 1, "rate": "1.0000"},
+    {"key": "90834", "claims": 2, "denied": 0, "rate": "0.0000"}
+  ],
+  "by_modifier_pos": [
+    {"key": "95 / 02", "claims": 2, "denied": 2, "rate": "1.0000"},
+    {"key": "— / 11", "claims": 4, "denied": 2, "rate": "0.5000"},
+    {"key": "95 / 10", "claims": 1, "denied": 1, "rate": "1.0000"}
+  ],
+  "by_category": [
+    {"key": "authorization", "claims": 1, "denied": 1, "rate": "0.2000"},
+    {"key": "clearinghouse_reject", "claims": 1, "denied": 1, "rate": "0.2000"},
+    {"key": "credentialing", "claims": 1, "denied": 1, "rate": "0.2000"},
+    {"key": "missing_information", "claims": 1, "denied": 1, "rate": "0.2000"},
+    {"key": "patient_responsibility", "claims": 1, "denied": 1, "rate": "0.2000"}
+  ],
+  "by_carc": [
+    {"key": "(none)", "claims": 1, "denied": 1, "rate": "0.2000"},
+    {"key": "1", "claims": 1, "denied": 1, "rate": "0.2000"},
+    {"key": "16", "claims": 1, "denied": 1, "rate": "0.2000"},
+    {"key": "197", "claims": 1, "denied": 1, "rate": "0.2000"},
+    {"key": "B7", "claims": 1, "denied": 1, "rate": "0.2000"}
+  ],
+  "trend": [
+    {"month": "2026-01", "claims": 2, "denied": 1, "rate": "0.5000"},
+    {"month": "2026-02", "claims": 3, "denied": 3, "rate": "1.0000"},
+    {"month": "2026-03", "claims": 2, "denied": 1, "rate": "0.5000"}
+  ],
+  "worklist_actions": {
+    "KEY-001": "correct_resubmit",
+    "KEY-003": "correct_resubmit",
+    "KEY-004": "reconsideration",
+    "KEY-005": "bill_client",
+    "KEY-006": "fix_credentialing"
+  }
+}
