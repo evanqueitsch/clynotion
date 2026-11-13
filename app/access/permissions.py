@@ -33,6 +33,12 @@ QUICKBOOKS_MONEY = "capability:quickbooks_money"
 PAYROLL_QUICKBOOKS_PUSH = "capability:payroll_quickbooks_push"
 DENIALS_SUMMARY = "tool:denials_summary"
 DENIALS_SUMMARY_NAME = "Denial summaries (de-identified totals and trends)"
+DENIALS_TOOL = "tool:denials"
+DENIALS_TOOL_NAME = "Denial analysis (de-identified claims)"
+PHI_CLAIMS = "capability:phi_claims"
+# Bound to this mailbox the way post-cutoff correction is bound to Melissa.
+# Not a Billing-role grant.
+CHRISTINE_EMAIL = "billing@heart4change.org"
 
 # Grantable by name. No role receives these unless an Admin saves the grant.
 SENSITIVE_GRANT_IDS = frozenset({QUICKBOOKS_MONEY, PAYROLL_QUICKBOOKS_PUSH})
@@ -80,13 +86,20 @@ def permission_registry() -> list[dict[str, Any]]:
     for item in CATALOG_ITEMS:
         if item.get("kind") != "tool" or item.get("status") == "retired":
             continue
+        tool_id = str(item["id"])
         rows.append(
             {
-                "id": _tool_permission(item["id"]),
+                "id": _tool_permission(tool_id),
                 "name": item["name"],
                 "group": item.get("unit") or "tool",
-                "grantable": True,
+                "grantable": tool_id != "denials",
+                "sensitive": tool_id == "denials",
                 "status": item.get("status") or "",
+                "note": (
+                    "Bound to the billing mailbox. Admin has it. Not a role grant."
+                    if tool_id == "denials"
+                    else ""
+                ),
             }
         )
     rows.extend(
@@ -168,7 +181,15 @@ def permission_registry() -> list[dict[str, Any]]:
                 "group": "capability",
                 "grantable": True,
                 "sensitive": True,
-                "note": "No route uses this yet. The Denial module is not built.",
+                "note": "Aggregate totals and trends only. No claim rows.",
+            },
+            {
+                "id": PHI_CLAIMS,
+                "name": "Claim-level PHI",
+                "group": "capability",
+                "grantable": False,
+                "sensitive": True,
+                "note": "Catalog only. Gates future PHI features. Bound to the billing mailbox. Off in this phase.",
             },
         ]
     )
@@ -190,8 +211,12 @@ def admin_permissions() -> list[str]:
     Denial summaries stay off this automatic set. Practice Owner lists that
     key itself, so adding it does not change anyone else's effective permissions.
     """
-    return [
+    rows = [
         item
         for item in grantable_ids()
         if item != PAYROLL_CORRECT and item not in SENSITIVE_GRANT_IDS and item != DENIALS_SUMMARY
     ]
+    for item in (DENIALS_TOOL, PHI_CLAIMS):
+        if item not in rows:
+            rows.append(item)
+    return rows

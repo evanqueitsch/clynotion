@@ -226,6 +226,18 @@ CATALOG_ITEMS: tuple[dict[str, Any], ...] = (
         "authorities": [],
     },
     {
+        "id": "denials",
+        "name": "Denial analysis",
+        "unit": "finance",
+        "kind": "tool",
+        "status": "live",
+        "href": "/#denials",
+        "description": "De-identified denial totals, trends, and a work list. Suggestions never change a diagnosis or CPT to get paid.",
+        "legacy_ids": [],
+        "requires_explicit_grant": True,
+        "authorities": _auth("De-identified claims review — PHI mode is off"),
+    },
+    {
         "id": "telephony_capture",
         "name": "Telephony capture",
         "unit": "technology",

@@ -47,8 +47,10 @@ def required_permission(path: str) -> str | None:
         return "tool:supervision_notes"
     if path.startswith("/workspace"):
         return MANAGE_ROLES
-    if path.startswith("/comply") or path.startswith("/due"):
+    if path.startswith("/comply"):
         return "tool:compliance_registry"
+    if path.startswith("/due") or path.startswith("/denials"):
+        return None
     if path.startswith("/ingest"):
         return "tool:sp_ingest"
     if path.startswith("/intake"):
@@ -82,7 +84,9 @@ async def access_middleware(request: Request, call_next):
     if request.method == "OPTIONS" or path == "/" or any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
         return await call_next(request)
     needed = required_permission(path)
-    if needed is None and path not in ("/home", "/catalog", "/practice") and not path.startswith("/attune"):
+    authenticated = path in ("/home", "/catalog", "/practice") or path.startswith("/attune")
+    authenticated = authenticated or path.startswith("/due") or path.startswith("/denials")
+    if needed is None and not authenticated:
         return await call_next(request)
     user = _user_from_request(request)
     if user is None:

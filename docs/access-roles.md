@@ -26,6 +26,12 @@ product APIs.
 The first time the practice-hfc role file is created, the owner mailbox is
 recorded as Admin. Clearing that assignment later does not remove break-glass.
 
+`tool:denials` and `capability:phi_claims` are not role grants. They are
+attached to `billing@heart4change.org` and to Admin. The Billing role does
+not include them. `capability:phi_claims` is catalog-only and does not open
+a screen. PHI mode is off. `tool:denials_summary` stays on Practice Owner
+and shows totals only.
+
 `capability:payroll_correct` is not a role grant. It is attached only to
 `msmith@heart4change.org`. That account also receives `tool:time_entry` and
 `capability:payroll_dashboard`, so Melissa can open the payroll week without

@@ -1,0 +1,3 @@
+Payer,CPT,Modifiers,POS,Diagnosis,Service month,Billed,Allowed,Paid,Claim status,CARC,RARC,Remark,Clinician code,Claim key
+Sample Payer A,90837,95,02,F41.1,2026-01,150.00,120.00,0.00,denied,16,N30,missing info,CLN-01,KEY-001
+Sample Payer A,90834,,11,F32.0,2026-03,100.00,100.00,100.00,paid,,,,CLN-01,KEY-007

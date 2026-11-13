@@ -144,6 +144,64 @@ def _build_pulse(practice_id: str) -> PulseOut:
     )
 
 
+def _attach_denial_count(units: list[dict], user: CurrentUser) -> None:
+    """A count on the denial card for someone who can open it. Nothing else."""
+    from app.access.permissions import DENIALS_SUMMARY, DENIALS_TOOL
+    from app.access.resolve import has_permission, is_owner
+
+    if not (
+        is_owner(user)
+        or has_permission(user, DENIALS_TOOL)
+        or has_permission(user, DENIALS_SUMMARY)
+    ):
+        return
+    from app.denials.store import denials_store
+
+    count = denials_store.denied_count(user.practice_id)
+    if count is None:
+        return
+    for unit in units:
+        for tool in unit.get("tools") or []:
+            if tool.get("id") == "denials":
+                tool["count"] = count
+                tool["count_label"] = "Denied or rejected"
+
+
+def _visible_due(user: CurrentUser, bands: dict) -> HomeBandsOut:
+    """GET /due returns only domains the caller can open."""
+    from app.access.resolve import assigned_role_id, is_owner, permissions_for
+
+    if is_owner(user) or assigned_role_id(user) == "admin":
+        allowed = None
+    else:
+        perms = permissions_for(user)
+        domain_permissions = {
+            "comply": {"tool:compliance_registry"},
+            "grow": {"tool:intake_log"},
+            "people": {
+                "tool:supervision_notes",
+                "tool:onboarding_compliance",
+                "capability:hr_records_view",
+                "tool:employee_view",
+            },
+            "platform": {"tool:sp_ingest"},
+            "books": {"tool:billing"},
+            "credentialing": {"tool:credentialing"},
+        }
+        allowed = {
+            domain
+            for domain, needed in domain_permissions.items()
+            if needed & perms
+        }
+
+    def keep(items):
+        if allowed is None:
+            return [_obligation_out(item) for item in items]
+        return [_obligation_out(item) for item in items if item.domain in allowed]
+
+    return HomeBandsOut(overdue=keep(bands["overdue"]), this_week=keep(bands["this_week"]))
+
+
 def _home_note(user: CurrentUser, open_count: int) -> str:
     raw = (user.username or "").strip()
     if "@" in raw:
@@ -220,6 +278,8 @@ def _visible_units(user: CurrentUser) -> list[dict]:
                 granted = full or tool_perm in perms
             else:
                 granted = full or tool_perm in perms or unit_perm in perms
+            if tool.get("id") == "denials" and "tool:denials_summary" in perms:
+                granted = True
             if granted:
                 kept.append(tool)
         if kept:
@@ -250,6 +310,7 @@ def _home_payload(user: CurrentUser) -> HomeOut:
             full_catalog=False,
         )
     units = _visible_units(user)
+    _attach_denial_count(units, user)
     tools = _open_tools(units)
     if not sees_every_module(user):
         only_time = _module_ids(units) == ["time_entry"]
@@ -347,19 +408,22 @@ def due_bands(user: CurrentUser) -> HomeBandsOut:
         sessions=store.list_for_practice(user.practice_id),
     )
     bands_raw = due_engine.bands(user.practice_id)
-    return HomeBandsOut(
-        overdue=[_obligation_out(o) for o in bands_raw["overdue"]],
-        this_week=[_obligation_out(o) for o in bands_raw["this_week"]],
-    )
+    return _visible_due(user, bands_raw)
 
 
 @router.post("/due/{obligation_id}/complete", response_model=ObligationOut)
 def complete_obligation(obligation_id: str, user: CurrentUser) -> ObligationOut:
     """One-click complete — no confirmation, no required note."""
-    ob = due_engine.complete_by_id(obligation_id, practice_id=user.practice_id)
-    if ob is None:
+    ob = due_engine.get(obligation_id)
+    if ob is None or ob.practice_id != user.practice_id or ob.status != "open":
         raise HTTPException(status_code=404, detail="obligation not found")
-    return _obligation_out(ob)
+    visible = _visible_due(user, {"overdue": [ob], "this_week": []})
+    if not visible.overdue and not visible.this_week:
+        raise HTTPException(status_code=404, detail="obligation not found")
+    done = due_engine.complete_by_id(obligation_id, practice_id=user.practice_id)
+    if done is None:
+        raise HTTPException(status_code=404, detail="obligation not found")
+    return _obligation_out(done)
 
 
 @router.get("/comply/catalog", response_model=list[ComplyCatalogItemOut])

@@ -223,4 +223,10 @@ def time_tick(request: Request) -> dict:
         raise HTTPException(status_code=500, detail="tick_failed") from exc
     printable = " ".join(f"{key}={value}" for key, value in sorted(result.items()))
     print(f"time_tick {printable}", flush=True)
+    try:
+        from app.denials.store import denials_store
+
+        denials_store.purge_if_due()
+    except Exception:
+        pass
     return result

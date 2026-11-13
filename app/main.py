@@ -17,6 +17,7 @@ from pydantic import BaseModel, Field
 from app.access.guard import access_middleware
 from app.access.routes import router as access_router
 from app.billing.routes import router as billing_router
+from app.denials.routes import router as denials_router
 from app.credentialing.routes import router as credentialing_router
 from app.employees.routes import router as employee_router
 from app.platform.routes import legacy as attune_legacy_router
@@ -100,6 +101,7 @@ app.include_router(access_router)
 app.include_router(credentialing_router)
 app.include_router(employee_router)
 app.include_router(billing_router)
+app.include_router(denials_router)
 app.middleware("http")(access_middleware)
 
 
@@ -121,6 +123,12 @@ def _migrate_access_roles() -> None:
     from app.google_oauth import default_practice_id
 
     access_store.ensure(default_practice_id())
+    try:
+        from app.denials.store import denials_store
+
+        denials_store.purge_if_due()
+    except Exception:
+        return
 
 _UPLOAD_ROOT = Path(tempfile.gettempdir()) / "clynotion_uploads"
 _UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
