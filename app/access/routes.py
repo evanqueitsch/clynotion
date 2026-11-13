@@ -16,7 +16,7 @@ from app.access.resolve import (
     permissions_for,
 )
 from app.access.store import access_store
-from app.auth import CurrentUser
+from app.auth import CurrentUser, User
 from app.clinicians import clinician_store
 
 router = APIRouter(prefix="/access", tags=["access"])
@@ -46,6 +46,21 @@ def access_me(user: CurrentUser) -> dict[str, Any]:
         "can_manage_roles": "capability:manage_roles" in perms,
         "can_payroll_dashboard": "capability:payroll_dashboard" in perms,
         "can_correct_payroll": "capability:payroll_correct" in perms,
+    }
+
+
+@router.get("/effective")
+def effective_permissions(email: str, user: CurrentUser) -> dict[str, Any]:
+    """Admin check of one mailbox. Does not sign in as that person."""
+    _admin(user)
+    cleaned = (email or "").strip().lower()
+    if "@" not in cleaned:
+        raise HTTPException(status_code=422, detail="A staff email is required.")
+    subject = User(user_id="access-check", username="", practice_id=user.practice_id, email=cleaned)
+    return {
+        "email": cleaned,
+        "role_id": assigned_role_id(subject),
+        "permissions": sorted(permissions_for(subject)),
     }
 
 

@@ -53,14 +53,22 @@ def assigned_role_id(user: User) -> str:
 
 
 def permissions_for(user: User) -> set[str]:
+    """Role grants plus mailbox grants.
+
+    Melissa's mailbox always keeps time entry, the payroll dashboard, and
+    post-cutoff correction. Those three are not stored on a role. HR record
+    view, manage, and sensitive are not added here; manage and sensitive stay
+    off Practice Owner unless a previous role already granted them, in which
+    case the migration copied them onto the mailbox.
+    """
     if is_owner(user):
         perms = set(admin_permissions())
     else:
         perms = set(access_store.permissions_for_role(user.practice_id, assigned_role_id(user)))
+        perms.update(access_store.account_permissions_for(user.practice_id, user.email))
     if is_melissa(user):
         perms.add(TIME_ENTRY)
         perms.add(PAYROLL_DASHBOARD)
-    if is_melissa(user):
         perms.add(PAYROLL_CORRECT)
     else:
         perms.discard(PAYROLL_CORRECT)

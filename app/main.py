@@ -109,6 +109,19 @@ def _sync_credentialing_reminders() -> None:
 
     sync_stored_practices()
 
+
+@app.on_event("startup")
+def _migrate_access_roles() -> None:
+    """Apply the additive role migration once the process is up.
+
+    This writes only the encrypted roles file. It does not open credentialing,
+    send mail, or change directory grants.
+    """
+    from app.access.store import access_store
+    from app.google_oauth import default_practice_id
+
+    access_store.ensure(default_practice_id())
+
 _UPLOAD_ROOT = Path(tempfile.gettempdir()) / "clynotion_uploads"
 _UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 
