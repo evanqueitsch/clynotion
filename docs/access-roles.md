@@ -4,10 +4,15 @@ Roles are stored per practice in the encrypted file `ATTUNE_ACCESS_DATA_PATH`
 (production: `/data/access_roles.enc`). Permissions are generated from the
 catalog: each business unit is `unit:{id}` and each tool is `tool:{id}`.
 
-Seeded roles are Intake, Billing, Clinician, Clinical Supervisor, and Admin.
-The first four start with only `tool:time_entry`. Admin has every grantable
-permission, including role management and the payroll dashboard. Admin does
-not include post-cutoff correction.
+Seeded roles are Intake, Billing, Clinician, Clinical Supervisor, Practice
+Owner, and Admin. The first four start with only `tool:time_entry`. Practice
+Owner is a fixed set: Employee View, view staff HR records, Credentialing
+without manage/payers/sensitive, the payroll week dashboard
+(`capability:payroll_dashboard`), and denial summaries
+(`tool:denials_summary`). That last key is in the permission catalog only.
+It does not add a home card. The Roles screen cannot create a role; it edits
+these seeded roles. Admin has every grantable permission except post-cutoff
+correction, the two QuickBooks money grants, and denial summaries.
 
 Break-glass owners are the dev user `alice`, `ATTUNE_HR_ADMIN_EMAILS`,
 `ATTUNE_OWNER_EMAILS`, and the verified owner mailbox
@@ -24,7 +29,12 @@ recorded as Admin. Clearing that assignment later does not remove break-glass.
 `capability:payroll_correct` is not a role grant. It is attached only to
 `msmith@heart4change.org`. That account also receives `tool:time_entry` and
 `capability:payroll_dashboard`, so Melissa can open the payroll week without
-being an Admin.
+being an Admin. The payroll week screen and the Payroll week tile check
+`capability:payroll_dashboard`. Post-cutoff correction checks the mailbox,
+not the role. HR view, HR manage, and HR sensitive are role grants. They are
+not mailbox bindings. Practice Owner includes HR view only. HR manage and HR
+sensitive stay off that role. The version 3 migration assigns Practice Owner
+to Melissa's roster mailbox and does not change any other assignment.
 
 Weekly hours enablement stays a separate checklist. A role with Time Entry
 does not add someone to that list.

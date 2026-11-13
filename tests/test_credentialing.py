@@ -185,7 +185,9 @@ def test_grants_migration_only_adds(tmp_path, monkeypatch) -> None:
     assert saved["extra_top"] == "keep"
     practice = saved["practices"]["practice-hfc"]
     assert practice["extra_evan"] == {"keep": True}
-    assert practice["assignments"] == original["practices"]["practice-hfc"]["assignments"]
+    expected_assignments = dict(original["practices"]["practice-hfc"]["assignments"])
+    expected_assignments["msmith@heart4change.org"] = "practice_owner"
+    assert practice["assignments"] == expected_assignments
     backup = json.loads(decrypt_utf8((tmp_path / "access_roles.enc.bak-grants-v1").read_bytes()))
     assert backup["practices"]["practice-hfc"]["roles"]["billing"]["permissions"] == [
         "tool:time_entry",

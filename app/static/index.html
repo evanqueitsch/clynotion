@@ -2043,7 +2043,7 @@
               });
               if (sensitiveAdded.length) {
                 const proceed = window.confirm(
-                  "Grant " + sensitiveAdded.join(", ") + "? These permissions can move money or send payroll. Only grant them on purpose."
+                  "Grant " + sensitiveAdded.join(", ") + "? These permissions are marked sensitive. Only grant them on purpose."
                 );
                 if (!proceed) {
                   save.disabled = false;

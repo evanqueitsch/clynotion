@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
@@ -10,7 +11,11 @@ from pathlib import Path
 from typing import Any, Optional
 
 from app.access.permissions import (
+    MANAGE_ROLES,
     NEW_BILLING_GRANTS,
+    PAYROLL_CORRECT,
+    PAYROLL_DASHBOARD,
+    PRACTICE_OWNER_PERMISSIONS,
     SENSITIVE_GRANT_IDS,
     TIME_ENTRY,
     admin_permissions,
@@ -18,8 +23,10 @@ from app.access.permissions import (
 )
 from app.crypto import decrypt_utf8, encrypt_utf8
 
-# Bumped once. The migration only appends Billing grants.
-GRANTS_VERSION = 2
+# Version 1 appends Billing grants. Version 2 stamps that file.
+# Version 3 adds the Practice Owner role and assigns Melissa's mailbox.
+# It does not remove a permission or change any other assignment.
+GRANTS_VERSION = 3
 
 ENV_PATH = "ATTUNE_ACCESS_DATA_PATH"
 DEFAULT_PATH = ".attune_data/access_roles.enc"
@@ -29,6 +36,7 @@ SEEDED_ROLES: dict[str, dict[str, Any]] = {
     "billing": {"name": "Billing", "permissions": billing_role_permissions()},
     "clinician": {"name": "Clinician", "permissions": [TIME_ENTRY]},
     "clinical_supervisor": {"name": "Clinical Supervisor", "permissions": [TIME_ENTRY]},
+    "practice_owner": {"name": "Practice Owner", "permissions": list(PRACTICE_OWNER_PERMISSIONS)},
     "admin": {"name": "Admin", "permissions": admin_permissions()},
 }
 
@@ -36,6 +44,83 @@ SEEDED_ROLES: dict[str, dict[str, Any]] = {
 def _path() -> Path:
     raw = (os.environ.get(ENV_PATH) or DEFAULT_PATH).strip()
     return Path(raw)
+
+
+def others_fingerprint(assignments: dict[str, Any], skip_email: str) -> str:
+    """Hash of every assignment except one mailbox. The digest has no addresses."""
+    skip = (skip_email or "").strip().lower()
+    pairs = [
+        [str(email).strip().lower(), str(role)]
+        for email, role in sorted(assignments.items(), key=lambda item: str(item[0]).lower())
+        if str(email).strip().lower() != skip and role
+    ]
+    payload = json.dumps(pairs, separators=(",", ":"))
+    return hashlib.sha256(payload.encode()).hexdigest()
+
+
+def _practice_owner_practices() -> set[str]:
+    from app.google_oauth import default_practice_id
+
+    return {"practice-hfc", default_practice_id()}
+
+
+def lookup_melissa_email(practice_id: str) -> str:
+    """Melissa's heart4change.org mailbox from the roster.
+
+    The payroll mailbox wins when that address is on the roster. Otherwise
+    the only roster person whose name starts with Melissa. Practice HFC falls
+    back to the payroll mailbox when the roster has no Melissa, because that
+    is the account her payroll capabilities are bound to. Other people are
+    not hardcoded.
+    """
+    from app.clinicians import clinician_store
+    from app.hr.time_entry import MELISSA_EMAIL
+
+    known = MELISSA_EMAIL.strip().lower()
+    try:
+        people = clinician_store.list_all_for_practice(practice_id)
+    except Exception:
+        people = []
+    named: list[str] = []
+    for person in people:
+        email = (person.email or "").strip().lower()
+        if not email:
+            continue
+        if email == known:
+            return known
+        first = (person.display_name or "").strip().lower().split(" ", 1)[0]
+        if first == "melissa" and email.endswith("@heart4change.org"):
+            if email not in named:
+                named.append(email)
+    if len(named) == 1:
+        return named[0]
+    if len(named) > 1:
+        return ""
+    if practice_id in _practice_owner_practices():
+        return known
+    return ""
+
+
+def _effective_before(row: dict[str, Any], email: str, role_id: str) -> list[str]:
+    """Effective permission ids before Practice Owner is applied. Ids only."""
+    from app.hr.time_entry import MELISSA_EMAIL
+
+    if role_id == "admin":
+        perms = set(admin_permissions())
+    elif role_id:
+        role = (row.get("roles") or {}).get(role_id) or {}
+        perms = {item for item in (role.get("permissions") or []) if isinstance(item, str)}
+    else:
+        perms = set()
+    account = row.get("account_permissions") if isinstance(row.get("account_permissions"), dict) else {}
+    for item in account.get(email) or []:
+        if isinstance(item, str):
+            perms.add(item)
+    if email == MELISSA_EMAIL.strip().lower():
+        perms.update({TIME_ENTRY, PAYROLL_DASHBOARD, PAYROLL_CORRECT})
+    else:
+        perms.discard(PAYROLL_CORRECT)
+    return sorted(perms)
 
 
 def _empty() -> dict[str, Any]:
@@ -71,11 +156,14 @@ class AccessStore:
         payload.setdefault("practices", {})
         return payload
 
-    def _upgrade_grants(self, row: dict[str, Any]) -> bool:
-        """Version 1 appends Billing grants. Version 2 only stamps the file.
+    def _upgrade_grants(self, row: dict[str, Any], practice_id: str) -> bool:
+        """Append-only grant migrations.
 
-        Never deletes a permission or an assignment. Employee View capabilities
-        are not added to Billing here.
+        Version 1 appends Billing grants. Version 2 only stamps the file.
+        Version 3 adds Practice Owner and assigns Melissa. Never deletes a
+        permission or changes any other person's assignment. Employee View
+        capabilities are not added to Billing here, and Employee View rollout
+        is not touched.
         """
         version = int(row.get("grants_version") or 0)
         if version >= GRANTS_VERSION:
@@ -92,8 +180,96 @@ class AccessStore:
                     perms.append(item)
             billing["permissions"] = perms
             billing.setdefault("name", "Billing")
+        if version < 3:
+            self._seed_break_glass_admin(row, practice_id)
+            self._install_practice_owner(row, practice_id)
         row["grants_version"] = GRANTS_VERSION
         return True
+
+    def _seed_break_glass_admin(self, row: dict[str, Any], practice_id: str) -> None:
+        """First creation only. A later clear of this assignment stays cleared."""
+        assignments = row.setdefault("assignments", {})
+        if not isinstance(assignments, dict):
+            assignments = {}
+            row["assignments"] = assignments
+        if practice_id == "practice-hfc" and not assignments:
+            assignments["operations@heart4change.org"] = "admin"
+
+    def _install_practice_owner(self, row: dict[str, Any], practice_id: str) -> None:
+        """Create Practice Owner. Assign Melissa on the practice that owns the roster.
+
+        The role list is exactly the Practice Owner set. Permissions she already
+        had from another role, other than role editing, are copied onto her
+        account so the role stays exact and she does not lose them. HR manage
+        and HR sensitive are not added here unless that previous role already
+        had them. The code-level payroll bindings are not edited.
+        """
+        from app.hr.time_entry import MELISSA_EMAIL
+
+        roles = row.setdefault("roles", {})
+        assignments = row.setdefault("assignments", {})
+        if not isinstance(assignments, dict):
+            assignments = {}
+            row["assignments"] = assignments
+        if practice_id not in _practice_owner_practices():
+            roles["practice_owner"] = {
+                "name": "Practice Owner",
+                "permissions": list(PRACTICE_OWNER_PERMISSIONS),
+            }
+            return
+        email = lookup_melissa_email(practice_id)
+        current = str(assignments.get(email) or "") if email else ""
+        before = _effective_before(row, email, current) if email else []
+        others = others_fingerprint(assignments, email)
+        admin_count = sum(1 for role in assignments.values() if role == "admin")
+        billing_count = sum(1 for role in assignments.values() if role == "billing")
+        roles["practice_owner"] = {
+            "name": "Practice Owner",
+            "permissions": list(PRACTICE_OWNER_PERMISSIONS),
+        }
+        if not email or current == "admin":
+            row["practice_owner_migration"] = {
+                "assigned": False,
+                "skipped": "admin" if current == "admin" else "no-mailbox",
+                "email": email,
+                "before_permissions": before,
+                "other_assignments_sha256": others,
+                "admin_count": admin_count,
+                "billing_count": billing_count,
+            }
+            return
+        previous: list[str] = []
+        if current and current != "practice_owner":
+            role = roles.get(current) if isinstance(roles.get(current), dict) else {}
+            previous = [item for item in (role.get("permissions") or []) if isinstance(item, str)]
+        covered = set(PRACTICE_OWNER_PERMISSIONS)
+        if email == MELISSA_EMAIL.strip().lower():
+            covered.update({TIME_ENTRY, PAYROLL_DASHBOARD, PAYROLL_CORRECT})
+        extras: list[str] = []
+        for item in previous:
+            if item in covered or item == MANAGE_ROLES or item in extras:
+                continue
+            extras.append(item)
+        if extras:
+            account = row.setdefault("account_permissions", {})
+            if not isinstance(account, dict):
+                account = {}
+                row["account_permissions"] = account
+            existing = [item for item in (account.get(email) or []) if isinstance(item, str)]
+            for item in extras:
+                if item not in existing:
+                    existing.append(item)
+            account[email] = existing
+        assignments[email] = "practice_owner"
+        row["practice_owner_migration"] = {
+            "assigned": True,
+            "email": email,
+            "previous_role_id": current,
+            "before_permissions": before,
+            "other_assignments_sha256": others,
+            "admin_count": admin_count,
+            "billing_count": billing_count,
+        }
 
     def _backup_before_grants(self, suffix: str) -> None:
         if os.environ.get("ATTUNE_ACCESS_PERSISTENCE") == "memory":
@@ -111,21 +287,26 @@ class AccessStore:
         changed = False
         needs_v1 = False
         needs_v2 = False
-        for row in (payload.get("practices") or {}).values():
+        needs_v3 = False
+        for practice_id, row in (payload.get("practices") or {}).items():
             if not isinstance(row, dict):
                 continue
             version = int(row.get("grants_version") or 0)
-            if self._upgrade_grants(row):
+            if self._upgrade_grants(row, str(practice_id)):
                 changed = True
                 if version < 1:
                     needs_v1 = True
                 if version < 2:
                     needs_v2 = True
+                if version < 3:
+                    needs_v3 = True
         if changed:
             if needs_v1:
                 self._backup_before_grants(".bak-grants-v1")
             if needs_v2:
                 self._backup_before_grants(".bak-grants-v2")
+            if needs_v3:
+                self._backup_before_grants(".bak-grants-v3")
             self._save(payload)
         return payload
 
@@ -170,6 +351,8 @@ class AccessStore:
         # in resolve.is_owner still unlocks the owner mailbox.
         if practice_id == "practice-hfc" and not assignments:
             assignments["operations@heart4change.org"] = "admin"
+        if int(row.get("grants_version") or 0) < GRANTS_VERSION:
+            self._upgrade_grants(row, practice_id)
         return row
 
     def ensure(self, practice_id: str) -> dict[str, Any]:
@@ -290,6 +473,15 @@ class AccessStore:
         else:
             assignments.pop(cleaned, None)
         self._save(payload)
+
+    def account_permissions_for(self, practice_id: str, email: str) -> list[str]:
+        """Permissions stored on one mailbox. Empty when the migration added none."""
+        row = self._practice(practice_id, self._load())
+        account = row.get("account_permissions") if isinstance(row.get("account_permissions"), dict) else {}
+        raw = account.get((email or "").strip().lower()) or []
+        if not isinstance(raw, list):
+            return []
+        return [item for item in raw if isinstance(item, str)]
 
     def role_id_for(self, practice_id: str, email: str) -> str:
         row = self._practice(practice_id, self._load())

@@ -334,7 +334,7 @@ def test_idle_logoff_and_small_health_are_in_the_ui(client: TestClient) -> None:
     assert "IDLE_LIMIT_MS = 20 * 60 * 1000" in page.text
     assert "20 minutes of inactivity" in page.text
     health = client.get("/health")
-    assert health.json()["version"] == "0.19.9"
+    assert health.json()["version"] == "0.19.10"
     assert "deepgram" not in health.text.casefold()
     assert "phi_path" not in health.json()
     script = client.get("/static/employee.js")
@@ -394,7 +394,9 @@ def test_grants_version_2_does_not_edit_role_lists(tmp_path, monkeypatch: pytest
     assert "capability:hr_records_view" not in billing
     assert access_store.role_id_for("practice-hfc", "clinician@heart4change.org") == "clinician"
     saved = json.loads(decrypt_utf8(path.read_bytes()))
-    assert saved["practices"]["practice-hfc"]["grants_version"] == 2
+    assert saved["practices"]["practice-hfc"]["grants_version"] == 3
+    assert saved["practices"]["practice-hfc"]["assignments"]["clinician@heart4change.org"] == "clinician"
+    assert saved["practices"]["practice-hfc"]["assignments"]["msmith@heart4change.org"] == "practice_owner"
     assert (tmp_path / "access_roles.enc.bak-grants-v2").is_file()
     backup = json.loads(decrypt_utf8((tmp_path / "access_roles.enc.bak-grants-v2").read_bytes()))
     assert backup["practices"]["practice-hfc"]["roles"]["billing"]["permissions"] == [

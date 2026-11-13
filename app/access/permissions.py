@@ -31,9 +31,21 @@ BILLING_HR_WHEN_ROLLOUT = (
 )
 QUICKBOOKS_MONEY = "capability:quickbooks_money"
 PAYROLL_QUICKBOOKS_PUSH = "capability:payroll_quickbooks_push"
+DENIALS_SUMMARY = "tool:denials_summary"
+DENIALS_SUMMARY_NAME = "Denial summaries (de-identified totals and trends)"
 
 # Grantable by name. No role receives these unless an Admin saves the grant.
 SENSITIVE_GRANT_IDS = frozenset({QUICKBOOKS_MONEY, PAYROLL_QUICKBOOKS_PUSH})
+
+# Opens the payroll week (/hr/time/week and the Payroll week tile).
+# capability:payroll_correct is post-cutoff editing and is not this key.
+PRACTICE_OWNER_PERMISSIONS = (
+    "tool:employee_view",
+    HR_RECORDS_VIEW,
+    CREDENTIALING_TOOL,
+    PAYROLL_DASHBOARD,
+    DENIALS_SUMMARY,
+)
 
 # Added to the Billing role by the one-time grants migration. Never removed.
 NEW_BILLING_GRANTS = (
@@ -150,6 +162,14 @@ def permission_registry() -> list[dict[str, Any]]:
                 "group": "capability",
                 "grantable": True,
             },
+            {
+                "id": DENIALS_SUMMARY,
+                "name": DENIALS_SUMMARY_NAME,
+                "group": "capability",
+                "grantable": True,
+                "sensitive": True,
+                "note": "No route uses this yet. The Denial module is not built.",
+            },
         ]
     )
     return rows
@@ -165,9 +185,13 @@ def billing_role_permissions() -> list[str]:
 
 
 def admin_permissions() -> list[str]:
-    """Admin sees and controls the product, except Melissa-only corrections and sensitive grants."""
+    """Admin sees and controls the product, except Melissa-only corrections and sensitive grants.
+
+    Denial summaries stay off this automatic set. Practice Owner lists that
+    key itself, so adding it does not change anyone else's effective permissions.
+    """
     return [
         item
         for item in grantable_ids()
-        if item != PAYROLL_CORRECT and item not in SENSITIVE_GRANT_IDS
+        if item != PAYROLL_CORRECT and item not in SENSITIVE_GRANT_IDS and item != DENIALS_SUMMARY
     ]
