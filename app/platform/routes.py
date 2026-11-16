@@ -246,6 +246,12 @@ def _employee_rollout_on(user: CurrentUser) -> bool:
     return employees_store.rollout_enabled(user.practice_id)
 
 
+def _hiring_rollout_on(user: CurrentUser) -> bool:
+    from app.hiring.engine import hiring
+
+    return hiring.rollout_enabled(user.practice_id)
+
+
 def _visible_units(user: CurrentUser) -> list[dict]:
     """Admin sees every catalog module. Everyone else sees granted live modules."""
     from app.access.resolve import permissions_for, sees_every_module
@@ -264,6 +270,13 @@ def _visible_units(user: CurrentUser) -> list[dict]:
                 tool["href"] = "/#employee"
                 tool["coming_soon"] = False
                 tool["open_label"] = "Open Employee View"
+            if tool.get("id") == "hiring_onboarding":
+                if not full and not _hiring_rollout_on(user):
+                    continue
+                tool["status"] = "live"
+                tool["href"] = "/#hiring"
+                tool["coming_soon"] = False
+                tool["open_label"] = "Open Hiring"
             if tool.get("status") == "planned":
                 if not full:
                     continue

@@ -18,6 +18,7 @@ from app.access.guard import access_middleware
 from app.access.routes import router as access_router
 from app.billing.routes import router as billing_router
 from app.denials.routes import router as denials_router
+from app.hiring.routes import router as hiring_router
 from app.credentialing.routes import router as credentialing_router
 from app.employees.routes import router as employee_router
 from app.platform.routes import legacy as attune_legacy_router
@@ -102,6 +103,7 @@ app.include_router(credentialing_router)
 app.include_router(employee_router)
 app.include_router(billing_router)
 app.include_router(denials_router)
+app.include_router(hiring_router)
 app.middleware("http")(access_middleware)
 
 
@@ -129,6 +131,13 @@ def _migrate_access_roles() -> None:
         denials_store.purge_if_due()
     except Exception:
         return
+
+
+@app.on_event("startup")
+def _hiring_scheduler() -> None:
+    from app.hiring.engine import start_scheduler
+
+    start_scheduler()
 
 _UPLOAD_ROOT = Path(tempfile.gettempdir()) / "clynotion_uploads"
 _UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)

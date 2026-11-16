@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+import tempfile
 
 import pytest
 
@@ -25,6 +26,12 @@ os.environ["ATTUNE_EMPLOYEES_PERSISTENCE"] = "memory"
 os.environ.pop("ATTUNE_EMPLOYEES_ENCRYPTION_KEY", None)
 os.environ["ATTUNE_DENIALS_PERSISTENCE"] = "memory"
 os.environ.pop("DENIALS_FERNET_KEY", None)
+os.environ["ATTUNE_ONBOARDING_PERSISTENCE"] = "memory"
+os.environ["ATTUNE_ONBOARDING_FILES_PATH"] = tempfile.mkdtemp(prefix="clynotion-hiring-")
+os.environ["ATTUNE_OFFER_PDF"] = "stub"
+os.environ["ATTUNE_HIRING_SCHEDULER"] = "off"
+os.environ["FILE_STORE_BACKEND"] = "local"
+os.environ.pop("GOOGLE_DRIVE_SA_JSON", None)
 os.environ["TIME_MAIL_MODE"] = "off"
 os.environ.pop("CRON_SECRET", None)
 os.environ.pop("GOOGLE_SA_JSON", None)
@@ -53,6 +60,11 @@ def _reset_clinician_store():
     from app.denials.store import denials_store
 
     denials_store.reset()
+    from app.hiring.engine import hiring
+    from app.hiring.mailer import clear_capture_for_tests
+
+    hiring.reset()
+    clear_capture_for_tests()
     access_store.set_assignment("practice-b", "bob@example.com", "clinician")
     access_store.update_role_permissions(
         "practice-b",
@@ -74,6 +86,11 @@ def _reset_clinician_store():
     credentialing_store.reset()
     employees_store.reset()
     denials_store.reset()
+    from app.hiring.engine import hiring
+    from app.hiring.mailer import clear_capture_for_tests
+
+    hiring.reset()
+    clear_capture_for_tests()
     set_clock(None)
     clear_mailer_for_tests()
     clinician_store.reset()
