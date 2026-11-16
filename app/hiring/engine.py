@@ -129,6 +129,22 @@ def _drive_ok(offer: dict[str, Any], display_name: str) -> bool:
     return str(offer.get("drive_pdf_name") or "") == offer_letter_filename(display_name)
 
 
+def drive_prompt(offer: dict[str, Any], display_name: str) -> tuple[str, bool]:
+    """Status line and whether Retry should show. Working is progress only."""
+    status = str(offer.get("drive_status") or "")
+    if not status:
+        status = "connected" if offer.get("drive_folder_id") else "not_connected"
+    if status == "working":
+        return "Creating Drive folders…", False
+    if status == "trashed":
+        return "Folder trashed", False
+    if _drive_ok(offer, display_name):
+        return "", False
+    if status == "not_connected":
+        return "Drive not connected", True
+    return "Drive needs another try", True
+
+
 def _drive_async() -> bool:
     flag = (os.environ.get("ATTUNE_HIRING_DRIVE_ASYNC") or "").strip().lower()
     if flag in {"0", "false", "no"}:
@@ -1400,6 +1416,8 @@ class HiringEngine:
                 self._sync_personnel(row, offer, actor, pdf=True)
             parent = str(offer.get("drive_folder_id") or "")
             if not parent or not hasattr(client, "ensure_child"):
+                if offer.get("drive_status") == "working":
+                    offer["drive_status"] = "connected" if parent else "error"
                 return
             children = dict(hire.get("drive_subfolders") or {})
             created = False
@@ -1412,6 +1430,7 @@ class HiringEngine:
                 self._history(row, "hire", hire["id"], "folders", "clynotion", "Onboarding folders created")
             onboarding = str(children.get("01 Onboarding") or "")
             if not onboarding:
+                offer["drive_status"] = "error"
                 return
             candidate = row["candidates"].get(offer.get("candidate_id") or "") or {}
             name = str(candidate.get("display_name") or folder_name(""))
@@ -1538,6 +1557,8 @@ class HiringEngine:
             "drive_connected": _drive_connected(),
             "drive_status": offer.get("drive_status") or ("connected" if offer.get("drive_folder_id") else "not_connected"),
             "drive_ok": _drive_ok(offer, str(candidate.get("display_name") or "")),
+            "drive_note": drive_prompt(offer, str(candidate.get("display_name") or ""))[0],
+            "drive_retry": drive_prompt(offer, str(candidate.get("display_name") or ""))[1],
             "drive_folder_url": offer.get("drive_folder_url") or "",
         }
 
@@ -1843,9 +1864,10 @@ class HiringEngine:
                 raise HiringError(400, "Type the candidate's name to confirm.")
             self._trash_drive_ids([str(offer.get("drive_folder_id") or "")])
             for key in _DRIVE_OFFER_KEYS:
-                if key in offer:
-                    offer[key] = "" if key != "drive_status" else "not_connected"
-            offer["drive_status"] = "not_connected"
+                if key == "drive_status" or key not in offer:
+                    continue
+                offer[key] = ""
+            offer["drive_status"] = "trashed"
             for ref_id, ref in list((row.get("document_refs") or {}).items()):
                 if ref.get("hire_id") != hire_id:
                     continue

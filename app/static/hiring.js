@@ -211,6 +211,44 @@
       }
     });
     applyType();
+    const form = formEl();
+    const locked = !!(offer && offer.status === "accepted");
+    if (form) {
+      form.querySelectorAll("input, select, textarea, button[type=submit]").forEach(function (node) {
+        if (!locked && node.id !== "hire-editing") {
+          if (node.id === "hire-qsehra_monthly_amount" || node.id === "hire-qsehra_wait_days") return;
+          node.disabled = false;
+        }
+      });
+      if (locked) {
+        form.querySelectorAll("input, select, textarea, button[type=submit]").forEach(function (node) {
+          node.disabled = true;
+        });
+      }
+    }
+    let lockedNote = document.getElementById("hire-locked-note");
+    if (locked) {
+      if (!lockedNote && form) {
+        lockedNote = document.createElement("p");
+        lockedNote.id = "hire-locked-note";
+        lockedNote.className = "meta";
+        lockedNote.textContent = "Accepted offers can't be edited.";
+        form.appendChild(lockedNote);
+      }
+    } else if (lockedNote) {
+      lockedNote.remove();
+    }
+  }
+
+  function maybeWatch(offers) {
+    const working = (offers || []).filter(function (offer) { return offer.drive_status === "working"; })[0];
+    if (!working) {
+      watchingId = "";
+      return;
+    }
+    if (watchingId === working.id) return;
+    watchingId = working.id;
+    watchDrive(working.id, keptEditId || working.id);
   }
 
   function applyType() {
@@ -453,16 +491,13 @@
         link.textContent = "Personnel folder";
         buttons.appendChild(link);
       }
-      if (offer.drive_status === "working") {
+      if (offer.drive_note) {
         const note = document.createElement("span");
         note.className = "meta";
-        note.textContent = "Creating Drive folders…";
+        note.textContent = offer.drive_note;
         buttons.appendChild(note);
-      } else if (!offer.drive_ok) {
-        const note = document.createElement("span");
-        note.className = "meta";
-        note.textContent = offer.drive_status === "not_connected" || !offer.drive_connected ? "Drive not connected" : "Drive needs another try";
-        buttons.appendChild(note);
+      }
+      if (offer.drive_retry) {
         button("Retry", "ghost", function () {
           retryDrive(offer.id);
         });
@@ -533,6 +568,7 @@
     }
     const wrap = document.getElementById("hire-resume-wrap");
     if (wrap) wrap.hidden = false;
+    maybeWatch(offers);
   }
 
   function showDecision(offer, kind, anchor) {
@@ -626,8 +662,7 @@
     try {
       const saved = await ui().api("/hiring/offers/" + id + "/accept-paper", { method: "POST", body: body });
       const offer = saved && saved.offer;
-      await window.clyHiring.open({ editId: "", message: "Acceptance recorded." });
-      if (offer && offer.drive_status === "working") await watchDrive(offer.id, "");
+      await window.clyHiring.open({ editId: id, message: "Acceptance recorded." });
     } catch (error) {
       showStatus((error && error.message) || "Could not save.", "error");
     }
@@ -854,6 +889,8 @@
           card.appendChild(undoPacket);
         }
       }
+      const removeWrap = document.createElement("div");
+      removeWrap.className = "hire-action";
       const remove = document.createElement("button");
       remove.type = "button";
       remove.className = "ghost";
@@ -865,7 +902,7 @@
           label: "Type the candidate's name",
           expected: hire.display_name || "",
           confirmText: "Delete hire",
-          anchor: remove,
+          anchor: removeWrap,
           onConfirm: function (typed) {
             ui()
               .api("/hiring/hires/" + hire.id + "/delete", { method: "POST", json: { confirm: typed } })
@@ -878,7 +915,8 @@
           },
         });
       };
-      card.appendChild(remove);
+      removeWrap.appendChild(remove);
+      card.appendChild(removeWrap);
       box.appendChild(card);
     });
     root.appendChild(box);
@@ -969,6 +1007,7 @@
   let saving = false;
   let keptEditId = "";
   let keptOffer = null;
+  let watchingId = "";
 
   async function saveOffer() {
     if (saving) return;
@@ -996,7 +1035,6 @@
       }
       const offerId = (saved && saved.id) || editingId;
       const opened = await window.clyHiring.open({ message: "Saved.", editId: offerId, offer: saved });
-      if (saved && saved.drive_status === "working") await watchDrive(offerId, offerId);
       if (!opened) {
         const editingNow = document.getElementById("hire-editing");
         if (editingNow && offerId) editingNow.value = offerId;
