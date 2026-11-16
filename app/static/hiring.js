@@ -581,13 +581,18 @@
     fetch("/hiring/offers/" + id + "/" + kind, { headers: headers, credentials: "include" })
       .then(function (res) {
         if (!res.ok) throw new Error("Could not download the letter");
-        return res.blob();
+        const disposition = res.headers.get("Content-Disposition") || "";
+        const named = disposition.match(/filename="([^"]+)"/i);
+        const filename = named ? named[1] : id + "." + (kind === "resume" ? "pdf" : kind);
+        return res.blob().then(function (blob) {
+          return { blob: blob, filename: filename };
+        });
       })
-      .then(function (blob) {
-        const url = URL.createObjectURL(blob);
+      .then(function (file) {
+        const url = URL.createObjectURL(file.blob);
         const link = document.createElement("a");
         link.href = url;
-        link.download = id + "." + kind;
+        link.download = file.filename;
         link.click();
         URL.revokeObjectURL(url);
       })

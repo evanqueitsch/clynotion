@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 
 from app.auth import User, issue_token
 from app.hiring.pdf import soffice_command, text_pdf
-from app.hiring.personnel_drive import PersonnelDrive, clear_personnel_drive_for_tests, folder_name, set_personnel_drive_for_tests
+from app.hiring.personnel_drive import PersonnelDrive, clear_personnel_drive_for_tests, folder_name, resume_filename, set_personnel_drive_for_tests
 from app.hiring.resume import ResumeReadError, ground_fields, read_resume, resume_mode
 from app.main import app
 
@@ -180,7 +180,9 @@ def test_upload_stores_encrypted_resume_without_logging_it(caplog) -> None:
     downloaded = client.get(f"/hiring/offers/{offer['id']}/resume", headers=_alice())
     assert downloaded.status_code == 200
     assert downloaded.content == RESUME
-    assert "jordan" not in downloaded.headers["content-disposition"].casefold()
+    disposition = downloaded.headers["content-disposition"]
+    assert disposition == 'attachment; filename="Example_Jordan_resume.txt"'
+    assert downloaded.headers["content-type"].startswith("text/plain")
     removed = client.post(
         f"/hiring/offers/{offer['id']}/delete",
         headers=_alice(),
@@ -220,7 +222,7 @@ def test_personnel_folder_is_created_once_and_receives_resume_then_pdf() -> None
         assert offer["drive_connected"] is True
         assert offer["drive_folder_url"].endswith("/fld-1")
         assert drive.folders == {"fld-1": "Example, Jordan"}
-        assert drive.uploads[0][1] == "resume.txt"
+        assert drive.uploads[0][1] == "Example_Jordan_resume.txt"
         assert drive.uploads[0][2] == RESUME
         again = client.put(f"/hiring/offers/{offer['id']}", headers=_alice(), json=_offer(uploaded.json()["resume_id"]))
         assert again.status_code == 200, again.text
@@ -228,7 +230,7 @@ def test_personnel_folder_is_created_once_and_receives_resume_then_pdf() -> None
         assert len(drive.uploads) == 1
         sent = client.post(f"/hiring/offers/{offer['id']}/send", headers=_alice(), json={"channel": "outside"})
         assert sent.status_code == 200, sent.text
-        assert [item[1] for item in drive.uploads] == ["resume.txt", "offer-letter.pdf"]
+        assert [item[1] for item in drive.uploads] == ["Example_Jordan_resume.txt", "offer-letter.pdf"]
         retry = client.post(f"/hiring/offers/{offer['id']}/drive", headers=_alice())
         assert retry.status_code == 200, retry.text
         assert len(drive.uploads) == 2
@@ -392,3 +394,5 @@ def test_drive_calls_stay_on_one_shared_drive() -> None:
     assert post_call[2]["json"]["parents"] == ["personnel-drive"]
     assert folder_name("Jordan Example") == "Example, Jordan"
     assert folder_name("Jordan") == "Jordan"
+    assert resume_filename("Jordan Example", "application/pdf") == "Example_Jordan_resume.pdf"
+    assert resume_filename("Jordan Example", "application/vnd.openxmlformats-officedocument.wordprocessingml.document") == "Example_Jordan_resume.docx"

@@ -1132,8 +1132,11 @@ class HiringEngine:
             _ref(str(resume.get("object_key") or ""), str(resume.get("backend") or "local"), str(resume.get("sha256") or ""))
         )
         mime = str(resume.get("mime") or "application/octet-stream")
-        extension = {"application/pdf": "pdf", "text/plain": "txt"}.get(mime, "docx")
-        offer["drive_resume_file_id"] = client.upload(folder_id, f"resume.{extension}", data, mime)
+        candidate = row["candidates"].get(offer.get("candidate_id") or "") or {}
+        from app.hiring.personnel_drive import resume_filename
+
+        filename = resume_filename(str(candidate.get("display_name") or ""), mime)
+        offer["drive_resume_file_id"] = client.upload(folder_id, filename, data, mime)
         self._history(row, "offer", offer["id"], "drive_resume", actor, "Resume copied to the personnel folder")
 
     def _copy_pdf_to_drive(self, row: dict[str, Any], offer: dict[str, Any], client: Any, actor: str) -> None:
@@ -1178,8 +1181,10 @@ class HiringEngine:
         self._history(row, "resume", str(resume.get("id") or ""), "downloaded", actor, "Resume downloaded")
         self._save(payload)
         mime = str(resume.get("mime") or "application/octet-stream")
-        extension = {"application/pdf": "pdf", "text/plain": "txt"}.get(mime, "docx")
-        return data, mime, f"resume.{extension}"
+        candidate = row["candidates"].get(offer.get("candidate_id") or "") or {}
+        from app.hiring.personnel_drive import resume_filename
+
+        return data, mime, resume_filename(str(candidate.get("display_name") or ""), mime)
 
     def _offer_public(self, row: dict[str, Any], offer: dict[str, Any]) -> dict[str, Any]:
         candidate = row["candidates"].get(offer["candidate_id"]) or {}
