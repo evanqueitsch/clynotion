@@ -23,8 +23,10 @@ logger = logging.getLogger("app.hiring.resume")
 
 MAX_RESUME_BYTES = 10 * 1024 * 1024
 DEFAULT_MODEL = "gemini-2.5-flash"
-FALLBACK_MODEL = "gemini-2.5-flash-lite"
+FLASH_VARIANTS = ("gemini-3-flash", "gemini-3.1-flash", "gemini-3-flash-001", "gemini-2.5-flash")
 VERTEX_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
+_MODEL_CACHE_SECONDS = 3600
+_model_cache: tuple[float, str] | None = None
 FIELD_NAMES = (
     "candidate_full_name",
     "candidate_first_name",
@@ -71,6 +73,7 @@ class ResumeReadError(ValueError):
         reason: str = "",
         model: str = "",
         location: str = "",
+        attempts: list[dict[str, Any]] | None = None,
     ) -> None:
         super().__init__(message)
         self.stage = stage
@@ -79,6 +82,7 @@ class ResumeReadError(ValueError):
         self.reason = reason
         self.model = model
         self.location = location
+        self.attempts = list(attempts or [])
 
 
 def resume_mode() -> str:
@@ -280,7 +284,7 @@ def _txt_text(data: bytes) -> str:
 
 def _gemini_fields(text: str) -> dict[str, str]:
     try:
-        raw, _model, _location = _gemini_complete(_PROMPT + text)
+        raw, _model, _location, _attempts = _gemini_complete(_PROMPT + text)
     except ResumeReadError:
         raise
     except Exception as exc:
@@ -312,33 +316,52 @@ def _json_object(raw: str) -> dict[str, Any]:
     return parsed
 
 
-def _gemini_complete(text: str) -> tuple[str, str, str]:
+def _gemini_complete(text: str) -> tuple[str, str, str, list[dict[str, Any]]]:
     token = _gemini_token()
     project = _gemini_project()
+    attempts: list[dict[str, Any]] = []
     last_error: ResumeReadError | None = None
-    for location, model in _model_attempts():
+    for location, model in _model_attempts(token):
         try:
             reply = _generate(project, location, model, token, text)
         except ResumeReadError as exc:
+            attempts.append(
+                {"model": model, "location": location, "status": exc.http_status or exc.google_status or "error"}
+            )
+            exc.attempts = list(attempts)
             last_error = exc
             if exc.google_status == "NOT_FOUND" or exc.http_status == 404:
                 continue
             raise
-        return reply, model, location
+        attempts.append({"model": model, "location": location, "status": 200})
+        return reply, model, location, attempts
     if last_error is not None:
+        last_error.attempts = attempts
         raise last_error
-    raise ResumeReadError("The resume could not be read.", stage="vertex")
+    raise ResumeReadError("The resume could not be read.", stage="vertex", attempts=attempts)
 
 
-def _model_attempts() -> list[tuple[str, str]]:
-    location = (os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-east4").strip() or "us-east4"
-    primary = (os.environ.get("GEMINI_MODEL") or DEFAULT_MODEL).strip() or DEFAULT_MODEL
-    fallback = (os.environ.get("GEMINI_MODEL_FALLBACK") or FALLBACK_MODEL).strip()
-    models = [primary]
-    if fallback and fallback not in models:
-        models.append(fallback)
-    locations = [location]
-    if location != "us-central1":
+def clear_model_cache() -> None:
+    global _model_cache
+    _model_cache = None
+
+
+def _model_attempts(token: str) -> list[tuple[str, str]]:
+    models: list[str] = []
+    override = (os.environ.get("GEMINI_MODEL") or "").strip()
+    if override:
+        models.append(override)
+    newest = _newest_flash_model(token)
+    if newest and newest not in models:
+        models.append(newest)
+    for name in FLASH_VARIANTS:
+        if name not in models:
+            models.append(name)
+    locations = ["global"]
+    regional = (os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-east4").strip() or "us-east4"
+    if regional not in locations:
+        locations.append(regional)
+    if "us-central1" not in locations:
         locations.append("us-central1")
     attempts: list[tuple[str, str]] = []
     for place in locations:
@@ -349,10 +372,85 @@ def _model_attempts() -> list[tuple[str, str]]:
     return attempts
 
 
+def _newest_flash_model(token: str) -> str:
+    global _model_cache
+    now = time.time()
+    if _model_cache and now - _model_cache[0] < _MODEL_CACHE_SECONDS:
+        return _model_cache[1]
+    try:
+        catalog = _list_publisher_models(token)
+    except Exception as exc:
+        _log_failure(stage="model_list", exc=exc)
+        return ""
+    picked = _choose_ga_flash(catalog)
+    if picked:
+        _model_cache = (now, picked)
+    return picked
+
+
+def _list_publisher_models(token: str) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    page = ""
+    for _ in range(5):
+        params: dict[str, str] = {"pageSize": "100"}
+        if page:
+            params["pageToken"] = page
+        response = httpx.get(
+            "https://aiplatform.googleapis.com/v1/publishers/google/models",
+            headers={"Authorization": f"Bearer {token}"},
+            params=params,
+            timeout=15.0,
+        )
+        if response.status_code >= 400:
+            info = _google_error(response)
+            _log_failure(stage="model_list", **info)
+            break
+        body = response.json() if response.content else {}
+        if not isinstance(body, dict):
+            break
+        batch = body.get("publisherModels") or body.get("models") or []
+        if isinstance(batch, list):
+            found.extend(item for item in batch if isinstance(item, dict))
+        page = str(body.get("nextPageToken") or "")
+        if not page:
+            break
+    return found
+
+
+def _choose_ga_flash(catalog: list[dict[str, Any]]) -> str:
+    ranked: list[tuple[tuple[int, int], str]] = []
+    for item in catalog:
+        model_id = str(item.get("name") or "").rsplit("/", 1)[-1]
+        if not _ga_flash(item, model_id):
+            continue
+        ranked.append((_version_key(model_id), model_id))
+    if not ranked:
+        return ""
+    ranked.sort(reverse=True)
+    return ranked[0][1]
+
+
+def _ga_flash(item: dict[str, Any], model_id: str) -> bool:
+    stage = str(item.get("launchStage") or "").upper()
+    if stage not in {"GA", "LAUNCH_STAGE_GA"}:
+        return False
+    if not re.fullmatch(r"gemini-\d+(?:\.\d+)?-flash(?:@\d+)?", model_id):
+        return False
+    return "preview" not in model_id and "exp" not in model_id
+
+
+def _version_key(model_id: str) -> tuple[int, int]:
+    match = re.search(r"gemini-(\d+)(?:\.(\d+))?", model_id)
+    if not match:
+        return (0, 0)
+    return (int(match.group(1)), int(match.group(2) or 0))
+
+
 def _generate(project: str, location: str, model: str, token: str, text: str) -> str:
+    host = "https://aiplatform.googleapis.com" if location == "global" else f"https://{location}-aiplatform.googleapis.com"
     url = (
-        f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}"
-        f"/locations/{location}/publishers/google/models/{model}:generateContent"
+        f"{host}/v1/projects/{project}/locations/{location}"
+        f"/publishers/google/models/{model}:generateContent"
     )
     body = {
         "contents": [{"role": "user", "parts": [{"text": text[:20000]}]}],
@@ -402,8 +500,7 @@ def _gemini_project() -> str:
 
 
 def _gemini_target() -> tuple[str, str, str]:
-    location, model = _model_attempts()[0]
-    return _gemini_project(), location, model
+    return _gemini_project(), "global", (os.environ.get("GEMINI_MODEL") or DEFAULT_MODEL).strip() or DEFAULT_MODEL
 
 
 def _service_account() -> dict[str, Any]:
@@ -529,7 +626,7 @@ def reader_health() -> dict[str, Any]:
     mode = resume_mode()
     pypdf_ok = _pypdf_installed()
     if mode == "mock":
-        return {"ok": True, "mode": "mock", "model": "", "location": "", "scope": VERTEX_SCOPE, "pypdf": pypdf_ok}
+        return {"ok": True, "mode": "mock", "model": "", "chosen_model": "", "location": "", "attempts": [], "scope": VERTEX_SCOPE, "pypdf": pypdf_ok}
     if not resume_configured():
         return {
             "ok": False,
@@ -540,7 +637,7 @@ def reader_health() -> dict[str, Any]:
             "pypdf": pypdf_ok,
         }
     try:
-        _reply, model, location = _gemini_complete("Reply with the single word ok.")
+        _reply, model, location, attempts = _gemini_complete("Reply with the single word ok.")
     except ResumeReadError as exc:
         return {
             "ok": False,
@@ -550,7 +647,9 @@ def reader_health() -> dict[str, Any]:
             "google_status": exc.google_status,
             "reason": exc.reason,
             "model": exc.model,
+            "chosen_model": exc.model,
             "location": exc.location,
+            "attempts": exc.attempts,
             "error": "The resume reader could not reach Vertex.",
             "scope": VERTEX_SCOPE,
             "pypdf": pypdf_ok,
@@ -559,7 +658,9 @@ def reader_health() -> dict[str, Any]:
         "ok": True,
         "mode": "gemini",
         "model": model,
+        "chosen_model": model,
         "location": location,
+        "attempts": attempts,
         "scope": VERTEX_SCOPE,
         "pypdf": pypdf_ok,
     }

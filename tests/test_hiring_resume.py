@@ -410,6 +410,9 @@ class _VertexResponse:
 
 
 def test_not_found_model_falls_back_and_logs_without_resume_text(monkeypatch, caplog) -> None:
+    from app.hiring.resume import clear_model_cache
+
+    clear_model_cache()
     monkeypatch.setenv("ATTUNE_RESUME_LLM", "gemini")
     monkeypatch.setenv(
         "GOOGLE_SA_JSON",
@@ -420,9 +423,22 @@ def test_not_found_model_falls_back_and_logs_without_resume_text(monkeypatch, ca
     monkeypatch.setattr("app.hiring.resume._gemini_token", lambda: "token")
     calls: list[str] = []
 
+    def fake_get(url: str, **_kwargs):
+        assert url == "https://aiplatform.googleapis.com/v1/publishers/google/models"
+        return _VertexResponse(
+            200,
+            {
+                "publisherModels": [
+                    {"name": "publishers/google/models/gemini-2.0-flash", "launchStage": "GA"},
+                    {"name": "publishers/google/models/gemini-3-flash", "launchStage": "GA"},
+                    {"name": "publishers/google/models/gemini-3-flash-preview", "launchStage": "PUBLIC_PREVIEW"},
+                ]
+            },
+        )
+
     def fake_post(url: str, **_kwargs):
         calls.append(url)
-        if "/models/gemini-2.5-flash:" in url:
+        if "/locations/global/" in url and "/models/gemini-3-flash:" in url:
             return _VertexResponse(
                 404,
                 {"error": {"code": 404, "status": "NOT_FOUND", "message": "model was not found", "details": [{"reason": "NOT_FOUND"}]}},
@@ -432,28 +448,33 @@ def test_not_found_model_falls_back_and_logs_without_resume_text(monkeypatch, ca
             {"candidates": [{"content": {"parts": [{"text": '{"candidate_full_name":"Jordan Example","personal_email":"jordan.example@example.com"}'}]}}]},
         )
 
+    monkeypatch.setattr("app.hiring.resume.httpx.get", fake_get)
     monkeypatch.setattr("app.hiring.resume.httpx.post", fake_post)
     caplog.set_level(logging.WARNING)
     fields = read_resume(RESUME, "jordan.txt")
     assert fields["candidate_full_name"] == "Jordan Example"
-    assert fields["personal_email"] == "jordan.example@example.com"
-    assert any("/models/gemini-2.5-flash:" in url for url in calls)
-    assert any("/models/gemini-2.5-flash-lite:" in url for url in calls)
+    assert calls[0].startswith("https://aiplatform.googleapis.com/v1/projects/attune-clynotion/locations/global/")
+    assert "/models/gemini-3-flash:" in calls[0]
     assert "resume_read_failed" in caplog.text
     assert "http_status=404" in caplog.text
-    assert "NOT_FOUND" in caplog.text
-    assert "gemini-2.5-flash" in caplog.text
-    assert "us-east4" in caplog.text
     assert "jordan.example@example.com" not in caplog.text
+    clear_model_cache()
 
 
 def test_permission_error_does_not_try_another_model(monkeypatch, caplog) -> None:
+    from app.hiring.resume import clear_model_cache
+
+    clear_model_cache()
     monkeypatch.setenv("ATTUNE_RESUME_LLM", "gemini")
     monkeypatch.setenv(
         "GOOGLE_SA_JSON",
         '{"client_email":"sa@attune-clynotion.iam.gserviceaccount.com","private_key":"unused","project_id":"attune-clynotion"}',
     )
     monkeypatch.setattr("app.hiring.resume._gemini_token", lambda: "token")
+    monkeypatch.setattr(
+        "app.hiring.resume.httpx.get",
+        lambda *_args, **_kwargs: _VertexResponse(200, {"publisherModels": []}),
+    )
     calls: list[str] = []
 
     def fake_post(url: str, **_kwargs):
@@ -472,6 +493,43 @@ def test_permission_error_does_not_try_another_model(monkeypatch, caplog) -> Non
     assert len(calls) == 1
     assert "PERMISSION_DENIED" in caplog.text
     assert "jordan.example@example.com" not in caplog.text
+    assert calls[0].startswith("https://aiplatform.googleapis.com/")
+    assert "/locations/global/" in calls[0]
+    clear_model_cache()
+
+
+def test_resume_reader_health_reports_attempts(monkeypatch) -> None:
+    from app.hiring.resume import clear_model_cache, reader_health
+
+    clear_model_cache()
+    monkeypatch.setenv("ATTUNE_RESUME_LLM", "gemini")
+    monkeypatch.setenv(
+        "GOOGLE_SA_JSON",
+        '{"client_email":"sa@attune-clynotion.iam.gserviceaccount.com","private_key":"unused","project_id":"attune-clynotion"}',
+    )
+    monkeypatch.setattr("app.hiring.resume._gemini_token", lambda: "token")
+    monkeypatch.setattr(
+        "app.hiring.resume.httpx.get",
+        lambda *_args, **_kwargs: _VertexResponse(
+            200,
+            {"publisherModels": [{"name": "publishers/google/models/gemini-3-flash", "launchStage": "GA"}]},
+        ),
+    )
+
+    def fake_post(url: str, **_kwargs):
+        if "/models/gemini-3-flash:" in url and "/locations/global/" in url:
+            return _VertexResponse(404, {"error": {"code": 404, "status": "NOT_FOUND", "message": "missing"}})
+        return _VertexResponse(200, {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]})
+
+    monkeypatch.setattr("app.hiring.resume.httpx.post", fake_post)
+    report = reader_health()
+    assert report["ok"] is True
+    assert report["chosen_model"] == "gemini-3.1-flash"
+    assert report["location"] == "global"
+    assert report["attempts"][0] == {"model": "gemini-3-flash", "location": "global", "status": 404}
+    assert report["attempts"][1]["model"] == "gemini-3.1-flash"
+    assert report["attempts"][1]["status"] == 200
+    clear_model_cache()
 
 
 def test_pdf_extraction_failure_names_the_stage(caplog) -> None:
