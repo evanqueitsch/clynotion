@@ -36,12 +36,18 @@ DENIALS_SUMMARY_NAME = "Denial summaries (de-identified totals and trends)"
 DENIALS_TOOL = "tool:denials"
 DENIALS_TOOL_NAME = "Denial analysis (de-identified claims)"
 PHI_CLAIMS = "capability:phi_claims"
+OFFER_MANAGE = "capability:offer_manage"
+ONBOARDING_SENSITIVE = "capability:onboarding_sensitive"
+HIRING_PAYROLL = "capability:hiring_payroll"
+HIRING_TOOL = "tool:hiring_onboarding"
 # Bound to this mailbox the way post-cutoff correction is bound to Melissa.
 # Not a Billing-role grant.
 CHRISTINE_EMAIL = "billing@heart4change.org"
 
 # Grantable by name. No role receives these unless an Admin saves the grant.
-SENSITIVE_GRANT_IDS = frozenset({QUICKBOOKS_MONEY, PAYROLL_QUICKBOOKS_PUSH})
+SENSITIVE_GRANT_IDS = frozenset(
+    {QUICKBOOKS_MONEY, PAYROLL_QUICKBOOKS_PUSH, OFFER_MANAGE, ONBOARDING_SENSITIVE}
+)
 
 # Opens the payroll week (/hr/time/week and the Payroll week tile).
 # capability:payroll_correct is post-cutoff editing and is not this key.
@@ -191,6 +197,29 @@ def permission_registry() -> list[dict[str, Any]]:
                 "sensitive": True,
                 "note": "Catalog only. Gates future PHI features. Bound to the billing mailbox. Off in this phase.",
             },
+            {
+                "id": OFFER_MANAGE,
+                "name": "Create and send offers",
+                "group": "capability",
+                "grantable": True,
+                "sensitive": True,
+                "note": "Admin only until a later grant. Includes pay.",
+            },
+            {
+                "id": ONBOARDING_SENSITIVE,
+                "name": "Onboarding sensitive files",
+                "group": "capability",
+                "grantable": True,
+                "sensitive": True,
+                "note": "I-9 scans and clearances. Admin only until a later grant.",
+            },
+            {
+                "id": HIRING_PAYROLL,
+                "name": "Payroll handoff for new hires",
+                "group": "capability",
+                "grantable": True,
+                "note": "Name, start date, and payroll checklist items. Not granted on a role yet.",
+            },
         ]
     )
     return rows
@@ -216,7 +245,7 @@ def admin_permissions() -> list[str]:
         for item in grantable_ids()
         if item != PAYROLL_CORRECT and item not in SENSITIVE_GRANT_IDS and item != DENIALS_SUMMARY
     ]
-    for item in (DENIALS_TOOL, PHI_CLAIMS):
+    for item in (DENIALS_TOOL, PHI_CLAIMS, OFFER_MANAGE, ONBOARDING_SENSITIVE):
         if item not in rows:
             rows.append(item)
     return rows

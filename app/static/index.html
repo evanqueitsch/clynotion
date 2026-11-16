@@ -732,6 +732,16 @@
       <div id="denials-files"></div>
     </section>
 
+    <section id="hiring-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">Hiring</h2>
+        <button class="ghost" id="btn-hiring-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <p class="meta">Offers stay with Admin. Letters are downloaded and sent by hand until candidate email is turned on.</p>
+      <p class="status" id="hiring-status"></p>
+      <div id="hiring-root"></div>
+    </section>
+
     <section id="settings-panel" class="panel hidden">
       <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
         <h2 style="margin:0;">Settings</h2>
@@ -1115,7 +1125,8 @@
   <script src="/static/credentialing.js?v=0.19.9"></script>
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.19.7"></script>
-  <script src="/static/denials.js?v=0.20.0"></script>
+  <script src="/static/denials.js?v=0.21.0"></script>
+  <script src="/static/hiring.js?v=0.21.0"></script>
   <script>
     const state = {
       token: null,
@@ -2243,6 +2254,7 @@
         const wantSettings = hash === "#settings";
         const wantEmployee = hash === "#employee";
         const wantEmployees = hash === "#employees";
+        const wantHiring = hash === "#hiring";
         const timeRoute = hashRoute();
         if (timeRoute.path === "time-admin" && timeRoute.params.get("v") && $("time-admin-version")) {
           $("time-admin-version").value = timeRoute.params.get("v");
@@ -2288,6 +2300,8 @@
           await openEmployee();
         } else if (wantEmployees) {
           await openEmployees();
+        } else if (wantHiring) {
+          await openHiring();
         } else if (wantOnboarding) {
           await openOnboarding();
         } else if (wantTime) {
@@ -2310,7 +2324,7 @@
     }
 
     function show(panel) {
-      ["auth-panel", "no-access-panel", "access-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel", "credentialing-panel", "billing-panel", "denials-panel", "settings-panel", "employee-panel", "employees-panel", "time-panel", "time-admin-panel", "time-settings-panel", "time-self-test-panel"].forEach((id) => {
+      ["auth-panel", "no-access-panel", "access-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel", "credentialing-panel", "billing-panel", "denials-panel", "settings-panel", "hiring-panel", "employee-panel", "employees-panel", "time-panel", "time-admin-panel", "time-settings-panel", "time-self-test-panel"].forEach((id) => {
         $(id).classList.toggle("hidden", id !== panel);
       });
       document.body.classList.toggle("credentialing-open", panel === "credentialing-panel");
@@ -2366,6 +2380,7 @@
       if (href.includes("#billing")) return window.openBilling();
       if (href.includes("#denials")) return window.openDenials();
       if (href.includes("#settings")) return window.openSettings();
+      if (href.includes("#hiring")) return openHiring();
       if (href.includes("#employees")) return window.openEmployees();
       if (href.includes("#employee")) return window.openEmployee();
       if (href.includes("onboarding")) return openOnboarding();
@@ -3462,6 +3477,8 @@
     if (btnEligHome) btnEligHome.onclick = () => enterHome();
     const btnOnboardingHome = $("btn-onboarding-home");
     if (btnOnboardingHome) btnOnboardingHome.onclick = () => enterHome();
+    const btnHiringHome = $("btn-hiring-home");
+    if (btnHiringHome) btnHiringHome.onclick = () => enterHome();
     const btnTimeHome = $("btn-time-home");
     if (btnTimeHome) btnTimeHome.onclick = () => enterHome();
     const btnHomeRoles = $("btn-home-roles");
@@ -3945,6 +3962,15 @@
       show("capture-panel");
     };
 
+    async function openHiring() {
+      if ((window.location.hash || "") !== "#hiring") {
+        window.location.hash = "#hiring";
+        return;
+      }
+      show("hiring-panel");
+      if (window.clyHiring) await window.clyHiring.open();
+    }
+
     async function openEmployee() {
       if ((window.location.hash || "") !== "#employee") {
         window.location.hash = "#employee";
@@ -3987,6 +4013,7 @@
       else if (route.path === "settings") openSettings();
       else if (route.path === "employee") openEmployee();
       else if (route.path === "employees") openEmployees();
+      else if (route.path === "hiring") openHiring();
       else if (route.path === "onboarding") openOnboarding();
       else if (route.path === "supervision" || route.path === "clynotion") openSupervision();
       else if (!route.path) enterHome();

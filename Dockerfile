@@ -43,8 +43,22 @@ ENV PYTHONUNBUFFERED=1 \
     ATTUNE_EMPLOYEES_DATA_PATH=/data/employees.enc \
     ATTUNE_DENIALS_PERSISTENCE=file \
     ATTUNE_DENIALS_DATA_PATH=/data/denials.enc \
+    ATTUNE_ONBOARDING_PERSISTENCE=file \
+    ATTUNE_ONBOARDING_DATA_PATH=/data/onboarding.enc \
+    ATTUNE_ONBOARDING_FILES_PATH=/data/onboarding_files \
+    FILE_STORE_BACKEND=local \
     TIME_MAIL_MODE=off
 WORKDIR /app
+
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        libreoffice-writer \
+        fonts-crosextra-carlito \
+        fonts-liberation \
+        fontconfig \
+    && rm -rf /var/lib/apt/lists/*
+COPY deploy/fonts/69-calibri-carlito.conf /etc/fonts/conf.d/69-calibri-carlito.conf
+RUN fc-cache -f
 
 COPY --from=builder /app/.venv .venv/
 COPY app ./app

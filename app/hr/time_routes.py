@@ -229,4 +229,10 @@ def time_tick(request: Request) -> dict:
         denials_store.purge_if_due()
     except Exception:
         pass
+    try:
+        from app.hiring.engine import hiring
+
+        hiring.tick()
+    except Exception:
+        pass
     return result

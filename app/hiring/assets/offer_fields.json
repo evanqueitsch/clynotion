@@ -1,0 +1,139 @@
+{
+  "_about": "Merge fields for H4C_Offer_Letter_TEMPLATE.docx. Fill with: python3 fill_offer.py values.json out.docx. Fields marked optional have a default or can be blank. All examples are fake. Every field prints in the same font and color as the text around it.",
+  "employment_types": {
+    "full-time": {
+      "position_title_default": "Full-Time Outpatient Clinician",
+      "caseload_example": "25–30",
+      "schedule_paragraph": "This is a full-time role. To protect against burnout, we ask clinicians to settle into a caseload of approximately {{caseload_range}} client sessions per week — deliberately not a 40-session load — plus paid administrative and documentation time. The role offers hybrid flexibility, with an in-person core presence plus telehealth, and some evening availability is preferred. We build your caseload with a supportive ramp and no punitive minimum while you get established, and your specific schedule is set with the {{supervisor_title}}.",
+      "benefit_time_off": "Paid time off and paid Company holidays",
+      "benefit_license_ceu": "License, certification, and recertification costs covered, plus continuing-education (CEU) support",
+      "remove_paragraphs_starting_with": [],
+      "fields_not_allowed": []
+    },
+    "part-time": {
+      "position_title_default": "Part-Time Outpatient Clinician",
+      "caseload_example": "12–18",
+      "schedule_paragraph": "This is a part-time role. We ask clinicians in this role to settle into a caseload of approximately {{caseload_range}} client sessions per week, plus paid administrative and documentation time. The role offers hybrid flexibility, with an in-person core presence plus telehealth, and some evening availability is preferred. We build your caseload with a supportive ramp and no punitive minimum while you get established, and your specific schedule is set with the {{supervisor_title}}.",
+      "benefit_time_off": "Paid time off and paid Company holidays, as determined by the Company for part-time staff",
+      "benefit_license_ceu": "License, certification, and continuing-education (CEU) support, as determined by the Company for part-time staff",
+      "remove_paragraphs_starting_with": [
+        "Participation in the Company's SIMPLE IRA plan",
+        "Health coverage."
+      ],
+      "fields_not_allowed": [
+        "qsehra_monthly_amount",
+        "qsehra_wait_days"
+      ],
+      "_note": "Part-time staff are excluded from the QSEHRA and the SIMPLE IRA (Evan, 13 Nov 2026). The SIMPLE IRA bullet and the Health coverage paragraph are removed, and the QSEHRA fields are rejected if supplied."
+    }
+  },
+  "fields": [
+    {
+      "name": "employment_type",
+      "description": "Selector: exactly \"full-time\" or \"part-time\". Picks the default position title, the Schedule paragraph, and two Benefits bullets from employment_types above. For part-time it also removes the SIMPLE IRA bullet and the Health coverage (QSEHRA) paragraph.",
+      "example": "part-time",
+      "allowed": [
+        "full-time",
+        "part-time"
+      ]
+    },
+    {
+      "name": "offer_date",
+      "description": "Date on the letter, MM/DD/YYYY. Also prints beside the Director's signature line.",
+      "example": "12/01/2026"
+    },
+    {
+      "name": "candidate_full_name",
+      "description": "Candidate's full legal name, used in the address block and the acceptance line.",
+      "example": "Jordan Example"
+    },
+    {
+      "name": "candidate_credentials",
+      "description": "License or credential after the name. Leave blank for an unlicensed hire and the comma is dropped.",
+      "example": "LPC",
+      "optional": true
+    },
+    {
+      "name": "candidate_first_name",
+      "description": "First name for the salutation (Dear ___,).",
+      "example": "Jordan"
+    },
+    {
+      "name": "position_title",
+      "description": "Full title. Leave blank to use the employment_type default (Full-Time / Part-Time Outpatient Clinician); fill it in to override. Appears in the subtitle, Re: line, opening paragraph, and Position & status.",
+      "example": "Part-Time Outpatient Clinician",
+      "optional": true,
+      "default": "from employment_type"
+    },
+    {
+      "name": "supervisor_title",
+      "description": "Title of the person the hire reports to. Used in 'reporting to the ___' and in the Schedule paragraph.",
+      "example": "Director",
+      "optional": true,
+      "default": "Director"
+    },
+    {
+      "name": "supervisor_name",
+      "description": "Name of the person the hire reports to.",
+      "example": "Melissa T. Smith",
+      "optional": true,
+      "default": "Melissa T. Smith"
+    },
+    {
+      "name": "hourly_rate",
+      "description": "Hourly rate with dollar sign and cents, like $45.00. This is the rate paid before licensure when a licensed rate is also set.",
+      "example": "$45.00"
+    },
+    {
+      "name": "licensed_rate",
+      "description": "Optional. Licensed hourly rate with dollar sign and cents, like $55.00. When set, the letter states that the pre-licensure rate applies until licensure and this rate applies from then on. Leave blank for a single rate.",
+      "example": "$55.00",
+      "optional": true
+    },
+    {
+      "name": "caseload_range",
+      "description": "Target weekly client sessions as a range, like 25–30 (full-time) or 12–18 (part-time). A hyphen is turned into an en dash.",
+      "example": "12–18"
+    },
+    {
+      "name": "qsehra_monthly_amount",
+      "description": "Monthly QSEHRA reimbursement cap with dollar sign, like $250. Full-time only: required for full-time, rejected for part-time (part-time staff are excluded from the QSEHRA).",
+      "example": "$250",
+      "full_time_only": true
+    },
+    {
+      "name": "qsehra_wait_days",
+      "description": "Days of employment before QSEHRA eligibility begins (whole number). Full-time only: required for full-time, rejected for part-time (part-time staff are excluded from the QSEHRA).",
+      "example": "60",
+      "full_time_only": true
+    },
+    {
+      "name": "start_date",
+      "description": "Proposed first day, MM/DD/YYYY or 'TBD'.",
+      "example": "01/05/2027"
+    },
+    {
+      "name": "response_deadline",
+      "description": "Date to return the signed letter, MM/DD/YYYY or wording like 'ASAP'.",
+      "example": "12/08/2026"
+    }
+  ],
+  "derived": [
+    {
+      "name": "schedule_paragraph",
+      "description": "Not settable. The employment_type's schedule_paragraph with caseload_range and supervisor_title filled in."
+    },
+    {
+      "name": "benefit_time_off",
+      "description": "Not settable. The employment_type's time-off bullet."
+    },
+    {
+      "name": "benefit_license_ceu",
+      "description": "Not settable. The employment_type's license and CEU bullet."
+    },
+    {
+      "name": "licensed_rate_clause",
+      "description": "Not settable. Empty unless licensed_rate is set, in which case it is the pre-licensure and licensed-rate sentence."
+    }
+  ]
+}
