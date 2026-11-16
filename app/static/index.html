@@ -121,6 +121,10 @@
       color: var(--ink);
       margin-bottom: 0.85rem;
     }
+    input.field-error, select.field-error {
+      border-color: var(--danger);
+      outline: 2px solid var(--danger);
+    }
     textarea { min-height: 120px; resize: vertical; }
     .row { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
     .row > * { flex: 1 1 auto; }
@@ -1126,7 +1130,7 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.19.7"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.21.2"></script>
+  <script src="/static/hiring.js?v=0.21.3"></script>
   <script>
     const state = {
       token: null,
@@ -1212,14 +1216,19 @@
       if (!res.ok) {
         const detail = data && data.detail;
         let msg = "";
+        let errField = "";
         if (typeof detail === "string") msg = detail;
         else if (Array.isArray(detail)) {
           msg = detail.map(function (item) { return (item && (item.msg || item.message)) || ""; }).filter(Boolean).join(" ");
-        } else if (detail && detail.error) msg = String(detail.error);
+        }         else if (detail && typeof detail === "object") {
+          msg = String(detail.message || detail.error || "");
+          errField = String(detail.field || "");
+        }
         if (!msg) msg = res.statusText || "Something went wrong.";
         const err = new Error(msg);
         err.payload = data;
         err.status = res.status;
+        err.field = errField;
         throw err;
       }
       return data;

@@ -33,7 +33,14 @@ from app.hiring.checklist import (
     previous_business_day,
     to_iso,
 )
-from app.hiring.fill import OfferFillError, asset_hashes, load_fields_spec, render_docx, supervisor_name_default
+from app.hiring.fill import (
+    OfferFillError,
+    _normalize_date,
+    asset_hashes,
+    load_fields_spec,
+    render_docx,
+    supervisor_name_default,
+)
 from app.hiring.forms_catalog import FORMS, form_path
 from app.hiring.mailer import code_body, deliver, offer_body, public_queue_row, reminder_body
 from app.hiring.pdf import PdfRenderError, append_certificate, render_offer_pdf
@@ -52,11 +59,20 @@ _lock = threading.RLock()
 _scheduler_started = False
 
 
+def _parse_form_date(value: str, field: str) -> date:
+    normalized = _normalize_date(value)
+    if not normalized:
+        label = "Offer date" if field == "offer_date" else "Response deadline"
+        raise HiringError(400, f"{label} must be a real date.", field)
+    return datetime.strptime(normalized, "%m/%d/%Y").date()
+
+
 class HiringError(Exception):
-    def __init__(self, status: int, detail: str) -> None:
+    def __init__(self, status: int, detail: str, field: str = "") -> None:
         super().__init__(detail)
         self.status = status
         self.detail = detail
+        self.field = field
 
 
 def _now() -> datetime:
@@ -387,25 +403,23 @@ class HiringEngine:
             merged["supervisor_name"] = settings.get("offer_supervisor_name_default") or ""
         if not str(merged.get("offer_date") or "").strip():
             merged["offer_date"] = _today().strftime("%m/%d/%Y")
+        offer_day = _parse_form_date(str(merged["offer_date"]), "offer_date")
+        merged["offer_date"] = offer_day.strftime("%m/%d/%Y")
         if not str(merged.get("response_deadline") or "").strip():
-            offer_day = datetime.strptime(str(merged["offer_date"]), "%m/%d/%Y").date()
             deadline = offer_day + timedelta(days=int(settings.get("offer_response_days") or 30))
             merged["response_deadline"] = deadline.strftime("%m/%d/%Y")
             merged["deadline_overridden"] = False
         else:
-            offer_day = datetime.strptime(str(merged["offer_date"]), "%m/%d/%Y").date()
             computed = offer_day + timedelta(days=int(settings.get("offer_response_days") or 30))
-            given = datetime.strptime(str(merged["response_deadline"]), "%m/%d/%Y").date()
+            given = _parse_form_date(str(merged["response_deadline"]), "response_deadline")
+            merged["response_deadline"] = given.strftime("%m/%d/%Y")
             merged["deadline_overridden"] = given != computed
         return merged
 
     def _check_deadline(self, value: str) -> date:
-        try:
-            day = datetime.strptime(value, "%m/%d/%Y").date()
-        except ValueError as exc:
-            raise HiringError(400, "The response deadline must be a real date.") from exc
+        day = _parse_form_date(value, "response_deadline")
         if day < _today():
-            raise HiringError(400, "The response deadline cannot be in the past.")
+            raise HiringError(400, "The response deadline cannot be in the past.", "response_deadline")
         return day
 
     def create_offer(self, practice_id: str, body: dict[str, Any], actor: str) -> dict[str, Any]:
@@ -453,9 +467,9 @@ class HiringEngine:
         email = str(merged.get("personal_email") or "").strip().lower()
         name = str(merged.get("display_name") or merged.get("candidate_full_name") or "").strip()
         if not EMAIL_RX.match(email):
-            raise HiringError(400, "A candidate email is required.")
+            raise HiringError(400, "A candidate email is required.", "personal_email")
         if not name:
-            raise HiringError(400, "A candidate name is required.")
+            raise HiringError(400, "A candidate name is required.", "candidate_full_name")
         try:
             values, docx = render_docx(
                 {
@@ -477,7 +491,7 @@ class HiringEngine:
                 }
             )
         except OfferFillError as exc:
-            raise HiringError(400, str(exc)) from exc
+            raise HiringError(400, str(exc), exc.field) from exc
         try:
             pdf = render_offer_pdf(docx)
         except PdfRenderError as exc:

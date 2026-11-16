@@ -260,6 +260,42 @@ def test_withdraw_keeps_history_and_delete_needs_the_typed_name() -> None:
     html = Path("app/static/index.html").read_text(encoding="utf-8")
     assert 'replace(/^#\\/?/, "#")' in html
     assert "syncTopChrome" in html
+    assert "field-error" in html
+
+
+def test_plain_money_is_stored_in_letter_format() -> None:
+    from pathlib import Path
+
+    created = client.post(
+        "/hiring/offers",
+        headers=_alice(),
+        json=_offer("12/16/2026")
+        | {
+            "personal_email": "qa.money@example.com",
+            "display_name": "Money Example",
+            "candidate_full_name": "Money Example",
+            "hourly_rate": "40",
+            "licensed_rate": "1,250",
+            "qsehra_monthly_amount": "100",
+            "caseload_range": "25–30",
+        },
+    )
+    assert created.status_code == 200, created.text
+    fields = created.json()["fields"]
+    assert fields["hourly_rate"] == "$40.00"
+    assert fields["licensed_rate"] == "$1,250.00"
+    assert fields["qsehra_monthly_amount"] == "$100"
+    assert fields["caseload_range"] == "25–30"
+    bad = client.post(
+        "/hiring/offers",
+        headers=_alice(),
+        json=_offer("12/16/2026") | {"hourly_rate": "forty"},
+    )
+    assert bad.status_code == 400
+    detail = bad.json()["detail"]
+    assert detail == {"message": "Hourly rate must be a dollar amount.", "field": "hourly_rate"}
+    script = Path("app/static/hiring.js").read_text(encoding="utf-8")
+    assert "markField" in script
 
 
 def test_delete_accepted_offer_removes_it() -> None:

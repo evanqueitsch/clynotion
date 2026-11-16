@@ -348,7 +348,21 @@
       await window.clyHiring.open({ message: "Saved." });
     } catch (error) {
       showStatus((error && error.message) || "Could not save.", "error");
+      markField(error && error.field);
     }
+  }
+
+  function markField(name) {
+    const form = formEl();
+    if (!form) return;
+    form.querySelectorAll(".field-error").forEach(function (node) {
+      node.classList.remove("field-error");
+    });
+    if (!name || !form.elements) return;
+    const el = form.elements.namedItem(name);
+    if (!el || !el.classList) return;
+    el.classList.add("field-error");
+    if (el.focus) el.focus();
   }
 
   async function post(id, suffix, json, ok, keepEdit) {

@@ -85,6 +85,11 @@ class PayrollBody(BaseModel):
 
 
 def _fail(exc: HiringError) -> None:
+    if exc.field:
+        raise HTTPException(
+            status_code=exc.status,
+            detail={"message": exc.detail, "field": exc.field},
+        )
     raise HTTPException(status_code=exc.status, detail=exc.detail)
 
 
