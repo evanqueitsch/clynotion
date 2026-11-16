@@ -301,7 +301,7 @@ def _service_account() -> dict[str, Any]:
     import json
     from pathlib import Path
 
-    raw = (os.environ.get("GOOGLE_SA_JSON") or "").strip()
+    raw = (os.environ.get("GOOGLE_SA_JSON") or os.environ.get("GOOGLE_DRIVE_SA_JSON") or "").strip()
     if not raw:
         raise ResumeReadError("Resume reading is not configured.")
     try:
