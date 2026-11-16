@@ -1126,7 +1126,7 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.19.7"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.21.0"></script>
+  <script src="/static/hiring.js?v=0.21.1"></script>
   <script>
     const state = {
       token: null,
@@ -1331,11 +1331,19 @@
     const TIME_WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
 
     function hashRoute() {
-      const raw = (window.location.hash || "").replace(/^#/, "");
+      const raw = (window.location.hash || "").replace(/^#\/?/, "");
       const q = raw.indexOf("?");
       const path = q === -1 ? raw : raw.slice(0, q);
       const params = new URLSearchParams(q === -1 ? "" : raw.slice(q + 1));
       return { path, params };
+    }
+
+    function syncTopChrome() {
+      const admin = !!(state.access && state.access.can_manage_roles);
+      const topSettings = $("btn-top-settings");
+      const topRoles = $("btn-top-roles");
+      if (topSettings) topSettings.classList.toggle("hidden", !admin);
+      if (topRoles && state.accessLoaded) topRoles.classList.toggle("hidden", !admin);
     }
 
     function fillWeekdaySelect(select) {
@@ -2229,6 +2237,7 @@
         state.access = access;
         document.body.classList.toggle("staff-only", access.landing === "time");
         document.body.classList.toggle("no-access", access.landing === "none");
+        syncTopChrome();
         if (access.landing === "none") {
           show("no-access-panel");
           return;
@@ -2239,7 +2248,7 @@
         }
         const params = new URLSearchParams(window.location.search);
         const dirOk = params.get("directory") === "connected" || params.get("directory") === "mock_ready";
-        const hash = window.location.hash;
+        const hash = (window.location.hash || "").replace(/^#\/?/, "#");
         const wantSupervision =
           hash === "#supervision" || hash === "#clynotion" || dirOk;
         const wantComply = hash === "#comply";
@@ -3963,7 +3972,8 @@
     };
 
     async function openHiring() {
-      if ((window.location.hash || "") !== "#hiring") {
+      const hash = (window.location.hash || "").replace(/^#\/?/, "");
+      if (hash !== "hiring") {
         window.location.hash = "#hiring";
         return;
       }

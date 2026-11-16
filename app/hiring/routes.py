@@ -106,8 +106,9 @@ def _base(request: Request) -> str:
 
 
 @router.get("/hiring/bootstrap")
-def bootstrap(user: CurrentUser) -> dict[str, Any]:
+def bootstrap(response: Response, user: CurrentUser) -> dict[str, Any]:
     _require_admin(user)
+    response.headers["Cache-Control"] = "no-store"
     try:
         return hiring.list_offers(user.practice_id)
     except HiringError as exc:
@@ -151,11 +152,16 @@ def put_offer(offer_id: str, body: OfferBody, user: CurrentUser) -> dict[str, An
         _fail(exc)
 
 
-@router.delete("/hiring/offers/{offer_id}")
-def delete_offer(offer_id: str, user: CurrentUser) -> dict[str, bool]:
+class DeleteBody(BaseModel):
+    confirm: str = ""
+
+
+@router.post("/hiring/offers/{offer_id}/delete")
+def delete_offer(offer_id: str, body: DeleteBody, response: Response, user: CurrentUser) -> dict[str, bool]:
     _require_admin(user)
+    response.headers["Cache-Control"] = "no-store"
     try:
-        hiring.delete_draft(user.practice_id, offer_id, _actor(user))
+        hiring.delete_offer(user.practice_id, offer_id, body.confirm, _actor(user))
     except HiringError as exc:
         _fail(exc)
     return {"deleted": True}
