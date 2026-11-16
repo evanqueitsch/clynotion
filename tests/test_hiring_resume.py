@@ -252,6 +252,123 @@ def test_retry_reports_drive_not_connected() -> None:
     assert retried.json()["drive_folder_url"] == ""
 
 
+def test_every_offer_field_round_trips() -> None:
+    body = {
+        "display_name": "Jordan Example",
+        "personal_email": "jordan.fields@example.com",
+        "employment_type": "full-time",
+        "candidate_full_name": "Jordan Example",
+        "candidate_first_name": "Jordan",
+        "candidate_credentials": "MYCRED",
+        "position_title": "Staff Clinician",
+        "supervisor_title": "Director",
+        "supervisor_name": "Alex Supervisor",
+        "hourly_rate": "40",
+        "licensed_rate": "55",
+        "caseload_range": "25-30",
+        "qsehra_monthly_amount": "100",
+        "qsehra_wait_days": "60",
+        "offer_date": "11/16/2026",
+        "start_date": "01/05/2027",
+        "response_deadline": "12/16/2026",
+        "direct_client_access": False,
+    }
+    created = client.post("/hiring/offers", headers=_alice(), json=body)
+    assert created.status_code == 200, created.text
+    offer_id = created.json()["id"]
+    loaded = client.get(f"/hiring/offers/{offer_id}", headers=_alice())
+    assert loaded.status_code == 200, loaded.text
+    saved = loaded.json()
+    fields = saved["fields"]
+    assert saved["personal_email"] == "jordan.fields@example.com"
+    assert saved["employment_type"] == "full-time"
+    assert saved["direct_client_access"] is False
+    assert fields["candidate_full_name"] == "Jordan Example"
+    assert fields["candidate_first_name"] == "Jordan"
+    assert fields["candidate_credentials"] == "MYCRED"
+    assert fields["position_title"] == "Staff Clinician"
+    assert fields["supervisor_title"] == "Director"
+    assert fields["supervisor_name"] == "Alex Supervisor"
+    assert fields["hourly_rate"] == "$40.00"
+    assert fields["licensed_rate"] == "$55.00"
+    assert fields["caseload_range"] == "25–30"
+    assert fields["qsehra_monthly_amount"] == "$100"
+    assert fields["qsehra_wait_days"] == "60"
+    assert fields["offer_date"] == "11/16/2026"
+    assert fields["start_date"] == "01/05/2027"
+    assert fields["response_deadline"] == "12/16/2026"
+    edited = dict(body)
+    edited["candidate_credentials"] = "MYCRED"
+    edited["hourly_rate"] = "$40.00"
+    edited["licensed_rate"] = "$55.00"
+    edited["qsehra_monthly_amount"] = "$100"
+    edited["caseload_range"] = "25–30"
+    updated = client.put(f"/hiring/offers/{offer_id}", headers=_alice(), json=edited)
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["fields"]["candidate_credentials"] == "MYCRED"
+
+
+def test_unconfigured_resume_is_stored_without_a_network_call(monkeypatch) -> None:
+    monkeypatch.setenv("ATTUNE_RESUME_LLM", "gemini")
+    monkeypatch.delenv("GOOGLE_SA_JSON", raising=False)
+    monkeypatch.delenv("GOOGLE_DRIVE_SA_JSON", raising=False)
+
+    def explode(*_args, **_kwargs):
+        raise AssertionError("resume reading contacted the network")
+
+    monkeypatch.setattr("httpx.post", explode)
+    payload = b"Jordan Example\nPersonal email: jordan.example@example.com\n"
+    import time
+
+    started = time.perf_counter()
+    uploaded = client.post(
+        "/hiring/resumes",
+        headers=_alice(),
+        files={"resume": ("jordan.txt", payload, "text/plain")},
+    )
+    assert time.perf_counter() - started < 1
+    assert uploaded.status_code == 200, uploaded.text
+    body = uploaded.json()
+    assert body["warning"] == "Resume reading is not configured."
+    assert body["fields"]["candidate_full_name"] == ""
+    created = client.post(
+        "/hiring/offers",
+        headers=_alice(),
+        json=_offer(body["resume_id"]) | {"candidate_credentials": "MYCRED", "personal_email": "jordan.unread@example.com"},
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["resume"] is True
+    assert created.json()["fields"]["candidate_credentials"] == "MYCRED"
+    downloaded = client.get(f"/hiring/offers/{created.json()['id']}/resume", headers=_alice())
+    assert downloaded.status_code == 200
+    assert downloaded.content == payload
+
+
+def test_delete_requires_the_exact_candidate_name() -> None:
+    created = client.post(
+        "/hiring/offers",
+        headers=_alice(),
+        json=_offer() | {"personal_email": "jordan.delete@example.com"},
+    )
+    offer_id = created.json()["id"]
+    for bad in ("", "jordan example", "Wrong Name", "Jordan  Example"):
+        denied = client.post(f"/hiring/offers/{offer_id}/delete", headers=_alice(), json={"confirm": bad})
+        assert denied.status_code == 400, denied.text
+        assert client.get(f"/hiring/offers/{offer_id}", headers=_alice()).status_code == 200
+    missing = client.post(f"/hiring/offers/{offer_id}/delete", headers=_alice(), json={})
+    assert missing.status_code == 400, missing.text
+    blank = client.post(f"/hiring/offers/{offer_id}/delete", headers=_alice(), json={"confirm": None})
+    assert blank.status_code == 400, blank.text
+    assert client.get(f"/hiring/offers/{offer_id}", headers=_alice()).status_code == 200
+    removed = client.post(
+        f"/hiring/offers/{offer_id}/delete",
+        headers=_alice(),
+        json={"confirm": "Jordan Example"},
+    )
+    assert removed.status_code == 200, removed.text
+    assert client.get(f"/hiring/offers/{offer_id}", headers=_alice()).status_code == 404
+
+
 def test_drive_calls_stay_on_one_shared_drive() -> None:
     http = RecordingHttp()
 

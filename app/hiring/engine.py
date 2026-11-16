@@ -566,6 +566,8 @@ class HiringEngine:
             "application/pdf",
         )
         public_values = {key: value for key, value in values.items() if not str(key).startswith("_")}
+        typed_credentials = str(merged.get("candidate_credentials") or "").strip()[:120]
+        public_values["candidate_credentials"] = typed_credentials
         row["offer_versions"][version_id] = {
             "id": version_id,
             "offer_id": offer["id"],
@@ -628,8 +630,12 @@ class HiringEngine:
             if not offer:
                 raise HiringError(404, "Offer not found.")
             candidate = row["candidates"].get(offer.get("candidate_id") or "") or {}
-            expected = _norm(str(candidate.get("display_name") or ""))
-            if not expected or _norm(confirm) != expected:
+            version = row["offer_versions"].get(offer.get("current_version_id") or "") or {}
+            legal = str((version.get("field_values") or {}).get("candidate_full_name") or "").strip()
+            expected = str(candidate.get("display_name") or "").strip()
+            confirm_name = str(confirm or "").strip()
+            allowed = {name for name in (expected, legal) if name}
+            if not confirm_name or confirm_name not in allowed:
                 raise HiringError(400, "Type the candidate's name to confirm.")
             hire_ids = [hire["id"] for hire in row["hires"].values() if hire.get("offer_id") == offer_id]
             store = file_store()
@@ -1017,10 +1023,24 @@ class HiringEngine:
         from app.hiring.resume import ResumeReadError, read_resume_for_upload, resume_mime
 
         try:
-            fields = read_resume_for_upload(data, filename)
             mime = resume_mime(data, filename)
         except ResumeReadError as exc:
             raise HiringError(400, str(exc)) from exc
+        if len(data) > 10 * 1024 * 1024:
+            raise HiringError(400, "That resume is larger than 10 MB.")
+        warning = ""
+        fields = {
+            "candidate_full_name": "",
+            "candidate_first_name": "",
+            "personal_email": "",
+            "phone": "",
+            "candidate_credentials": "",
+            "position_title": "",
+        }
+        try:
+            fields = read_resume_for_upload(data, filename)
+        except ResumeReadError as exc:
+            warning = str(exc)
         resume_id = _new_id("res-")
         store = file_store()
         store.ensure_tree(resume_id)
@@ -1040,7 +1060,7 @@ class HiringEngine:
             }
             self._history(row, "resume", resume_id, "uploaded", actor, "Resume uploaded")
             self._save(payload)
-        return {"resume_id": resume_id, "fields": fields}
+        return {"resume_id": resume_id, "fields": fields, "warning": warning}
 
     def _link_resume(self, row: dict[str, Any], offer: dict[str, Any], resume_id: str) -> None:
         if not resume_id:

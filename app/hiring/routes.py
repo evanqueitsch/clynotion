@@ -6,7 +6,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from app.access.permissions import HIRING_PAYROLL, OFFER_MANAGE, ONBOARDING_SENSITIVE
 from app.access.resolve import has_permission, is_owner, sees_every_module
@@ -170,6 +170,13 @@ def put_offer(offer_id: str, body: OfferBody, user: CurrentUser) -> dict[str, An
 
 class DeleteBody(BaseModel):
     confirm: str = ""
+
+    @field_validator("confirm", mode="before")
+    @classmethod
+    def blank_when_missing(cls, value: object) -> str:
+        if value is None:
+            return ""
+        return str(value).strip()
 
 
 @router.post("/hiring/offers/{offer_id}/delete")
