@@ -26,9 +26,11 @@ DEFAULT_MODEL = "gemini-2.5-flash"
 FLASH_VARIANTS = ("gemini-3-flash", "gemini-3.1-flash", "gemini-3-flash-001", "gemini-2.5-flash")
 VERTEX_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 _MODEL_CACHE_SECONDS = 3600
-_model_cache: tuple[float, str] | None = None
+MAX_OUTPUT_TOKENS = 8192
+_model_cache: tuple[float, str, str] | None = None
 _last_model_lists: list[dict[str, Any]] = []
 _last_first_attempt: dict[str, Any] = {}
+_last_finish_reason = ""
 FIELD_NAMES = (
     "candidate_full_name",
     "candidate_first_name",
@@ -60,6 +62,13 @@ candidate_credentials is the degree or license letters. position_title is the ro
 
 Resume:
 """
+PROBE_RESUME = """Riley Sample
+Full legal name: Riley Sample
+First name: Riley
+Personal email: riley.sample@example.com
+Phone: (555) 010-0199
+Credentials: MA, LPC-Candidate
+"""
 
 
 class ResumeReadError(ValueError):
@@ -86,6 +95,8 @@ class ResumeReadError(ValueError):
         self.location = location
         self.attempts = list(attempts or [])
         self.body = ""
+        self.raw_text = ""
+        self.finish_reason = ""
 
 
 def resume_mode() -> str:
@@ -296,27 +307,75 @@ def _gemini_fields(text: str) -> dict[str, str]:
     try:
         parsed = _json_object(raw)
     except ValueError as exc:
-        _log_failure(stage="vertex_response", exc=exc)
-        raise ResumeReadError("The resume could not be read.", stage="vertex_response") from exc
-    if not isinstance(parsed, dict):
-        _log_failure(stage="vertex_response")
-        raise ResumeReadError("The resume could not be read.", stage="vertex_response")
+        _log_failure(stage="parse", model=model, location=location, exc=exc)
+        error = ResumeReadError(
+            "The resume could not be read.",
+            stage="parse",
+            model=model,
+            location=location,
+            attempts=attempts,
+        )
+        error.raw_text = raw
+        error.finish_reason = _last_finish_reason
+        raise error from exc
     return {name: str(parsed.get(name) or "") for name in FIELD_NAMES}
 
 
 def _json_object(raw: str) -> dict[str, Any]:
-    text = (raw or "").strip()
-    if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?\s*", "", text, flags=re.IGNORECASE)
-        text = re.sub(r"\s*```\s*$", "", text)
-    start = text.find("{")
-    end = text.rfind("}")
-    if start < 0 or end <= start:
-        raise ValueError("no object")
-    parsed = json.loads(text[start : end + 1])
-    if not isinstance(parsed, dict):
-        raise ValueError("not an object")
-    return parsed
+    """Pull the field object out of fenced JSON, prose, or several objects."""
+    text = re.sub(r"```(?:json)?", "", raw or "", flags=re.IGNORECASE).replace("```", "")
+    decoder = json.JSONDecoder()
+    found: list[dict[str, Any]] = []
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            value, _end = decoder.raw_decode(text[index:])
+        except json.JSONDecodeError:
+            continue
+        if isinstance(value, dict):
+            found.append(value)
+    for value in found:
+        if any(name in value for name in FIELD_NAMES):
+            return value
+    if found:
+        return found[-1]
+    raise ValueError("no object")
+
+
+def _response_text(payload: Any) -> tuple[str, str]:
+    """Answer text and finishReason. Thought parts are skipped until nothing else is left."""
+    if not isinstance(payload, dict):
+        return "", ""
+    candidates = payload.get("candidates")
+    if not isinstance(candidates, list):
+        return "", ""
+    fallback = ""
+    fallback_reason = ""
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        finish = str(candidate.get("finishReason") or candidate.get("finish_reason") or "")
+        content = candidate.get("content") if isinstance(candidate.get("content"), dict) else {}
+        parts = content.get("parts") if isinstance(content, dict) and isinstance(content.get("parts"), list) else []
+        answers: list[str] = []
+        thoughts: list[str] = []
+        for part in parts:
+            if not isinstance(part, dict):
+                continue
+            text = part.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            if part.get("thought") is True:
+                thoughts.append(text)
+            else:
+                answers.append(text)
+        if answers:
+            return "\n".join(answers), finish
+        if thoughts and not fallback:
+            fallback = "\n".join(thoughts)
+            fallback_reason = finish
+    return fallback, fallback_reason
 
 
 def _gemini_complete(text: str) -> tuple[str, str, str, list[dict[str, Any]]]:
@@ -346,6 +405,7 @@ def _gemini_complete(text: str) -> tuple[str, str, str, list[dict[str, Any]]]:
                 continue
             raise
         attempts.append({"model": model, "location": location, "status": 200})
+        _remember_model(model, location)
         if first:
             _last_first_attempt = {"model": model, "location": location, "http_status": 200, "body": ""}
         return reply, model, location, attempts
@@ -360,22 +420,47 @@ def clear_model_cache() -> None:
     _model_cache = None
 
 
+def _fresh_cache() -> tuple[str, str] | None:
+    cached = _model_cache
+    if cached is None:
+        return None
+    saved, model, location = cached
+    if not model or not location or time.time() - saved > _MODEL_CACHE_SECONDS:
+        return None
+    return model, location
+
+
+def _remember_model(model: str, location: str) -> None:
+    global _model_cache
+    if model and location:
+        _model_cache = (time.time(), model, location)
+
+
 def _model_attempts(token: str) -> list[tuple[str, str]]:
     global _last_model_lists
     project = _gemini_project()
     model_ids, reports = _fetch_model_lists(token, project)
     _last_model_lists = reports
+    cached = _fresh_cache()
     newest = _prefer_flash(model_ids)
     if newest:
-        global _model_cache
-        _model_cache = (time.time(), newest)
+        location = cached[1] if cached and cached[0] == newest else "global"
+        _remember_model(newest, location)
+        primary = (location, newest)
+    elif cached:
+        primary = (cached[1], cached[0])
+    else:
+        primary = ("global", "")
     models = _candidate_models(model_ids)
-    locations = ["global"]
+    override = (os.environ.get("GEMINI_MODEL") or "").strip()
+    lead = override or primary[1]
+    if lead:
+        models = [lead] + [item for item in models if item != lead]
     regional = (os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-east4").strip() or "us-east4"
-    if regional not in locations:
-        locations.append(regional)
-    if "us-central1" not in locations:
-        locations.append("us-central1")
+    locations: list[str] = []
+    for place in (primary[0] or "global", "global", regional, "us-central1"):
+        if place and place not in locations:
+            locations.append(place)
     attempts: list[tuple[str, str]] = []
     for place in locations:
         for model in models:
@@ -481,7 +566,27 @@ def _version_key(model_id: str) -> tuple[int, int]:
     return (int(match.group(1)), int(match.group(2) or 0))
 
 
+def _generation_config(model: str) -> dict[str, Any]:
+    thinking: dict[str, Any]
+    if re.search(r"gemini-[3-9]", model):
+        thinking = {"thinkingLevel": "LOW"}
+    else:
+        thinking = {"thinkingBudget": 0}
+    return {
+        "temperature": 0,
+        "maxOutputTokens": MAX_OUTPUT_TOKENS,
+        "responseMimeType": "application/json",
+        "responseSchema": {
+            "type": "OBJECT",
+            "properties": {name: {"type": "STRING"} for name in FIELD_NAMES},
+            "required": list(FIELD_NAMES),
+        },
+        "thinkingConfig": thinking,
+    }
+
+
 def _generate(project: str, location: str, model: str, token: str, text: str) -> str:
+    global _last_finish_reason
     host = "https://aiplatform.googleapis.com" if location == "global" else f"https://{location}-aiplatform.googleapis.com"
     url = (
         f"{host}/v1/projects/{project}/locations/{location}"
@@ -489,14 +594,14 @@ def _generate(project: str, location: str, model: str, token: str, text: str) ->
     )
     body = {
         "contents": [{"role": "user", "parts": [{"text": text[:20000]}]}],
-        "generationConfig": {"temperature": 0, "maxOutputTokens": 400, "responseMimeType": "application/json"},
+        "generationConfig": _generation_config(model),
     }
     try:
         response = httpx.post(
             url,
             json=body,
             headers={"Authorization": f"Bearer {token}"},
-            timeout=20.0,
+            timeout=30.0,
         )
     except httpx.HTTPError as exc:
         _log_failure(stage="vertex", model=model, location=location, exc=exc)
@@ -518,15 +623,30 @@ def _generate(project: str, location: str, model: str, token: str, text: str) ->
         raise error
     try:
         payload = response.json()
-        return str(payload["candidates"][0]["content"]["parts"][0]["text"])
     except Exception as exc:
         _log_failure(stage="vertex_response", model=model, location=location, exc=exc)
-        raise ResumeReadError(
+        error = ResumeReadError(
             "The resume could not be read.",
             stage="vertex_response",
             model=model,
             location=location,
-        ) from exc
+        )
+        error.raw_text = _public_snippet(getattr(response, "text", "") or "", limit=300)
+        raise error from exc
+    answer, finish = _response_text(payload)
+    _last_finish_reason = finish
+    if not answer.strip():
+        _log_failure(stage="vertex_response", model=model, location=location, reason=finish)
+        error = ResumeReadError(
+            "The resume could not be read.",
+            stage="vertex_response",
+            reason=finish,
+            model=model,
+            location=location,
+        )
+        error.finish_reason = finish
+        raise error
+    return answer
 
 
 def _gemini_project() -> str:
@@ -676,8 +796,56 @@ def _log_failure(
     )
 
 
+def _blank_fields() -> dict[str, str]:
+    return {name: "" for name in FIELD_NAMES}
+
+
+def _probe_failure(stage: str, error_class: str, raw_text: str = "", finish_reason: str = "") -> dict[str, Any]:
+    return {
+        "ok": False,
+        "stage": stage,
+        "error_class": error_class,
+        "raw_text": _public_snippet(raw_text, 300),
+        "fields": _blank_fields(),
+        "finish_reason": finish_reason,
+    }
+
+
+def _extract_probe(raw: str) -> dict[str, Any]:
+    """Run parse and grounding on the built-in fake resume. raw is model text only."""
+    try:
+        parsed = _json_object(raw)
+    except ValueError as exc:
+        return _probe_failure("parse", type(exc).__name__, raw, _last_finish_reason)
+    fields = ground_fields(PROBE_RESUME, {name: str(parsed.get(name) or "") for name in FIELD_NAMES})
+    if not any(fields.values()):
+        failed = _probe_failure("ground", "ValueError", raw, _last_finish_reason)
+        failed["fields"] = fields
+        return failed
+    return {
+        "ok": True,
+        "stage": "grounded",
+        "error_class": "",
+        "raw_text": "",
+        "fields": fields,
+        "finish_reason": _last_finish_reason,
+    }
+
+
+def _mock_probe() -> dict[str, Any]:
+    fields = ground_fields(PROBE_RESUME, _labeled_fields(PROBE_RESUME))
+    return {
+        "ok": any(fields.values()),
+        "stage": "grounded",
+        "error_class": "",
+        "raw_text": "",
+        "fields": fields,
+        "finish_reason": "",
+    }
+
+
 def reader_health() -> dict[str, Any]:
-    """A tiny non-PHI check. Mock mode does not call Vertex."""
+    """Admin check. The extract probe uses a built-in fake resume, never an upload."""
     mode = resume_mode()
     pypdf_ok = _pypdf_installed()
     project_id, service_account = _account_identity()
@@ -693,6 +861,7 @@ def reader_health() -> dict[str, Any]:
             "service_account": service_account,
             "model_lists": [],
             "first_attempt": {},
+            "extract_probe": _mock_probe(),
             "scope": VERTEX_SCOPE,
             "pypdf": pypdf_ok,
         }
@@ -710,11 +879,12 @@ def reader_health() -> dict[str, Any]:
             "service_account": service_account,
             "model_lists": [],
             "first_attempt": {},
+            "extract_probe": _probe_failure("not_configured", "ResumeReadError"),
             "scope": VERTEX_SCOPE,
             "pypdf": pypdf_ok,
         }
     try:
-        _reply, model, location, attempts = _gemini_complete("Reply with the single word ok.")
+        raw, model, location, attempts = _gemini_complete(_PROMPT + PROBE_RESUME)
     except ResumeReadError as exc:
         return {
             "ok": False,
@@ -724,7 +894,7 @@ def reader_health() -> dict[str, Any]:
             "google_status": exc.google_status,
             "reason": exc.reason,
             "model": exc.model,
-            "chosen_model": exc.model,
+            "chosen_model": "",
             "location": exc.location,
             "attempts": exc.attempts,
             "error": "The resume reader could not reach Vertex.",
@@ -732,6 +902,7 @@ def reader_health() -> dict[str, Any]:
             "service_account": service_account,
             "model_lists": list(_last_model_lists),
             "first_attempt": dict(_last_first_attempt),
+            "extract_probe": _probe_failure(exc.stage or "vertex", type(exc).__name__, exc.raw_text, exc.finish_reason),
             "scope": VERTEX_SCOPE,
             "pypdf": pypdf_ok,
         }
@@ -746,6 +917,7 @@ def reader_health() -> dict[str, Any]:
         "service_account": service_account,
         "model_lists": list(_last_model_lists),
         "first_attempt": dict(_last_first_attempt),
+        "extract_probe": _extract_probe(raw),
         "scope": VERTEX_SCOPE,
         "pypdf": pypdf_ok,
     }

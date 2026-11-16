@@ -401,6 +401,38 @@ def test_drive_calls_stay_on_one_shared_drive() -> None:
     assert resume_filename("Jordan Example", "application/vnd.openxmlformats-officedocument.wordprocessingml.document") == "Example_Jordan_resume.docx"
 
 
+_RILEY_JSON = json.dumps(
+    {
+        "candidate_full_name": "Riley Sample",
+        "candidate_first_name": "Riley",
+        "personal_email": "riley.sample@example.com",
+        "phone": "(555) 010-0199",
+        "candidate_credentials": "MA, LPC-Candidate",
+        "position_title": "",
+    }
+)
+_RILEY_FENCED = "```json\n" + _RILEY_JSON + "\n```"
+
+
+def _thinking_answer(text: str, finish: str = "STOP") -> dict:
+    return {
+        "candidates": [
+            {
+                "content": {
+                    "role": "model",
+                    "parts": [
+                        {"thought": True, "text": "The degree line is MA, LPC-Candidate. Emit only the JSON object."},
+                        {"thoughtSignature": "opaque", "text": ""},
+                        {"text": text},
+                    ],
+                },
+                "finishReason": finish,
+            },
+            {"content": {"parts": [{"text": '{"candidate_full_name":"Wrong Person"}'}]}, "finishReason": "STOP"},
+        ]
+    }
+
+
 class _VertexResponse:
     def __init__(self, status: int, body: dict) -> None:
         self.status_code = status
@@ -518,16 +550,27 @@ def test_resume_reader_health_reports_attempts(monkeypatch) -> None:
         ),
     )
 
-    def fake_post(url: str, **_kwargs):
+    def fake_post(url: str, **kwargs):
         if "/models/gemini-3-flash:" in url and "/locations/global/" in url:
             return _VertexResponse(404, {"error": {"code": 404, "status": "NOT_FOUND", "message": "missing"}})
-        return _VertexResponse(200, {"candidates": [{"content": {"parts": [{"text": "ok"}]}}]})
+        config = kwargs["json"]["generationConfig"]
+        assert config["maxOutputTokens"] >= 2048
+        assert config["responseMimeType"] == "application/json"
+        assert config["responseSchema"]["type"] == "OBJECT"
+        assert config["thinkingConfig"] == {"thinkingLevel": "LOW"}
+        assert url.startswith("https://aiplatform.googleapis.com/v1/projects/attune-clynotion/locations/global/")
+        return _VertexResponse(200, _thinking_answer(_RILEY_FENCED))
 
     monkeypatch.setattr("app.hiring.resume.httpx.post", fake_post)
     report = reader_health()
     assert report["ok"] is True
     assert report["chosen_model"] == "gemini-3.1-flash"
     assert report["location"] == "global"
+    assert report["extract_probe"]["ok"] is True
+    assert report["extract_probe"]["stage"] == "grounded"
+    assert report["extract_probe"]["fields"]["personal_email"] == "riley.sample@example.com"
+    assert report["extract_probe"]["fields"]["candidate_credentials"] == "MA, LPC-Candidate"
+    assert report["extract_probe"]["raw_text"] == ""
     assert report["project_id"] == "attune-clynotion"
     assert report["service_account"] == "sa@attune-clynotion.iam.gserviceaccount.com"
     assert "private_key" not in json.dumps(report)
@@ -560,7 +603,136 @@ def test_resume_reader_health_is_admin_only_and_offline() -> None:
     assert body["ok"] is True
     assert body["mode"] == "mock"
     assert body["pypdf"] is True
+    assert body["extract_probe"]["stage"] == "grounded"
+    assert body["extract_probe"]["fields"]["candidate_full_name"] == "Riley Sample"
+    assert body["extract_probe"]["raw_text"] == ""
     assert body["scope"] == "https://www.googleapis.com/auth/cloud-platform"
     other = User("user-bob", "bob", "practice-a", "bob@example.com")
     denied = client.get("/hiring/resume-reader/health", headers={"Authorization": f"Bearer {issue_token(other)}"})
     assert denied.status_code == 403
+
+
+def test_thinking_model_parts_fences_and_finish_reason_parse() -> None:
+    from app.hiring.resume import PROBE_RESUME, _json_object, _response_text
+
+    text, finish = _response_text(_thinking_answer(_RILEY_FENCED))
+    assert finish == "STOP"
+    assert "Wrong Person" not in text
+    assert "Emit only" not in text
+    fields = _json_object(text)
+    grounded = ground_fields(PROBE_RESUME, fields)
+    assert grounded["candidate_full_name"] == "Riley Sample"
+    assert grounded["candidate_first_name"] == "Riley"
+    assert grounded["personal_email"] == "riley.sample@example.com"
+    assert grounded["phone"] == "(555) 010-0199"
+    assert grounded["candidate_credentials"] == "MA, LPC-Candidate"
+
+    thought_only = {
+        "candidates": [
+            {
+                "content": {"parts": [{"thought": True, "text": "```json\n" + _RILEY_JSON + "\n```"}]},
+                "finishReason": "STOP",
+            }
+        ]
+    }
+    thought_text, thought_finish = _response_text(thought_only)
+    assert thought_finish == "STOP"
+    assert _json_object(thought_text)["candidate_credentials"] == "MA, LPC-Candidate"
+
+    truncated = _thinking_answer('{"candidate_full_name": "Riley', finish="MAX_TOKENS")
+    partial, reason = _response_text(truncated)
+    assert reason == "MAX_TOKENS"
+    with pytest.raises(ValueError):
+        _json_object(partial)
+
+
+def test_upload_uses_the_cached_global_flash_model(monkeypatch) -> None:
+    from app.hiring.resume import PROBE_RESUME, clear_model_cache
+
+    clear_model_cache()
+    monkeypatch.setenv("ATTUNE_RESUME_LLM", "gemini")
+    monkeypatch.setenv(
+        "GOOGLE_SA_JSON",
+        '{"client_email":"sa@attune-clynotion.iam.gserviceaccount.com","private_key":"unused","project_id":"attune-clynotion"}',
+    )
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.setattr("app.hiring.resume._gemini_token", lambda: "token")
+    lists = {"left": 1}
+
+    def fake_get(url: str, **_kwargs):
+        if lists["left"]:
+            lists["left"] -= 1
+            return _VertexResponse(
+                200,
+                {
+                    "publisherModels": [
+                        {"name": "publishers/google/models/gemini-2.5-flash"},
+                        {"name": "publishers/google/models/gemini-3.8-flash"},
+                        {"name": "publishers/google/models/gemini-3.8-flash-preview"},
+                    ]
+                },
+            )
+        return _VertexResponse(404, {"error": {"status": "NOT_FOUND", "message": "list missing"}})
+
+    posts: list[tuple[str, dict]] = []
+
+    def fake_post(url: str, **kwargs):
+        posts.append((url, kwargs["json"]))
+        return _VertexResponse(200, _thinking_answer(_RILEY_FENCED))
+
+    monkeypatch.setattr("app.hiring.resume.httpx.get", fake_get)
+    monkeypatch.setattr("app.hiring.resume.httpx.post", fake_post)
+    first = read_resume(PROBE_RESUME.encode(), "riley.txt")
+    second = read_resume(PROBE_RESUME.encode(), "riley.txt")
+    assert first["personal_email"] == "riley.sample@example.com"
+    assert second["candidate_credentials"] == "MA, LPC-Candidate"
+    assert len(posts) == 2
+    for url, body in posts:
+        assert url == (
+            "https://aiplatform.googleapis.com/v1/projects/attune-clynotion/locations/global"
+            "/publishers/google/models/gemini-3.8-flash:generateContent"
+        )
+        assert "us-central1" not in url
+        assert body["generationConfig"]["thinkingConfig"] == {"thinkingLevel": "LOW"}
+        assert body["generationConfig"]["responseMimeType"] == "application/json"
+    clear_model_cache()
+
+
+def test_extract_probe_reports_parse_failure_without_a_secret(monkeypatch) -> None:
+    from app.hiring.resume import clear_model_cache, reader_health
+
+    clear_model_cache()
+    monkeypatch.setenv("ATTUNE_RESUME_LLM", "gemini")
+    monkeypatch.setenv(
+        "GOOGLE_SA_JSON",
+        '{"client_email":"sa@attune-clynotion.iam.gserviceaccount.com","private_key":"secret-value","project_id":"attune-clynotion"}',
+    )
+    monkeypatch.setattr("app.hiring.resume._gemini_token", lambda: "token")
+    monkeypatch.setattr(
+        "app.hiring.resume.httpx.get",
+        lambda *_args, **_kwargs: _VertexResponse(
+            200,
+            {"publisherModels": [{"name": "publishers/google/models/gemini-3.8-flash"}]},
+        ),
+    )
+    monkeypatch.setattr(
+        "app.hiring.resume.httpx.post",
+        lambda url, **_kwargs: _VertexResponse(
+            200,
+            _thinking_answer('{"candidate_full_name":', finish="MAX_TOKENS"),
+        ),
+    )
+    report = reader_health()
+    assert report["ok"] is True
+    assert report["chosen_model"] == "gemini-3.8-flash"
+    assert report["location"] == "global"
+    probe = report["extract_probe"]
+    assert probe["ok"] is False
+    assert probe["stage"] == "parse"
+    assert probe["error_class"] == "ValueError"
+    assert probe["finish_reason"] == "MAX_TOKENS"
+    assert probe["raw_text"].startswith('{"candidate_full_name":')
+    assert len(probe["raw_text"]) <= 300
+    assert "secret-value" not in json.dumps(report)
+    assert "private_key" not in json.dumps(report)
+    clear_model_cache()
