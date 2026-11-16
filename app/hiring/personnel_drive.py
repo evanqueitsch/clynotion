@@ -45,6 +45,15 @@ def folder_link(folder_id: str) -> str:
     return f"https://drive.google.com/drive/folders/{folder_id}"
 
 
+def resume_filename(full_name: str, mime: str) -> str:
+    """Last_First_resume.pdf, from the same Last, First order as the folder."""
+    stem = folder_name(full_name).replace(",", "")
+    stem = re.sub(r"\s+", "_", stem.strip())
+    stem = re.sub(r"[^A-Za-z0-9._-]", "", stem).strip("._") or "Candidate"
+    extension = {"application/pdf": "pdf", "text/plain": "txt"}.get(mime, "docx")
+    return f"{stem}_resume.{extension}"
+
+
 def personnel_configured() -> bool:
     if _override is not _UNSET:
         return _override is not None
