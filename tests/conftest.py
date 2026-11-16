@@ -65,6 +65,9 @@ def _reset_clinician_store():
 
     hiring.reset()
     clear_capture_for_tests()
+    from app.hiring.personnel_drive import clear_personnel_drive_for_tests
+
+    clear_personnel_drive_for_tests()
     access_store.set_assignment("practice-b", "bob@example.com", "clinician")
     access_store.update_role_permissions(
         "practice-b",
@@ -91,6 +94,9 @@ def _reset_clinician_store():
 
     hiring.reset()
     clear_capture_for_tests()
+    from app.hiring.personnel_drive import clear_personnel_drive_for_tests
+
+    clear_personnel_drive_for_tests()
     set_clock(None)
     clear_mailer_for_tests()
     clinician_store.reset()

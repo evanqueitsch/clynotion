@@ -96,3 +96,60 @@ def test_playwright_resave_after_validation_error_keeps_one_offer() -> None:
             server.wait(timeout=5)
         except subprocess.TimeoutExpired:
             server.kill()
+
+
+def test_playwright_resume_prefill_then_edit_then_save() -> None:
+    pw_root = Path("/tmp/pw-run")
+    port = _free_port()
+    env = os.environ.copy()
+    env.update(
+        {
+            "ATTUNE_MODE": "mock",
+            "ATTUNE_AUTH": "dev",
+            "ATTUNE_ASR": "mock",
+            "ATTUNE_LLM": "mock",
+            "ATTUNE_RESUME_LLM": "mock",
+            "ATTUNE_ONBOARDING_PERSISTENCE": "memory",
+            "ATTUNE_OFFER_PDF": "stub",
+            "ATTUNE_HIRING_SCHEDULER": "off",
+            "ATTUNE_CLINICIAN_PERSISTENCE": "memory",
+            "ATTUNE_PERSISTENCE": "memory",
+            "ATTUNE_ACCESS_PERSISTENCE": "memory",
+            "FILE_STORE_BACKEND": "local",
+            "TIME_MAIL_MODE": "off",
+            "ATTUNE_ONBOARDING_FILES_PATH": tempfile.mkdtemp(prefix="clynotion-resume-browser-"),
+            "PLAYWRIGHT_ROOT": str(pw_root),
+        }
+    )
+    env.pop("GOOGLE_CLIENT_ID", None)
+    env.pop("GOOGLE_CLIENT_SECRET", None)
+    env.pop("HR_PERSONNEL_DRIVE_ID", None)
+    env.pop("GOOGLE_DRIVE_SA_JSON", None)
+    server = subprocess.Popen(
+        ["python3", "-m", "uvicorn", "app.main:app", "--host", "127.0.0.1", "--port", str(port)],
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+        text=True,
+    )
+    try:
+        _wait_health(port)
+        env["APP_BASE"] = f"http://127.0.0.1:{port}"
+        completed = subprocess.run(
+            ["node", "tests/hiring_resume_browser.mjs"],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            env=env,
+            cwd=Path(".").resolve(),
+        )
+        output = completed.stdout + completed.stderr
+        assert completed.returncode == 0, output
+        assert "PASS" in completed.stdout
+    finally:
+        server.terminate()
+        try:
+            server.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            server.kill()

@@ -434,6 +434,7 @@ class HiringEngine:
             offer = self._write_version(row, None, body, actor)
             if resume_id:
                 self._link_resume(row, offer, resume_id)
+            self._sync_personnel(row, offer, actor, pdf=False)
             self._history(row, "offer", offer["id"], "drafted", actor, "Offer drafted")
             self._save(payload)
             return self._offer_public(row, offer)
@@ -451,12 +452,14 @@ class HiringEngine:
             if offer["status"] == "draft":
                 self._write_version(row, offer, body, actor, replace=True)
                 self._link_resume(row, offer, str(body.get("resume_id") or "").strip())
+                self._sync_personnel(row, offer, actor, pdf=False)
                 self._history(row, "offer", offer_id, "revised", actor, "Draft updated")
             else:
                 self._void_tokens(row, "offer", offer_id, "new_version")
                 offer["status"] = "draft"
                 self._write_version(row, offer, body, actor, replace=False)
                 self._link_resume(row, offer, str(body.get("resume_id") or "").strip())
+                self._sync_personnel(row, offer, actor, pdf=False)
                 self._history(row, "offer", offer_id, "versioned", actor, "New version started")
             self._save(payload)
             return self._offer_public(row, offer)
@@ -694,6 +697,7 @@ class HiringEngine:
             offer["sent_at"] = _iso()
             offer["sent_channel"] = channel
             offer["reminder_sent"] = False
+            self._sync_personnel(row, offer, actor, pdf=True)
             self._save(payload)
             return self._offer_public(row, offer)
 
@@ -1053,6 +1057,82 @@ class HiringEngine:
         resume["offer_id"] = offer["id"]
         offer["resume_id"] = resume_id
 
+    def retry_personnel_folder(self, practice_id: str, offer_id: str, actor: str) -> dict[str, Any]:
+        with _lock:
+            payload = self._read()
+            row = self._practice(payload, practice_id)
+            offer = row["offers"].get(offer_id)
+            if not offer:
+                raise HiringError(404, "Offer not found.")
+            self._sync_personnel(row, offer, actor, pdf=offer.get("status") in {"sent", "viewed"}, audit_unavailable=True)
+            self._save(payload)
+            return self._offer_public(row, offer)
+
+    def _sync_personnel(
+        self,
+        row: dict[str, Any],
+        offer: dict[str, Any],
+        actor: str,
+        *,
+        pdf: bool,
+        audit_unavailable: bool = False,
+    ) -> None:
+        from app.hiring.personnel_drive import folder_name, personnel_client
+
+        client = personnel_client()
+        if client is None:
+            offer["drive_status"] = "not_connected"
+            if audit_unavailable:
+                self._history(row, "offer", offer["id"], "drive_unavailable", actor, "Drive not connected")
+            return
+        try:
+            candidate = row["candidates"].get(offer.get("candidate_id") or "") or {}
+            current = str(offer.get("drive_folder_id") or "")
+            folder_id, url = client.ensure_folder(current, folder_name(str(candidate.get("display_name") or "")))
+            if folder_id and not current:
+                self._history(row, "offer", offer["id"], "drive_folder", actor, "Personnel folder created")
+            offer["drive_folder_id"] = folder_id
+            offer["drive_folder_url"] = url
+            offer["drive_status"] = "connected"
+            self._copy_resume_to_drive(row, offer, client, actor)
+            if pdf:
+                self._copy_pdf_to_drive(row, offer, client, actor)
+        except Exception:
+            offer["drive_status"] = "error"
+            self._history(row, "offer", offer["id"], "drive_failed", actor, "Personnel folder was not created")
+
+    def _copy_resume_to_drive(self, row: dict[str, Any], offer: dict[str, Any], client: Any, actor: str) -> None:
+        if offer.get("drive_resume_file_id"):
+            return
+        resume = (row.get("resumes") or {}).get(offer.get("resume_id") or "")
+        folder_id = str(offer.get("drive_folder_id") or "")
+        if not resume or not folder_id:
+            return
+        data = file_store().get(
+            _ref(str(resume.get("object_key") or ""), str(resume.get("backend") or "local"), str(resume.get("sha256") or ""))
+        )
+        mime = str(resume.get("mime") or "application/octet-stream")
+        extension = {"application/pdf": "pdf", "text/plain": "txt"}.get(mime, "docx")
+        offer["drive_resume_file_id"] = client.upload(folder_id, f"resume.{extension}", data, mime)
+        self._history(row, "offer", offer["id"], "drive_resume", actor, "Resume copied to the personnel folder")
+
+    def _copy_pdf_to_drive(self, row: dict[str, Any], offer: dict[str, Any], client: Any, actor: str) -> None:
+        if offer.get("drive_pdf_file_id"):
+            return
+        folder_id = str(offer.get("drive_folder_id") or "")
+        version = row["offer_versions"].get(offer.get("current_version_id") or "")
+        if not folder_id or not version:
+            return
+        data = file_store().get(
+            _ref(
+                str(version.get("pdf_object_key") or ""),
+                str(version.get("docx_backend") or "local"),
+                str(version.get("pdf_sha256") or ""),
+            )
+        )
+        offer["drive_pdf_file_id"] = client.upload(folder_id, "offer-letter.pdf", data, "application/pdf")
+        self._history(row, "offer", offer["id"], "drive_pdf", actor, "Offer PDF copied to the personnel folder")
+
     def _drop_offer_resumes(self, row: dict[str, Any], offer: dict[str, Any]) -> None:
         offer_id = offer.get("id") or ""
         linked = str(offer.get("resume_id") or "")
@@ -1111,6 +1191,9 @@ class HiringEngine:
             "acceptance": _acceptance_public(acceptance) if acceptance else None,
             "hire_id": hire["id"] if hire else "",
             "resume": bool(offer.get("resume_id")) and offer.get("resume_id") in (row.get("resumes") or {}),
+            "drive_connected": _drive_connected(),
+            "drive_status": offer.get("drive_status") or ("connected" if offer.get("drive_folder_id") else "not_connected"),
+            "drive_folder_url": offer.get("drive_folder_url") or "",
         }
 
     def _hire_public(self, row: dict[str, Any], hire: dict[str, Any]) -> dict[str, Any]:
@@ -1777,6 +1860,12 @@ def _parse_dt(value: str) -> datetime:
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
     return moment.astimezone(timezone.utc)
+
+
+def _drive_connected() -> bool:
+    from app.hiring.personnel_drive import personnel_configured
+
+    return personnel_configured()
 
 
 def _delete_stored(store: Any, object_key: str) -> None:

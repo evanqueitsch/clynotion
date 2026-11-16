@@ -169,7 +169,7 @@ def _kind(data: bytes, filename: str) -> str:
     if data.startswith(b"PK") and _zip_has(data, "word/document.xml"):
         return "docx"
     suffix = filename.lower().rsplit(".", 1)[-1] if "." in filename else ""
-    if suffix == "txt" or _looks_textual(data):
+    if suffix in {"txt", "text"} or (not suffix and _looks_textual(data)):
         if b"\x00" in data:
             raise ResumeReadError("Upload a PDF, DOCX, or TXT resume.")
         return "txt"
@@ -210,8 +210,14 @@ def _docx_text(data: bytes) -> str:
         root = ElementTree.fromstring(xml)
     except Exception as exc:
         raise ResumeReadError("That resume could not be read.") from exc
-    texts = [node.text or "" for node in root.iter("{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t")]
-    return " ".join(part for part in texts if part)
+    texts: list[str] = []
+    paragraph = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p"
+    run_text = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t"
+    for node in root.iter(paragraph):
+        line = "".join(item.text or "" for item in node.iter(run_text))
+        if line.strip():
+            texts.append(line.strip())
+    return "\n".join(texts)
 
 
 def _txt_text(data: bytes) -> str:

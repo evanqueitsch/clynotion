@@ -351,6 +351,27 @@
           download(offer.id, "resume");
         });
       }
+      if (offer.drive_folder_url) {
+        const link = document.createElement("a");
+        link.href = offer.drive_folder_url;
+        link.target = "_blank";
+        link.rel = "noopener noreferrer";
+        link.textContent = "Personnel folder";
+        buttons.appendChild(link);
+      }
+      if (!offer.drive_connected) {
+        const note = document.createElement("span");
+        note.className = "meta";
+        note.textContent = "Drive not connected";
+        buttons.appendChild(note);
+        button("Retry", "ghost", function () {
+          retryDrive(offer.id);
+        });
+      } else if (!offer.drive_folder_url) {
+        button("Create Drive folder", "ghost", function () {
+          retryDrive(offer.id);
+        });
+      }
       if (offer.status === "draft") {
         button("Mark sent", "primary", function () {
           post(offer.id, "/send", { channel: "outside" }, "Marked sent.");
@@ -515,6 +536,17 @@
       if (el.focus) el.focus();
     } catch (ignore) {
       /* The field is already marked. Focusing it is optional. */
+    }
+  }
+
+  async function retryDrive(id) {
+    showStatus("Saving…", "ok");
+    try {
+      const offer = await ui().api("/hiring/offers/" + id + "/drive", { method: "POST", json: {} });
+      const ready = offer && offer.drive_connected && offer.drive_folder_url;
+      await window.clyHiring.open({ editId: id, message: ready ? "Personnel folder ready." : "Drive not connected" });
+    } catch (error) {
+      showStatus((error && error.message) || "Drive not connected", "error");
     }
   }
 
