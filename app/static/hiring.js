@@ -136,9 +136,44 @@
     if (caseload && !caseload.value) caseload.placeholder = part ? "part-time range" : "full-time range";
   }
 
-  function render(data, editId) {
+  function clearFieldErrors() {
+    const form = formEl();
+    if (!form || !form.querySelectorAll) return;
+    const marked = form.querySelectorAll(".field-error");
+    for (let i = 0; i < marked.length; i++) {
+      const node = marked[i];
+      if (!node || !node.classList) continue;
+      try {
+        node.classList.remove("field-error");
+      } catch (ignore) {
+        /* A focused field can throw while its class is removed. Keep going. */
+      }
+    }
+  }
+
+  function releaseRoot(root) {
+    const active = document.activeElement;
+    if (active && active.blur && root.contains(active)) {
+      try {
+        active.blur();
+      } catch (ignore) {
+        /* Focus can sit on the field that just failed validation. */
+      }
+    }
+    clearFieldErrors();
+    try {
+      root.replaceChildren();
+    } catch (ignore) {
+      root.textContent = "";
+    }
+  }
+
+  function render(data, options) {
+    const opts = typeof options === "string" ? { editId: options } : (options || {});
+    const editId = opts.editId || "";
     const root = $("hiring-root");
-    root.innerHTML = "";
+    if (!root) return;
+    releaseRoot(root);
     currentSettings = data.settings || {};
     const settings = currentSettings;
     const settingsBox = document.createElement("div");
@@ -242,7 +277,12 @@
     const list = document.createElement("div");
     list.className = "due-list";
     list.style.marginTop = "1.25rem";
-    (data.offers || []).forEach(function (offer) {
+    const offers = (data.offers || []).slice();
+    const extra = opts.offer;
+    if (extra && extra.id && !offers.some(function (offer) { return offer.id === extra.id; })) {
+      offers.unshift(extra);
+    }
+    offers.forEach(function (offer) {
       const row = document.createElement("div");
       row.className = "due-row";
       const left = document.createElement("div");
@@ -311,7 +351,7 @@
       row.appendChild(buttons);
       list.appendChild(row);
     });
-    if (!(data.offers || []).length) {
+    if (!offers.length) {
       const empty = document.createElement("p");
       empty.className = "meta";
       empty.textContent = "No offers yet.";
@@ -319,7 +359,7 @@
     }
     root.appendChild(list);
     if (editId) {
-      const match = (data.offers || []).filter(function (offer) { return offer.id === editId; })[0];
+      const match = offers.filter(function (offer) { return offer.id === editId; })[0];
       if (match) {
         const editingNow = document.getElementById("hire-editing");
         if (editingNow) editingNow.value = match.id;
@@ -328,41 +368,63 @@
     }
   }
 
+  let saving = false;
+
   async function saveOffer() {
-    let body;
+    if (saving) return;
+    saving = true;
+    const saveButton = formEl() && formEl().querySelector("button[type=submit]");
+    if (saveButton) saveButton.disabled = true;
+    clearFieldErrors();
+    showStatus("", "");
     try {
-      body = readForm();
-    } catch (error) {
-      showStatus((error && error.message) || "Could not save.", "error");
-      return;
-    }
-    const editingId = valueOf("editing");
-    const payload = Object.assign({}, body);
-    delete payload._editing;
-    try {
-      if (editingId) {
-        await ui().api("/hiring/offers/" + editingId, { method: "PUT", json: payload });
-      } else {
-        await ui().api("/hiring/offers", { method: "POST", json: payload });
+      let body;
+      try {
+        body = readForm();
+      } catch (error) {
+        showStatus((error && error.message) || "Could not save.", "error");
+        return;
       }
-      await window.clyHiring.open({ message: "Saved." });
+      const editingId = valueOf("editing");
+      const payload = Object.assign({}, body);
+      delete payload._editing;
+      let saved;
+      if (editingId) {
+        saved = await ui().api("/hiring/offers/" + editingId, { method: "PUT", json: payload });
+      } else {
+        saved = await ui().api("/hiring/offers", { method: "POST", json: payload });
+      }
+      const offerId = (saved && saved.id) || editingId;
+      const opened = await window.clyHiring.open({ message: "Saved.", editId: offerId, offer: saved });
+      if (!opened) {
+        const editingNow = document.getElementById("hire-editing");
+        if (editingNow && offerId) editingNow.value = offerId;
+        clearFieldErrors();
+        showStatus("Saved.", "ok");
+      }
     } catch (error) {
       showStatus((error && error.message) || "Could not save.", "error");
       markField(error && error.field);
+    } finally {
+      saving = false;
+      const button = formEl() && formEl().querySelector("button[type=submit]");
+      if (button) button.disabled = false;
     }
   }
 
   function markField(name) {
+    clearFieldErrors();
+    if (!name) return;
     const form = formEl();
-    if (!form) return;
-    form.querySelectorAll(".field-error").forEach(function (node) {
-      node.classList.remove("field-error");
-    });
-    if (!name || !form.elements) return;
-    const el = form.elements.namedItem(name);
+    if (!form || !form.querySelector) return;
+    const el = form.querySelector('[name="' + String(name).replace(/"/g, "") + '"]');
     if (!el || !el.classList) return;
     el.classList.add("field-error");
-    if (el.focus) el.focus();
+    try {
+      if (el.focus) el.focus();
+    } catch (ignore) {
+      /* The field is already marked. Focusing it is optional. */
+    }
   }
 
   async function post(id, suffix, json, ok, keepEdit) {
@@ -399,14 +461,16 @@
     open: async function (opts) {
       const options = opts || {};
       const api = ui();
-      if (!api) return;
-      api.show("hiring-panel");
+      if (!api) return false;
       try {
+        if (api.show) api.show("hiring-panel");
         const data = await api.api("/hiring/bootstrap", { cache: "no-store" });
-        render(data, options.editId || "");
+        render(data, options);
         showStatus(options.message || "", options.message ? "ok" : "");
+        return true;
       } catch (error) {
         showStatus((error && error.message) || "Could not open hiring.", "error");
+        return false;
       }
     },
   };
