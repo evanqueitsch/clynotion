@@ -51,6 +51,49 @@
     response_deadline: true,
   };
 
+  function askDialog(options) {
+    const existing = document.getElementById("hire-dialog");
+    if (existing) existing.remove();
+    const dialog = document.createElement("form");
+    dialog.id = "hire-dialog";
+    dialog.className = "hire-dialog";
+    const title = document.createElement("div");
+    title.className = "due-title";
+    title.textContent = options.title || "";
+    const label = document.createElement("label");
+    label.textContent = options.label || "";
+    const input = document.createElement("input");
+    input.type = options.label === "Work email" ? "email" : "text";
+    input.required = true;
+    input.autocomplete = "off";
+    label.appendChild(input);
+    const confirm = document.createElement("button");
+    confirm.type = "submit";
+    confirm.className = "primary";
+    confirm.textContent = options.confirmText || "Confirm";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "ghost";
+    cancel.textContent = "Cancel";
+    cancel.onclick = function () {
+      dialog.remove();
+    };
+    dialog.appendChild(title);
+    dialog.appendChild(label);
+    dialog.appendChild(confirm);
+    dialog.appendChild(cancel);
+    dialog.addEventListener("submit", function (event) {
+      event.preventDefault();
+      const typed = String(input.value || "").trim();
+      if (!typed) return;
+      dialog.remove();
+      options.onConfirm(typed);
+    });
+    const root = document.getElementById("hiring-root") || document.body;
+    root.appendChild(dialog);
+    input.focus();
+  }
+
   function showBusy(msg) {
     const el = document.getElementById("hiring-status");
     const api = ui();
@@ -410,16 +453,14 @@
         link.textContent = "Personnel folder";
         buttons.appendChild(link);
       }
-      if (!offer.drive_connected) {
+      if (!offer.drive_ok) {
         const note = document.createElement("span");
         note.className = "meta";
-        note.textContent = "Drive not connected";
+        note.textContent = offer.drive_status === "working"
+          ? "Creating Drive folders…"
+          : (offer.drive_status === "not_connected" || !offer.drive_connected ? "Drive not connected" : "Drive needs another try");
         buttons.appendChild(note);
         button("Retry", "ghost", function () {
-          retryDrive(offer.id);
-        });
-      } else if (!offer.drive_folder_url) {
-        button("Create Drive folder", "ghost", function () {
           retryDrive(offer.id);
         });
       }
@@ -439,11 +480,15 @@
       }
       button("Delete", "ghost", function (event) {
         if (event && event.preventDefault) event.preventDefault();
-        const typed = window.prompt("Type the candidate's name to delete this offer");
-        if (typed == null) return;
-        const confirmName = String(typed).trim();
-        if (!confirmName) return;
-        post(offer.id, "/delete", { confirm: confirmName }, "Deleted.");
+        askDialog({
+          title: "Delete offer for " + (offer.display_name || "this candidate"),
+          label: "Type the candidate's name",
+          expected: offer.display_name || "",
+          confirmText: "Delete offer",
+          onConfirm: function (typed) {
+            post(offer.id, "/delete", { confirm: typed }, "Deleted.");
+          },
+        });
       });
       if (offer.status === "sent" || offer.status === "viewed") {
         button("Record acceptance", "primary", function () {
@@ -535,6 +580,9 @@
     confirm.type = "submit";
     confirm.className = "primary";
     confirm.textContent = "Confirm";
+    const working = document.createElement("p");
+    working.className = "meta";
+    working.hidden = true;
     const cancel = document.createElement("button");
     cancel.type = "button";
     cancel.className = "ghost";
@@ -544,6 +592,7 @@
     };
     box.appendChild(confirm);
     box.appendChild(cancel);
+    box.appendChild(working);
     if (anchor && anchor.insertAdjacentElement) anchor.insertAdjacentElement("afterend", box);
   }
 
@@ -558,6 +607,17 @@
     const body = new FormData();
     body.append("upload", chosen, chosen.name || "signed.pdf");
     body.append("accepted_on", (date && date.value) || "");
+    const confirm = box.querySelector("button.primary");
+    if (confirm) {
+      confirm.disabled = true;
+      confirm.classList.add("busy");
+      confirm.textContent = "Creating Drive folders…";
+    }
+    const working = box.querySelector("p.meta");
+    if (working) {
+      working.hidden = false;
+      working.textContent = "Creating Drive folders…";
+    }
     showBusy("Creating Drive folders…");
     try {
       const saved = await ui().api("/hiring/offers/" + id + "/accept-paper", { method: "POST", body: body });
@@ -720,23 +780,52 @@
         card.appendChild(row);
       });
       if (hire.status === "onboarding") {
+        const clearances = (hire.items || []).filter(function (item) { return item.template_key === "clearances"; })[0];
+        const needsClearance = hire.direct_client_access && clearances && clearances.status !== "done" && clearances.status !== "n/a";
         const activate = document.createElement("button");
         activate.type = "button";
         activate.className = "primary";
         activate.textContent = "Activate";
+        activate.disabled = !!needsClearance;
+        if (needsClearance) {
+          const why = document.createElement("p");
+          why.className = "meta";
+          why.textContent = "Mark PA clearances received first";
+          card.appendChild(why);
+        }
         activate.onclick = function () {
-          const email = window.prompt("Work email for the employee record");
-          if (!email) return;
-          ui()
-            .api("/hiring/hires/" + hire.id + "/activate", { method: "POST", json: { work_email: email } })
-            .then(function () {
-              return window.clyHiring.open({ message: "Hire activated." });
-            })
-            .catch(function (error) {
-              showStatus((error && error.message) || "Could not activate.", "error");
-            });
+          askDialog({
+            title: "Activate " + (hire.display_name || "this hire"),
+            label: "Work email",
+            confirmText: "Activate",
+            onConfirm: function (email) {
+              ui()
+                .api("/hiring/hires/" + hire.id + "/activate", { method: "POST", json: { work_email: email } })
+                .then(function () {
+                  return window.clyHiring.open({ message: "Hire activated." });
+                })
+                .catch(function (error) {
+                  showStatus((error && error.message) || "Could not activate.", "error");
+                });
+            },
+          });
         };
         card.appendChild(activate);
+        const packet = document.createElement("button");
+        packet.type = "button";
+        packet.className = "ghost";
+        packet.textContent = "Mark packet complete";
+        packet.onclick = function () {
+          ui()
+            .api("/hiring/hires/" + hire.id + "/packet-complete", { method: "POST", json: {} })
+            .then(function () {
+              return window.clyHiring.open({ message: "Packet marked complete." });
+            })
+            .catch(function (error) {
+              showStatus((error && error.message) || "Could not save.", "error");
+            });
+        };
+        card.appendChild(packet);
       }
       const remove = document.createElement("button");
       remove.type = "button";
@@ -744,18 +833,22 @@
       remove.textContent = "Delete hire";
       remove.onclick = function (event) {
         if (event && event.preventDefault) event.preventDefault();
-        const typed = window.prompt("Type the candidate's name to delete this hire");
-        if (typed == null) return;
-        const confirmName = String(typed).trim();
-        if (!confirmName) return;
-        ui()
-          .api("/hiring/hires/" + hire.id + "/delete", { method: "POST", json: { confirm: confirmName } })
-          .then(function () {
-            return window.clyHiring.open({ message: "Hire deleted." });
-          })
-          .catch(function (error) {
-            showStatus((error && error.message) || "Could not delete.", "error");
-          });
+        askDialog({
+          title: "Delete hire for " + (hire.display_name || "this candidate"),
+          label: "Type the candidate's name",
+          expected: hire.display_name || "",
+          confirmText: "Delete hire",
+          onConfirm: function (typed) {
+            ui()
+              .api("/hiring/hires/" + hire.id + "/delete", { method: "POST", json: { confirm: typed } })
+              .then(function () {
+                return window.clyHiring.open({ message: "Hire deleted." });
+              })
+              .catch(function (error) {
+                showStatus((error && error.message) || "Could not delete.", "error");
+              });
+          },
+        });
       };
       card.appendChild(remove);
       box.appendChild(card);

@@ -10,6 +10,7 @@ from fastapi.testclient import TestClient
 from app.auth import User, issue_token
 from app.credentialing.store import credentialing_store
 from app.hiring.checklist import clearance_state
+from app.hiring.engine import hire_cell_status
 from app.hiring.personnel_drive import clear_personnel_drive_for_tests, set_personnel_drive_for_tests
 from app.hiring.resume import ground_fields
 from app.main import app
@@ -277,14 +278,18 @@ def test_checklist_status_note_undo_and_billing_todo() -> None:
     item = next(row for row in undone.json()["items"] if row["template_key"] == "welcome_sent")
     assert item["status"] == "open"
     assert item["done_by"] == ""
-    packet = client.post(
+    assert item["note"] == ""
+    item_only = client.post(
         f"/hiring/hires/{hire_id}/items/packet_signed",
         headers=_alice(),
         json={"status": "done"},
     )
+    assert item_only.status_code == 200, item_only.text
+    assert not any("W-4" in item.title for item in due_engine.list_open("practice-a"))
+    packet = client.post(f"/hiring/hires/{hire_id}/packet-complete", headers=_alice())
     assert packet.status_code == 200, packet.text
     titles = [item.title for item in due_engine.list_open("practice-a")]
-    assert "W-4, direct deposit, and the PA new-hire report" in titles
+    assert "Avery Sample: W-4, direct deposit, and the PA new-hire report" in titles
     form = client.get("/hiring/forms/h4c_packet", headers=_alice())
     assert form.status_code == 200
     assert form.content.startswith(b"%PDF")
@@ -340,7 +345,7 @@ def test_activate_adds_credentialing_cells_without_overwriting() -> None:
     grid = credentialing_store.public_grid("practice-a")
     subject = next(item for item in grid["subjects"] if item["name"] == "Casey Sample")
     cell = next(item for item in grid["cells"] if item["subject_id"] == subject["id"] and item["payer_id"] == payer["id"])
-    assert cell["status"] == "unknown"
+    assert cell["status"] == "not_eligible"
     credentialing_store.save_enrollment(
         "practice-a",
         {"subject_id": subject["id"], "payer_id": payer["id"], "status": "in_network", "note": ""},
@@ -392,6 +397,41 @@ def test_clearance_badge_is_amber_before_the_due_date_and_red_after() -> None:
     item = next(row for row in accepted.json()["hire"]["items"] if row["template_key"] == "clearances")
     assert item["badge"] == "due before start"
     assert item["warning"] is False
+    screening = next(row for row in accepted.json()["hire"]["items"] if row["template_key"] == "exclusion_screening")
+    assert screening["badge"] == "due before start"
+    assert screening["warning"] is False
+
+
+def test_blank_credentials_are_not_eligible_for_a_restricted_payer() -> None:
+    assert hire_cell_status({"name": "Example Plan", "accepts_licenses": ["LCSW"]}, "") == "not_eligible"
+    assert hire_cell_status({"name": "Example Plan", "accepts_licenses": ["LCSW"]}, "Jordan Example") == "not_eligible"
+    assert hire_cell_status({"name": "Example Plan", "accepts_licenses": ["LCSW"]}, "LCSW") == "unknown"
+    assert hire_cell_status({"name": "Open Plan", "accepts_licenses": ["all"]}, "") == "unknown"
+    assert hire_cell_status({"name": "Unset Plan", "accepts_licenses": []}, "") == "unknown"
+
+
+def test_deleting_an_offer_with_no_hire_trashes_its_folder() -> None:
+    drive = RecordingDrive()
+    set_personnel_drive_for_tests(drive)
+    try:
+        created = client.post(
+            "/hiring/offers",
+            headers=_alice(),
+            json=_offer(email="folder.sample@example.com", name="Folder Sample"),
+        )
+        assert created.status_code == 200, created.text
+        offer_id = created.json()["id"]
+        folder_id = next(iter(drive.folders))
+        removed = client.post(
+            f"/hiring/offers/{offer_id}/delete",
+            headers=_alice(),
+            json={"confirm": "Folder Sample"},
+        )
+        assert removed.status_code == 200, removed.text
+        assert folder_id in drive.trashed
+        assert folder_id in drive.folders
+    finally:
+        clear_personnel_drive_for_tests()
 
 
 def test_delete_hire_requires_the_exact_name_and_only_removes_that_hire() -> None:
@@ -452,6 +492,7 @@ def test_delete_hire_requires_the_exact_name_and_only_removes_that_hire() -> Non
         assert hire_id not in open_refs
         assert hire_id + ":packet" not in open_refs
         assert drive.trashed
+        assert any(file_id in drive.folders for file_id in drive.trashed)
         assert all(drive.files[file_id].get("trashed") for file_id in drive.trashed if file_id in drive.files)
         assert client.get("/hiring/offers/" + offer_id, headers=_alice()).status_code == 200
     finally:

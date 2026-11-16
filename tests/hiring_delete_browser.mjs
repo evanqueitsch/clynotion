@@ -54,26 +54,31 @@ if (await page.locator("#hire-client").isChecked()) fail("direct client access w
 if ((await page.locator(".due-row").count()) !== 1) fail("offer was not listed");
 
 const remove = page.getByRole("button", { name: "Delete", exact: true });
-answers.push("dismiss");
 await remove.click();
+await page.waitForSelector("#hire-dialog");
+if (!(await page.locator("#hire-dialog").innerText()).includes("Jordan Example")) fail("dialog did not name the candidate");
+await page.getByRole("button", { name: "Cancel" }).click();
 await page.waitForTimeout(200);
 if (deletes.length !== 0) fail("cancel sent a delete");
 if ((await page.locator(".due-row").count()) !== 1) fail("cancel removed the offer");
 
-answers.push("");
 await remove.click();
+await page.locator("#hire-dialog input").fill("   ");
+await page.locator("#hire-dialog button.primary").click();
 await page.waitForTimeout(200);
 if (deletes.length !== 0) fail("empty name sent a delete");
 if ((await page.locator(".due-row").count()) !== 1) fail("empty name removed the offer");
 
-answers.push("Wrong Name");
 await remove.click();
+await page.locator("#hire-dialog input").fill("Wrong Name");
+await page.locator("#hire-dialog button.primary").click();
 await page.waitForFunction(() => (document.getElementById("hiring-status") || {}).textContent.includes("name"));
 if (deletes.length !== 1) fail("wrong name did not reach the server");
 if ((await page.locator(".due-row").count()) !== 1) fail("wrong name removed the offer");
 
-answers.push("Jordan Example");
 await remove.click();
+await page.locator("#hire-dialog input").fill("Jordan Example");
+await page.locator("#hire-dialog button.primary").click();
 await page.waitForFunction(() => document.querySelectorAll(".due-row").length === 0);
 if (deletes.length !== 2) fail("exact name was not sent");
 if (pageErrors.length) fail("page error");
