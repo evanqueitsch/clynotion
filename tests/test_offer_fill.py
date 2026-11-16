@@ -92,7 +92,7 @@ def test_part_time_removes_both_paragraphs_and_rejects_qsehra() -> None:
     assert "QSEHRA" not in text
     assert "{{" not in text
     for field in ("qsehra_monthly_amount", "qsehra_wait_days"):
-        with pytest.raises(OfferFillError, match="must not be supplied"):
+        with pytest.raises(OfferFillError, match="only for full-time"):
             load_values({**PART, field: "$250" if "amount" in field else "60"}, load_fields_spec())
 
 
@@ -101,40 +101,83 @@ def test_part_time_accepts_blank_qsehra_and_full_time_requires_each() -> None:
     for field in ("qsehra_monthly_amount", "qsehra_wait_days"):
         body = dict(FULL)
         body.pop(field, None)
-        with pytest.raises(OfferFillError, match="missing required field"):
+        with pytest.raises(OfferFillError, match="is required"):
             load_values(body, load_fields_spec())
 
 
 def test_unknown_derived_braces_and_employment_type() -> None:
     spec = load_fields_spec()
-    with pytest.raises(OfferFillError, match="unknown field"):
+    with pytest.raises(OfferFillError, match="does not use"):
         load_values({**FULL, "nickname": "Jo"}, spec)
     for derived in ("schedule_paragraph", "benefit_time_off", "benefit_license_ceu", "licensed_rate_clause"):
-        with pytest.raises(OfferFillError, match="cannot be supplied"):
+        with pytest.raises(OfferFillError, match="filled in automatically"):
             load_values({**FULL, derived: "nope"}, spec)
     with pytest.raises(OfferFillError, match="braces"):
         load_values({**FULL, "candidate_first_name": "Jo{{x}}"}, spec)
-    with pytest.raises(OfferFillError, match="employment_type"):
+    with pytest.raises(OfferFillError, match="Employment type"):
         load_values({**FULL, "employment_type": "Full-Time"}, spec)
-    with pytest.raises(OfferFillError, match="employment_type"):
+    with pytest.raises(OfferFillError, match="Employment type"):
         load_values({**FULL, "employment_type": "contract"}, spec)
 
 
 def test_regex_formats_and_caseload_dash() -> None:
     spec = load_fields_spec()
     bad = {
-        "hourly_rate": "45",
-        "licensed_rate": "55",
-        "qsehra_monthly_amount": "250",
+        "hourly_rate": "forty",
+        "licensed_rate": "nope",
+        "qsehra_monthly_amount": "lots",
         "qsehra_wait_days": "soon",
-        "offer_date": "2026-12-01",
+        "offer_date": "tomorrow",
         "caseload_range": "25 to 30",
     }
     for field, value in bad.items():
-        with pytest.raises(OfferFillError):
+        with pytest.raises(OfferFillError) as caught:
             load_values({**FULL, field: value}, spec)
+        assert caught.value.field == field
+        assert field not in str(caught.value)
     values = load_values({**FULL, "caseload_range": "25 - 30"}, spec)
     assert values["caseload_range"] == "25–30"
+
+
+def test_plain_amounts_normalize_to_letter_format() -> None:
+    spec = load_fields_spec()
+    values = load_values(
+        {
+            **FULL,
+            "hourly_rate": "40",
+            "licensed_rate": "40.5",
+            "qsehra_monthly_amount": "100",
+            "qsehra_wait_days": "060 days",
+            "caseload_range": "25-30",
+            "offer_date": "2026-12-01",
+            "start_date": "1/5/2027",
+        },
+        spec,
+    )
+    assert values["hourly_rate"] == "$40.00"
+    assert values["licensed_rate"] == "$40.50"
+    assert values["qsehra_monthly_amount"] == "$100"
+    assert values["qsehra_wait_days"] == "60"
+    assert values["caseload_range"] == "25–30"
+    assert values["offer_date"] == "12/01/2026"
+    assert values["start_date"] == "01/05/2027"
+    symbols = load_values(
+        {
+            **FULL,
+            "hourly_rate": "$40",
+            "licensed_rate": "$1,250.00",
+            "qsehra_monthly_amount": "$250.50",
+            "caseload_range": "8 — 12",
+        },
+        spec,
+    )
+    assert symbols["hourly_rate"] == "$40.00"
+    assert symbols["licensed_rate"] == "$1,250.00"
+    assert symbols["qsehra_monthly_amount"] == "$250.50"
+    assert symbols["caseload_range"] == "8–12"
+    with pytest.raises(OfferFillError, match="Hourly rate must be a dollar amount.") as caught:
+        load_values({**FULL, "hourly_rate": "40 dollars"}, spec)
+    assert caught.value.field == "hourly_rate"
 
 
 def test_credentials_comma_position_and_supervisor_defaults() -> None:
@@ -172,11 +215,11 @@ def test_licensed_rate_clause_is_optional() -> None:
 
 
 def test_real_dates_reject_tbd_and_asap() -> None:
-    with pytest.raises(OfferFillError, match="start_date"):
+    with pytest.raises(OfferFillError, match="Start date"):
         load_values({**FULL, "start_date": "TBD"}, load_fields_spec())
-    with pytest.raises(OfferFillError, match="response_deadline"):
+    with pytest.raises(OfferFillError, match="Response deadline"):
         load_values({**FULL, "response_deadline": "ASAP"}, load_fields_spec())
-    with pytest.raises(OfferFillError, match="not a real date"):
+    with pytest.raises(OfferFillError, match="must be a real date"):
         load_values({**FULL, "start_date": "02/31/2027"}, load_fields_spec())
 
 

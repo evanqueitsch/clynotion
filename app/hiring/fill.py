@@ -12,6 +12,7 @@ import io
 import re
 import zipfile
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from typing import Any
 
@@ -26,13 +27,33 @@ XML_SPACE = "{http://www.w3.org/XML/1998/namespace}space"
 PH = re.compile(r"\{\{\s*([A-Za-z0-9_]+)\s*\}\}")
 LEFTOVER = re.compile(r"\{\{[^{}]{0,80}\}\}")
 DATE_RX = re.compile(r"^\d{2}/\d{2}/\d{4}$")
+LABELS = {
+    "employment_type": "Employment type",
+    "offer_date": "Offer date",
+    "candidate_full_name": "Full legal name",
+    "candidate_credentials": "Credentials",
+    "candidate_first_name": "First name",
+    "position_title": "Position",
+    "supervisor_title": "Supervisor title",
+    "supervisor_name": "Supervisor name",
+    "hourly_rate": "Hourly rate",
+    "licensed_rate": "Licensed rate",
+    "caseload_range": "Caseload range",
+    "qsehra_monthly_amount": "QSEHRA monthly amount",
+    "qsehra_wait_days": "QSEHRA wait days",
+    "start_date": "Start date",
+    "response_deadline": "Response deadline",
+}
+MONEY_WITH_CENTS = {"hourly_rate", "licensed_rate"}
 FORMATS = {
-    "hourly_rate": (r"^\$\d{1,3}(,\d{3})*\.\d{2}$", "like $45.00"),
-    "licensed_rate": (r"^\$\d{1,3}(,\d{3})*\.\d{2}$", "like $55.00"),
-    "qsehra_monthly_amount": (r"^\$\d{1,3}(,\d{3})*(\.\d{2})?$", "like $250"),
-    "qsehra_wait_days": (r"^\d{1,3}$", "a whole number of days"),
-    "offer_date": (r"^\d{2}/\d{2}/\d{4}$", "MM/DD/YYYY"),
-    "caseload_range": (r"^\d{1,2}–\d{1,2}$", "a range like 25–30"),
+    "hourly_rate": r"^\$\d{1,3}(,\d{3})*\.\d{2}$",
+    "licensed_rate": r"^\$\d{1,3}(,\d{3})*\.\d{2}$",
+    "qsehra_monthly_amount": r"^\$\d{1,3}(,\d{3})*(\.\d{2})?$",
+    "qsehra_wait_days": r"^\d{1,3}$",
+    "offer_date": r"^\d{2}/\d{2}/\d{4}$",
+    "start_date": r"^\d{2}/\d{2}/\d{4}$",
+    "response_deadline": r"^\d{2}/\d{2}/\d{4}$",
+    "caseload_range": r"^\d{1,2}–\d{1,2}$",
 }
 BANNED_KEYS = re.compile(
     r"ssn|social_security|date_of_birth|\bdob\b|birth_date|routing|"
@@ -45,9 +66,17 @@ SSN_SHAPE = re.compile(r"\b\d{3}-\d{2}-\d{4}\b")
 class OfferFillError(ValueError):
     """A letter cannot be generated. The message is safe to show to Admin."""
 
+    def __init__(self, message: str, field: str = "") -> None:
+        super().__init__(message)
+        self.field = field
 
-def _die(message: str) -> None:
-    raise OfferFillError(message)
+
+def _label(name: str) -> str:
+    return LABELS.get(name, "That field")
+
+
+def _die(message: str, field: str = "") -> None:
+    raise OfferFillError(message, field)
 
 
 def load_fields_spec(path: Path | None = None) -> dict[str, Any]:
@@ -87,10 +116,10 @@ def load_values(vals: Any, spec: dict[str, Any]) -> dict[str, Any]:
     derived = {f["name"] for f in spec.get("derived", [])}
     bad = sorted(set(vals) & derived)
     if bad:
-        _die("field(s) are set by the script and cannot be supplied: " + ", ".join(bad))
+        _die("That value is filled in automatically.")
     unknown = sorted(set(vals) - set(known))
     if unknown:
-        _die("unknown field(s): " + ", ".join(unknown))
+        _die("That form has a field this letter does not use.")
     out: dict[str, str] = {}
     for name, field in known.items():
         value = vals.get(name)
@@ -98,23 +127,19 @@ def load_values(vals: Any, spec: dict[str, Any]) -> dict[str, Any]:
         if not value and field.get("default") and field["default"] != "from employment_type":
             value = str(field["default"])
         if not value and not field.get("optional") and not field.get("full_time_only"):
-            _die(f"missing required field: {name}")
+            _die(f"{_label(name)} is required.", name)
         if "{{" in value or "}}" in value:
-            _die(f"{name} value contains braces")
+            _die(f"{_label(name)} cannot include braces.", name)
         if value and SSN_SHAPE.search(value):
-            _die(f"{name} looks like an identity number and cannot be stored")
+            _die(f"{_label(name)} cannot include an identity number.", name)
         out[name] = value
     types = spec["employment_types"]
     employment = out["employment_type"]
     if employment not in types:
-        _die(
-            f"employment_type={employment!r} must be one of: "
-            + ", ".join(repr(item) for item in types)
-        )
+        _die("Employment type must be full-time or part-time.", "employment_type")
     for name in types[employment].get("fields_not_allowed", []):
         if out.get(name):
-            note = types[employment].get("_note", "not used for this type")
-            _die(f"{name} must not be supplied for {employment} hires ({note})")
+            _die(f"{_label(name)} is only for full-time hires.", name)
         out.pop(name, None)
     for name, field in known.items():
         if (
@@ -122,15 +147,16 @@ def load_values(vals: Any, spec: dict[str, Any]) -> dict[str, Any]:
             and name not in types[employment].get("fields_not_allowed", [])
             and not out.get(name)
         ):
-            _die(f"missing required field: {name}")
+            _die(f"{_label(name)} is required for full-time hires.", name)
     if not out["position_title"]:
         out["position_title"] = types[employment]["position_title_default"]
-    out["caseload_range"] = re.sub(r"\s*-\s*", "–", out["caseload_range"])
-    for name, (pattern, hint) in FORMATS.items():
-        if out.get(name) and not re.match(pattern, out[name]):
-            _die(f"{name}={out[name]!r} should be {hint}")
-    for label in ("start_date", "response_deadline"):
-        _require_real_date(label, out.get(label, ""))
+    _normalize_formatted(out)
+    for name, pattern in FORMATS.items():
+        if out.get(name) and not re.fullmatch(pattern, out[name]):
+            _die(_format_message(name), name)
+    for label in ("start_date", "response_deadline", "offer_date"):
+        if out.get(label):
+            _require_real_date(label, out[label])
     schedule = types[employment]["schedule_paragraph"]
     for key in ("caseload_range", "supervisor_title"):
         schedule = schedule.replace("{{" + key + "}}", out[key])
@@ -149,14 +175,107 @@ def load_values(vals: Any, spec: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def _format_message(name: str) -> str:
+    if name in MONEY_WITH_CENTS or name == "qsehra_monthly_amount":
+        return f"{_label(name)} must be a dollar amount."
+    if name == "qsehra_wait_days":
+        return "QSEHRA wait days must be a whole number of days."
+    if name == "caseload_range":
+        return "Caseload range must be a range such as 25–30."
+    if name in {"offer_date", "start_date", "response_deadline"}:
+        return f"{_label(name)} must be a real date."
+    return f"{_label(name)} is not in the right form."
+
+
+def _normalize_formatted(out: dict[str, str]) -> None:
+    for name in ("hourly_rate", "licensed_rate", "qsehra_monthly_amount"):
+        if not out.get(name):
+            continue
+        normalized = _normalize_money(out[name], cents=name in MONEY_WITH_CENTS)
+        if normalized is None:
+            _die(_format_message(name), name)
+        out[name] = normalized
+    if out.get("qsehra_wait_days"):
+        days = _normalize_days(out["qsehra_wait_days"])
+        if days is None:
+            _die(_format_message("qsehra_wait_days"), "qsehra_wait_days")
+        out["qsehra_wait_days"] = days
+    if out.get("caseload_range"):
+        caseload = _normalize_caseload(out["caseload_range"])
+        if caseload is None:
+            _die(_format_message("caseload_range"), "caseload_range")
+        out["caseload_range"] = caseload
+    for name in ("offer_date", "start_date", "response_deadline"):
+        if not out.get(name):
+            continue
+        normalized = _normalize_date(out[name])
+        if normalized is None:
+            _die(_format_message(name), name)
+        out[name] = normalized
+
+
+def _normalize_money(value: str, *, cents: bool) -> str | None:
+    text = value.strip().replace("$", "").replace(",", "").replace(" ", "")
+    if not re.fullmatch(r"\d+(\.\d{1,2})?", text):
+        return None
+    try:
+        amount = Decimal(text)
+    except InvalidOperation:
+        return None
+    if amount < 0:
+        return None
+    if cents:
+        return "$" + f"{amount.quantize(Decimal('0.01')):,.2f}"
+    if amount == amount.to_integral():
+        return "$" + f"{int(amount):,}"
+    return "$" + f"{amount.quantize(Decimal('0.01')):,.2f}"
+
+
+def _normalize_days(value: str) -> str | None:
+    text = value.strip().lower()
+    if text.endswith("days"):
+        text = text[: -len("days")].strip()
+    if not re.fullmatch(r"\d{1,3}", text):
+        return None
+    number = int(text)
+    if number > 999:
+        return None
+    return str(number)
+
+
+def _normalize_caseload(value: str) -> str | None:
+    text = value.strip().replace("—", "-").replace("–", "-")
+    match = re.fullmatch(r"(\d{1,2})\s*-\s*(\d{1,2})", text)
+    if not match:
+        return None
+    return f"{int(match.group(1))}–{int(match.group(2))}"
+
+
+def _normalize_date(value: str) -> str | None:
+    text = value.strip()
+    for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).strftime("%m/%d/%Y")
+        except ValueError:
+            continue
+    match = re.fullmatch(r"(\d{1,2})/(\d{1,2})/(\d{4})", text)
+    if not match:
+        return None
+    try:
+        parsed = datetime(int(match.group(3)), int(match.group(1)), int(match.group(2)))
+    except ValueError:
+        return None
+    return parsed.strftime("%m/%d/%Y")
+
+
 def _require_real_date(label: str, value: str) -> None:
     """Clynotion does not accept TBD or ASAP. A real calendar date is required."""
     if not DATE_RX.match(value or ""):
-        _die(f"{label}={value!r} should be MM/DD/YYYY")
+        _die(f"{_label(label)} must be a real date.", label)
     try:
         datetime.strptime(value, "%m/%d/%Y")
     except ValueError:
-        _die(f"{label} is not a real date")
+        _die(f"{_label(label)} must be a real date.", label)
 
 
 def _runs(paragraph: etree._Element) -> list[etree._Element]:
