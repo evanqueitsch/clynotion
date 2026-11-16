@@ -63,11 +63,18 @@
     return document.getElementById("hire-form");
   }
 
+  function fieldNode(name) {
+    if (name === "candidate_credentials") return document.getElementById("hire-certs");
+    return document.getElementById("hire-" + name);
+  }
+
   function valueOf(name) {
+    const direct = fieldNode(name);
+    if (direct && "value" in direct) return String(direct.value || "").trim();
     const form = formEl();
     if (!form || !form.elements) return "";
     const el = form.elements.namedItem(name);
-    if (!el) return "";
+    if (!el || el.value == null) return "";
     return String(el.value || "").trim();
   }
 
@@ -105,7 +112,7 @@
     $("hire-type").value = offer ? offer.employment_type : "full-time";
     $("hire-client").checked = offer ? !!offer.direct_client_access : true;
     FIELDS.forEach(function (field) {
-      const node = $("hire-" + field[0]);
+      const node = fieldNode(field[0]);
       if (!node) return;
       if (offer) {
         if (field[0] === "personal_email") node.value = offer.personal_email || "";
@@ -262,9 +269,11 @@
       const row = document.createElement("label");
       row.textContent = field[1] + (REQUIRED[field[0]] ? " *" : "");
       const input = document.createElement("input");
-      input.id = "hire-" + field[0];
-      input.name = field[0];
+      input.id = field[0] === "candidate_credentials" ? "hire-certs" : "hire-" + field[0];
+      input.name = field[0] === "candidate_credentials" ? "letter_certs" : field[0];
       input.type = "text";
+      input.setAttribute("autocomplete", "off");
+      if (field[0] === "candidate_credentials") input.setAttribute("data-lpignore", "true");
       if (field[0] === "personal_email") input.setAttribute("inputmode", "email");
       input.autocomplete = "off";
       row.appendChild(input);
@@ -386,10 +395,13 @@
           post(offer.id, "/withdraw", { reason: reason }, "Withdrawn.", keep);
         });
       }
-      button("Delete", "ghost", function () {
+      button("Delete", "ghost", function (event) {
+        if (event && event.preventDefault) event.preventDefault();
         const typed = window.prompt("Type the candidate's name to delete this offer");
-        if (!typed) return;
-        post(offer.id, "/delete", { confirm: typed }, "Deleted.");
+        if (typed == null) return;
+        const confirmName = String(typed).trim();
+        if (!confirmName) return;
+        post(offer.id, "/delete", { confirm: confirmName }, "Deleted.");
       });
       if (offer.status === "sent" || offer.status === "viewed") {
         button("Mark accepted", "primary", function () {
@@ -420,7 +432,7 @@
       }
     }
     const wrap = document.getElementById("hire-resume-wrap");
-    if (wrap) wrap.hidden = !!editId;
+    if (wrap) wrap.hidden = false;
   }
 
   function clearResumeNotes() {
@@ -447,7 +459,7 @@
     const incoming = fields || {};
     ["candidate_full_name", "candidate_first_name", "personal_email", "candidate_credentials", "position_title"].forEach(function (name) {
       const value = String(incoming[name] || "").trim();
-      const input = document.getElementById("hire-" + name);
+      const input = document.getElementById("hire-" + name) || (name === "candidate_credentials" ? document.getElementById("hire-certs") : null);
       if (!value || !input || String(input.value || "").trim()) return;
       input.value = value;
       markFromResume(input);
@@ -474,7 +486,8 @@
       const hidden = document.getElementById("hire-resume-id");
       if (hidden) hidden.value = (data && data.resume_id) || "";
       applyResume(data && data.fields);
-      showStatus("", "ok");
+      if (data && data.warning) showStatus(data.warning, "error");
+      else showStatus("", "ok");
     } catch (error) {
       showStatus((error && error.message) || "That resume could not be read.", "error");
     }
@@ -527,9 +540,7 @@
   function markField(name) {
     clearFieldErrors();
     if (!name) return;
-    const form = formEl();
-    if (!form || !form.querySelector) return;
-    const el = form.querySelector('[name="' + String(name).replace(/"/g, "") + '"]');
+    const el = fieldNode(name) || (formEl() && formEl().querySelector('[name="' + String(name).replace(/"/g, "") + '"]'));
     if (!el || !el.classList) return;
     el.classList.add("field-error");
     try {
@@ -551,6 +562,11 @@
   }
 
   async function post(id, suffix, json, ok, keepEdit) {
+    if (suffix === "/delete") {
+      const confirmName = json && json.confirm != null ? String(json.confirm).trim() : "";
+      if (!confirmName) return;
+      json = { confirm: confirmName };
+    }
     try {
       await ui().api("/hiring/offers/" + id + suffix, { method: "POST", json: json });
       await window.clyHiring.open({ editId: keepEdit ? id : "", message: ok || "Saved." });

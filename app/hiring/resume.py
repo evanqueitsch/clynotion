@@ -76,13 +76,37 @@ def resume_mime(data: bytes, filename: str = "") -> str:
     return "text/plain"
 
 
+def resume_secret() -> str:
+    """GOOGLE_SA_JSON wins. GOOGLE_DRIVE_SA_JSON is the fallback so one key can read resumes."""
+    return (os.environ.get("GOOGLE_SA_JSON") or os.environ.get("GOOGLE_DRIVE_SA_JSON") or "").strip()
+
+
+def resume_configured() -> bool:
+    """True only when a service-account key and a Cloud project are present. No network."""
+    raw = resume_secret()
+    if not raw:
+        return False
+    try:
+        data = json.loads(raw) if raw.lstrip().startswith("{") else json.loads(
+            __import__("pathlib").Path(raw).read_text(encoding="utf-8")
+        )
+    except Exception:
+        return False
+    if not isinstance(data, dict) or not data.get("client_email") or not data.get("private_key"):
+        return False
+    project = (os.environ.get("GOOGLE_CLOUD_PROJECT") or str(data.get("project_id") or "")).strip()
+    return bool(project)
+
+
 def read_resume(data: bytes, filename: str = "") -> dict[str, str]:
+    mode = resume_mode()
+    if mode == "gemini" and not resume_configured():
+        raise ResumeReadError("Resume reading is not configured.")
     if len(data) > MAX_RESUME_BYTES:
         raise ResumeReadError("That resume is larger than 10 MB.")
     text = _text_from(data, filename)
     if not text.strip():
         raise ResumeReadError("That resume has no readable text.")
-    mode = resume_mode()
     if mode == "mock":
         proposed = _labeled_fields(text)
     elif mode == "gemini":
@@ -301,7 +325,7 @@ def _service_account() -> dict[str, Any]:
     import json
     from pathlib import Path
 
-    raw = (os.environ.get("GOOGLE_SA_JSON") or os.environ.get("GOOGLE_DRIVE_SA_JSON") or "").strip()
+    raw = resume_secret()
     if not raw:
         raise ResumeReadError("Resume reading is not configured.")
     try:
