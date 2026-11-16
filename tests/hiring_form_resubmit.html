@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html>
+<body>
+<p id="hiring-status"></p>
+<div id="hiring-root"></div>
+<script src="../app/static/hiring.js"></script>
+<script>
+(async function () {
+  const posts = [];
+  let withdrawn = false;
+  const offer = {
+    id: "off-1",
+    status: "draft",
+    display_name: "Test Candidate QA",
+    personal_email: "qa.candidate@example.com",
+    employment_type: "full-time",
+    direct_client_access: true,
+    response_deadline: "2026-12-16",
+    fields: {
+      candidate_full_name: "Test Candidate QA",
+      candidate_first_name: "Test",
+      personal_email: "qa.candidate@example.com",
+      hourly_rate: "$45.00",
+      caseload_range: "25-30",
+      qsehra_monthly_amount: "$250",
+      qsehra_wait_days: "60",
+      offer_date: "11/16/2026",
+      start_date: "01/05/2027",
+      response_deadline: "12/16/2026",
+      supervisor_title: "Director",
+      supervisor_name: "Letter Supervisor",
+      candidate_credentials: "",
+      position_title: "",
+      licensed_rate: ""
+    }
+  };
+  window.clynotion = {
+    show: function () {},
+    setStatus: function (el, msg, kind) {
+      el.textContent = msg || "";
+      el.dataset.kind = kind || "";
+    },
+    state: {},
+    api: async function (path, opts) {
+      opts = opts || {};
+      if (path === "/hiring/bootstrap") {
+        const visible = posts.some(function (item) { return item && item.personal_email; }) || withdrawn;
+        return {
+          settings: {
+            offer_response_days: 30,
+            offer_supervisor_title_default: "Director",
+            offer_supervisor_name_default: "Letter Supervisor"
+          },
+          offers: visible ? [Object.assign({}, offer, { status: withdrawn ? "withdrawn" : "draft" })] : [],
+          hires: [],
+          forms: []
+        };
+      }
+      if (path === "/hiring/offers" && opts.method === "POST") {
+        posts.push(opts.json || {});
+        if (!(opts.json && opts.json.personal_email)) throw new Error("A candidate email is required.");
+        return { id: "off-1", status: "draft" };
+      }
+      if (String(path).indexOf("/withdraw") !== -1) {
+        withdrawn = true;
+        return { id: "off-1", status: "withdrawn" };
+      }
+      throw new Error("unexpected " + path);
+    }
+  };
+  function fail(msg) { document.title = "FAIL " + msg; }
+  function status() { return document.getElementById("hiring-status").textContent; }
+  await window.clyHiring.open();
+  const emailLabel = document.querySelector("label");
+  if (!document.body.textContent.includes("Personal email *")) return fail("email not marked required");
+  document.getElementById("hire-candidate_full_name").value = "Test Candidate QA";
+  document.getElementById("hire-candidate_first_name").value = "Test";
+  document.getElementById("hire-hourly_rate").value = "$45.00";
+  document.getElementById("hire-caseload_range").value = "25-30";
+  document.getElementById("hire-qsehra_monthly_amount").value = "$250";
+  document.getElementById("hire-qsehra_wait_days").value = "60";
+  document.querySelector("#hire-form button[type=submit]").click();
+  await new Promise(function (resolve) { setTimeout(resolve, 20); });
+  if (status().indexOf("email") < 0) return fail("missing email error: " + status());
+  if (document.getElementById("hire-candidate_full_name").value !== "Test Candidate QA") return fail("form cleared after error");
+  document.getElementById("hire-personal_email").value = "qa.candidate@example.com";
+  document.querySelector("#hire-form button[type=submit]").click();
+  await new Promise(function (resolve) { setTimeout(resolve, 30); });
+  const sent = posts.filter(function (item) { return item.personal_email; })[0];
+  if (!sent || sent.personal_email !== "qa.candidate@example.com") return fail("email not read " + JSON.stringify(posts));
+  if (status() !== "Saved.") return fail("no saved message: " + status());
+  const edit = Array.from(document.querySelectorAll("button")).find(function (button) { return button.textContent === "Edit"; });
+  if (!edit) return fail("offer not listed after save");
+  edit.click();
+  window.prompt = function () { return "position filled"; };
+  const withdraw = Array.from(document.querySelectorAll("button")).find(function (button) { return button.textContent === "Withdraw"; });
+  withdraw.click();
+  await new Promise(function (resolve) { setTimeout(resolve, 30); });
+  if (document.getElementById("hire-candidate_full_name").value !== "Test Candidate QA") return fail("edit form blank after withdraw");
+  if (status() !== "Withdrawn.") return fail("withdraw status " + status());
+  document.title = "PASS";
+})().catch(function (error) {
+  document.title = "FAIL " + (error && error.message);
+});
+</script>
+</body>
+</html>
