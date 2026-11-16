@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from app.auth import User, issue_token
 from app.credentialing.store import credentialing_store
 from app.hiring.checklist import add_business_days, clearance_state, packet_due
-from app.hiring.engine import drive_prompt, hire_cell_status
+from app.hiring.engine import drive_job_pending, drive_prompt, hire_cell_status
 from app.hiring.personnel_drive import clear_personnel_drive_for_tests, set_personnel_drive_for_tests
 from app.hiring.resume import ground_fields
 from app.main import app
@@ -415,7 +415,34 @@ def test_clearance_badge_is_amber_before_the_due_date_and_red_after() -> None:
 
 def test_drive_prompt_hides_retry_while_working_and_after_trash() -> None:
     working = {"drive_status": "working", "drive_folder_id": "fld-1", "drive_folder_url": "https://drive.example/fld-1"}
-    assert drive_prompt(working, "Jordan Example") == ("Creating Drive folders…", False)
+    assert drive_prompt(working, "Jordan Example") == ("", False)
+    creating = {"drive_status": "working"}
+    assert drive_prompt(creating, "Jordan Example") == ("Creating Drive folders…", False)
+    settled = {
+        "id": "off-1",
+        "candidate_id": "can-1",
+        "drive_status": "connected",
+        "drive_folder_id": "fld-1",
+        "drive_folder_name": "Example, Jordan",
+        "drive_pdf_file_id": "file-1",
+        "drive_pdf_name": "Example_Jordan_offer-letter.pdf",
+        "pdf_in_onboarding": True,
+        "drive_signed_file_id": "file-2",
+        "resume_in_onboarding": True,
+    }
+    row = {
+        "candidates": {"can-1": {"display_name": "Jordan Example"}},
+        "resumes": {},
+        "hires": {"hire-1": {"offer_id": "off-1", "drive_subfolders": {
+            "01 Onboarding": "a",
+            "02 Payroll & Tax": "b",
+            "03 Credentialing": "c",
+            "04 Clearances": "d",
+        }}},
+        "acceptances": {},
+    }
+    assert drive_job_pending(row, settled, pdf=True, filing=True) is False
+    assert drive_job_pending(row, {**settled, "drive_folder_id": ""}, pdf=False, filing=False) is True
     trashed = {"drive_status": "trashed"}
     assert drive_prompt(trashed, "Jordan Example") == ("Folder trashed", False)
     pending = {
