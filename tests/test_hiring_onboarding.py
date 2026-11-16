@@ -10,7 +10,7 @@ from fastapi.testclient import TestClient
 from app.auth import User, issue_token
 from app.credentialing.store import credentialing_store
 from app.hiring.checklist import add_business_days, clearance_state, packet_due
-from app.hiring.engine import hire_cell_status
+from app.hiring.engine import drive_prompt, hire_cell_status
 from app.hiring.personnel_drive import clear_personnel_drive_for_tests, set_personnel_drive_for_tests
 from app.hiring.resume import ground_fields
 from app.main import app
@@ -413,6 +413,23 @@ def test_clearance_badge_is_amber_before_the_due_date_and_red_after() -> None:
     assert screening["warning"] is False
 
 
+def test_drive_prompt_hides_retry_while_working_and_after_trash() -> None:
+    working = {"drive_status": "working", "drive_folder_id": "fld-1", "drive_folder_url": "https://drive.example/fld-1"}
+    assert drive_prompt(working, "Jordan Example") == ("Creating Drive folders…", False)
+    trashed = {"drive_status": "trashed"}
+    assert drive_prompt(trashed, "Jordan Example") == ("Folder trashed", False)
+    pending = {
+        "drive_status": "connected",
+        "drive_folder_id": "fld-1",
+        "drive_pdf_file_id": "file-1",
+        "drive_pdf_name": "offer-letter.pdf",
+    }
+    assert drive_prompt(pending, "Jordan Example")[1] is True
+    ready = dict(pending)
+    ready["drive_pdf_name"] = "Example_Jordan_offer-letter.pdf"
+    assert drive_prompt(ready, "Jordan Example") == ("", False)
+
+
 def test_packet_due_is_the_later_of_the_start_date_and_three_business_days() -> None:
     monday = date(2026, 11, 16)
     assert packet_due(date(2027, 1, 5), monday, set()) == date(2027, 1, 5)
@@ -512,6 +529,10 @@ def test_delete_hire_requires_the_exact_name_and_only_removes_that_hire() -> Non
         assert drive.trashed
         assert any(file_id in drive.folders for file_id in drive.trashed)
         assert all(drive.files[file_id].get("trashed") for file_id in drive.trashed if file_id in drive.files)
-        assert client.get("/hiring/offers/" + offer_id, headers=_alice()).status_code == 200
+        left = client.get("/hiring/offers/" + offer_id, headers=_alice())
+        assert left.status_code == 200
+        assert left.json()["drive_status"] == "trashed"
+        assert left.json()["drive_note"] == "Folder trashed"
+        assert left.json()["drive_retry"] is False
     finally:
         clear_personnel_drive_for_tests()
