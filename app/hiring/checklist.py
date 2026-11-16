@@ -104,6 +104,16 @@ def clinician_title(title: str) -> bool:
     return "clinician" in (title or "").casefold()
 
 
+def clearance_state(*, direct: bool, status: str, due: date | None, today: date) -> dict[str, Any]:
+    """Red when a direct-client clearance is still open on or after its due date.
+
+    The amber badge stays while that item is open, including before the due date.
+    """
+    open_item = bool(direct) and status == "open"
+    late = bool(open_item and due is not None and today >= due)
+    return {"warning": late, "badge": "due before start" if open_item else ""}
+
+
 def build_items(
     *,
     hire_id: str,

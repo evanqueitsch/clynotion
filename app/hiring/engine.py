@@ -9,6 +9,7 @@ from __future__ import annotations
 import hashlib
 import hmac
 import json
+import logging
 import os
 import re
 import secrets
@@ -26,6 +27,7 @@ from app.hiring.checklist import (
     PAYROLL_KEYS,
     STATUS_ONLY,
     build_items,
+    clearance_state,
     clinician_title,
     closed_set,
     add_business_days,
@@ -44,6 +46,8 @@ from app.hiring.fill import (
 )
 from app.hiring.forms_catalog import FORMS, form_path
 from app.hiring.mailer import code_body, deliver, offer_body, public_queue_row, reminder_body
+
+logger = logging.getLogger("app.hiring.engine")
 from app.hiring.pdf import PdfRenderError, append_certificate, render_offer_pdf
 from app.hiring.storage import StorageKey, file_store
 
@@ -74,6 +78,17 @@ class HiringError(Exception):
         self.status = status
         self.detail = detail
         self.field = field
+
+
+def _drive_async() -> bool:
+    flag = (os.environ.get("ATTUNE_HIRING_DRIVE_ASYNC") or "").strip().lower()
+    if flag in {"0", "false", "no"}:
+        return False
+    if flag in {"1", "true", "yes"}:
+        return True
+    from app.config import is_real_mode
+
+    return is_real_mode()
 
 
 def _now() -> datetime:
@@ -435,9 +450,8 @@ class HiringEngine:
             offer = self._write_version(row, None, body, actor)
             if resume_id:
                 self._link_resume(row, offer, resume_id)
-            self._sync_personnel(row, offer, actor, pdf=False)
             self._history(row, "offer", offer["id"], "drafted", actor, "Offer drafted")
-            self._save(payload)
+            self._queue_drive(payload, practice_id, offer["id"], actor, pdf=False)
             return self._offer_public(row, offer)
 
     def update_offer(self, practice_id: str, offer_id: str, body: dict[str, Any], actor: str) -> dict[str, Any]:
@@ -453,16 +467,14 @@ class HiringEngine:
             if offer["status"] == "draft":
                 self._write_version(row, offer, body, actor, replace=True)
                 self._link_resume(row, offer, str(body.get("resume_id") or "").strip())
-                self._sync_personnel(row, offer, actor, pdf=False)
                 self._history(row, "offer", offer_id, "revised", actor, "Draft updated")
             else:
                 self._void_tokens(row, "offer", offer_id, "new_version")
                 offer["status"] = "draft"
                 self._write_version(row, offer, body, actor, replace=False)
                 self._link_resume(row, offer, str(body.get("resume_id") or "").strip())
-                self._sync_personnel(row, offer, actor, pdf=False)
                 self._history(row, "offer", offer_id, "versioned", actor, "New version started")
-            self._save(payload)
+            self._queue_drive(payload, practice_id, offer_id, actor, pdf=False)
             return self._offer_public(row, offer)
 
     def _write_version(
@@ -704,8 +716,7 @@ class HiringEngine:
             offer["sent_at"] = _iso()
             offer["sent_channel"] = channel
             offer["reminder_sent"] = False
-            self._sync_personnel(row, offer, actor, pdf=True)
-            self._save(payload)
+            self._queue_drive(payload, practice_id, offer_id, actor, pdf=True)
             return self._offer_public(row, offer)
 
     def _mint_token(self, row: dict[str, Any], subject: str, subject_id: str, expires_at: str) -> tuple[str, dict[str, Any]]:
@@ -803,7 +814,7 @@ class HiringEngine:
                 practice_id=practice_id,
                 accepted_on=accepted_on,
             )
-            self._save(payload)
+            self._queue_drive(payload, practice_id, offer["id"], actor, pdf=True, filing=True)
             return {"offer": self._offer_public(row, offer), "hire": self._hire_public(row, hire)}
 
     def _accept(
@@ -882,7 +893,10 @@ class HiringEngine:
         row["acceptances"][acceptance["id"]] = acceptance
         self._history(row, "offer", offer["id"], "accepted", actor, "Offer accepted", ip=ip)
         self._history(row, "hire", hire["id"], "created", "clynotion", "Onboarding record created")
-        self._file_accepted_drive(row, offer, hire, actor, upload)
+        i9_ready = bool((os.environ.get("DRIVE_I9_SHARED_DRIVE_ID") or "").strip())
+        hire["i9_drive"] = "ready" if i9_ready else "pending"
+        if not i9_ready:
+            self._history(row, "hire", hire["id"], "i9_pending", "clynotion", "I-9 drive is not configured")
         _ = ref
         return hire
 
@@ -1114,8 +1128,15 @@ class HiringEngine:
             offer = row["offers"].get(offer_id)
             if not offer:
                 raise HiringError(404, "Offer not found.")
-            self._sync_personnel(row, offer, actor, pdf=offer.get("status") in {"sent", "viewed"}, audit_unavailable=True)
-            self._save(payload)
+            filing = offer.get("status") == "accepted"
+            self._queue_drive(
+                payload,
+                practice_id,
+                offer_id,
+                actor,
+                pdf=offer.get("status") in {"sent", "viewed", "accepted"},
+                filing=filing,
+            )
             return self._offer_public(row, offer)
 
     def _sync_personnel(
@@ -1186,11 +1207,21 @@ class HiringEngine:
         self._history(row, "offer", offer["id"], "drive_resume", actor, "Resume copied to the personnel folder")
 
     def _copy_pdf_to_drive(self, row: dict[str, Any], offer: dict[str, Any], client: Any, actor: str) -> None:
-        if offer.get("drive_pdf_file_id"):
-            return
+        from app.hiring.personnel_drive import offer_letter_filename
+
         folder_id = str(offer.get("drive_folder_id") or "")
+        if not folder_id:
+            return
+        candidate = row["candidates"].get(offer.get("candidate_id") or "") or {}
+        filename = offer_letter_filename(str(candidate.get("display_name") or ""))
+        file_id = str(offer.get("drive_pdf_file_id") or "")
+        if file_id:
+            if offer.get("drive_pdf_name") != filename and hasattr(client, "rename"):
+                client.rename(file_id, filename)
+            offer["drive_pdf_name"] = filename
+            return
         version = row["offer_versions"].get(offer.get("current_version_id") or "")
-        if not folder_id or not version:
+        if not version:
             return
         data = file_store().get(
             _ref(
@@ -1199,8 +1230,70 @@ class HiringEngine:
                 str(version.get("pdf_sha256") or ""),
             )
         )
-        offer["drive_pdf_file_id"] = client.upload(folder_id, "offer-letter.pdf", data, "application/pdf")
+        offer["drive_pdf_file_id"] = client.upload(folder_id, filename, data, "application/pdf")
+        offer["drive_pdf_name"] = filename
         self._history(row, "offer", offer["id"], "drive_pdf", actor, "Offer PDF copied to the personnel folder")
+
+    def _queue_drive(
+        self,
+        payload: dict[str, Any],
+        practice_id: str,
+        offer_id: str,
+        actor: str,
+        *,
+        pdf: bool,
+        filing: bool = False,
+    ) -> None:
+        from app.hiring.personnel_drive import personnel_client
+
+        row = self._practice(payload, practice_id)
+        offer = row["offers"].get(offer_id)
+        if offer is None:
+            self._save(payload)
+            return
+        if _drive_async() and personnel_client() is not None:
+            offer["drive_status"] = "working"
+            self._save(payload)
+            threading.Thread(
+                target=self._drive_job,
+                args=(practice_id, offer_id, actor, pdf, filing),
+                daemon=True,
+                name="clynotion-drive",
+            ).start()
+            return
+        self._apply_drive(row, offer, actor, pdf=pdf, filing=filing)
+        self._save(payload)
+
+    def _drive_job(self, practice_id: str, offer_id: str, actor: str, pdf: bool, filing: bool) -> None:
+        try:
+            with _lock:
+                payload = self._read()
+                row = self._practice(payload, practice_id)
+                offer = row["offers"].get(offer_id)
+                if not offer:
+                    return
+                self._apply_drive(row, offer, actor, pdf=pdf, filing=filing)
+                self._save(payload)
+        except Exception as exc:
+            logger.warning("drive_job_failed exception=%s", type(exc).__name__)
+
+    def _apply_drive(self, row: dict[str, Any], offer: dict[str, Any], actor: str, *, pdf: bool, filing: bool) -> None:
+        hire = next((item for item in row["hires"].values() if item.get("offer_id") == offer["id"]), None)
+        if filing and hire is not None:
+            self._file_accepted_drive(row, offer, hire, actor, self._signed_bytes(row, offer))
+            return
+        self._sync_personnel(row, offer, actor, pdf=pdf)
+
+    def _signed_bytes(self, row: dict[str, Any], offer: dict[str, Any]) -> bytes | None:
+        acceptance = next((item for item in row["acceptances"].values() if item.get("offer_id") == offer["id"]), None)
+        if not acceptance:
+            return None
+        ref = (row.get("document_refs") or {}).get(acceptance.get("signed_upload_ref") or "")
+        if not ref:
+            return None
+        return file_store().get(
+            _ref(str(ref.get("object_key") or ""), str(ref.get("backend") or "local"), str(ref.get("sha256") or ""))
+        )
 
     def _file_accepted_drive(
         self,
@@ -1210,12 +1303,8 @@ class HiringEngine:
         actor: str,
         signed: bytes | None,
     ) -> None:
-        from app.hiring.personnel_drive import ONBOARDING_FOLDERS, folder_name, personnel_client, signed_offer_filename
+        from app.hiring.personnel_drive import ONBOARDING_FOLDERS, folder_name, personnel_client
 
-        i9_ready = bool((os.environ.get("DRIVE_I9_SHARED_DRIVE_ID") or "").strip())
-        hire["i9_drive"] = "ready" if i9_ready else "pending"
-        if not i9_ready:
-            self._history(row, "hire", hire["id"], "i9_pending", "clynotion", "I-9 drive is not configured")
         client = personnel_client()
         if client is None:
             offer["drive_status"] = "not_connected"
@@ -1272,11 +1361,15 @@ class HiringEngine:
                 offer["drive_resume_file_id"] = client.upload(onboarding, filename, data, mime)
             offer["drive_resume_name"] = filename
             offer["resume_in_onboarding"] = True
+        from app.hiring.personnel_drive import offer_letter_filename
+
+        letter_name = offer_letter_filename(name)
         pdf_id = str(offer.get("drive_pdf_file_id") or "")
-        if not offer.get("pdf_in_onboarding"):
+        if not offer.get("pdf_in_onboarding") or offer.get("drive_pdf_name") != letter_name:
             if pdf_id and hasattr(client, "move"):
-                client.move(pdf_id, onboarding)
+                client.move(pdf_id, onboarding, letter_name)
                 offer["pdf_in_onboarding"] = True
+                offer["drive_pdf_name"] = letter_name
             elif not pdf_id:
                 version = row["offer_versions"].get(offer.get("current_version_id") or "")
                 if version:
@@ -1287,8 +1380,9 @@ class HiringEngine:
                             str(version.get("pdf_sha256") or ""),
                         )
                     )
-                    offer["drive_pdf_file_id"] = client.upload(onboarding, "offer-letter.pdf", data, "application/pdf")
+                    offer["drive_pdf_file_id"] = client.upload(onboarding, letter_name, data, "application/pdf")
                     offer["pdf_in_onboarding"] = True
+                    offer["drive_pdf_name"] = letter_name
         if signed and not offer.get("drive_signed_file_id"):
             offer["drive_signed_file_id"] = client.upload(
                 onboarding, signed_offer_filename(name), signed, "application/pdf"
@@ -1391,10 +1485,16 @@ class HiringEngine:
                 closed = closed_set(row["settings"].get("business_closed_days") or [])
                 red_on = add_business_days(parse_iso(first), 2, closed)
                 warning = _today() >= red_on
-        if item.get("template_key") == "clearances" and hire.get("direct_client_access") and item.get("status") == "open":
-            due = str(item.get("due_date") or hire.get("start_date") or "")
-            if due:
-                warning = _today() >= parse_iso(due)
+        flags = {"warning": False, "badge": ""}
+        if item.get("template_key") == "clearances":
+            due_text = str(item.get("due_date") or "")
+            flags = clearance_state(
+                direct=bool(hire.get("direct_client_access")),
+                status=str(item.get("status") or ""),
+                due=parse_iso(due_text) if due_text else None,
+                today=_today(),
+            )
+            warning = flags["warning"]
         return {
             "id": item["id"],
             "template_key": item["template_key"],
@@ -1409,7 +1509,8 @@ class HiringEngine:
             "note": item.get("note") or "",
             "dates": dict(item.get("dates") or {}),
             "where_original_lives": item.get("where_original_lives") or "",
-            "warning": warning,
+            "warning": warning or flags["warning"],
+            "badge": flags["badge"],
         }
 
     def set_item(
@@ -1600,6 +1701,63 @@ class HiringEngine:
             self._save(payload)
             return self._hire_public(row, hire)
 
+    def delete_hire(self, practice_id: str, hire_id: str, confirm: str, actor: str) -> None:
+        """Remove one hire after the exact name is typed. Other people stay."""
+        with _lock:
+            payload = self._read()
+            row = self._practice(payload, practice_id)
+            hire = row["hires"].get(hire_id)
+            if not hire:
+                raise HiringError(404, "Hire not found.")
+            candidate = row["candidates"].get(hire.get("candidate_id") or "") or {}
+            offer = row["offers"].get(hire.get("offer_id") or "") or {}
+            version = row["offer_versions"].get(offer.get("current_version_id") or "") or {}
+            legal = str((version.get("field_values") or {}).get("candidate_full_name") or "").strip()
+            expected = str(candidate.get("display_name") or "").strip()
+            confirm_name = str(confirm or "").strip()
+            if not confirm_name or confirm_name not in {name for name in (expected, legal) if name}:
+                raise HiringError(400, "Type the candidate's name to confirm.")
+            drive_ids = [str(item) for item in (hire.get("drive_subfolders") or {}).values() if item]
+            signed_id = str(offer.get("drive_signed_file_id") or "")
+            if signed_id:
+                drive_ids.append(signed_id)
+            self._trash_drive_ids(drive_ids)
+            for ref_id, ref in list((row.get("document_refs") or {}).items()):
+                if ref.get("hire_id") != hire_id:
+                    continue
+                if str(ref.get("backend") or "local") == "local":
+                    _delete_stored(file_store(), str(ref.get("object_key") or ""))
+                row["document_refs"].pop(ref_id, None)
+            for item_id, item in list(row["checklist_items"].items()):
+                if item.get("hire_id") == hire_id:
+                    row["checklist_items"].pop(item_id, None)
+            self._void_tokens(row, "hire", hire_id, "deleted")
+            row["hires"].pop(hire_id, None)
+            from app.credentialing.store import credentialing_store
+            from app.employees.store import employees_store
+            from app.platform.due import due_engine
+
+            credentialing_store.remove_created_by_hire(practice_id, hire_id)
+            employees_store.remove_created_by_hire(practice_id, hire_id)
+            due_engine.complete(practice_id=practice_id, source="hiring-payroll", source_ref=hire_id)
+            due_engine.complete(practice_id=practice_id, source="hiring-payroll", source_ref=hire_id + ":packet")
+            self._history(row, "hire", hire_id, "deleted", actor, "Hire deleted")
+            self._save(payload)
+
+    def _trash_drive_ids(self, file_ids: list[str]) -> None:
+        from app.hiring.personnel_drive import personnel_client
+
+        client = personnel_client()
+        if client is None or not hasattr(client, "trash"):
+            return
+        for file_id in file_ids:
+            if not file_id:
+                continue
+            try:
+                client.trash(file_id)
+            except Exception as exc:
+                logger.warning("drive_trash_failed exception=%s", type(exc).__name__)
+
     def _handoff(self, practice_id: str, hire: dict[str, Any], candidate: dict[str, Any], email: str, actor: str) -> None:
         from app.credentialing.store import credentialing_store, license_conflict
         from app.employees.store import employees_store
@@ -1611,6 +1769,7 @@ class HiringEngine:
             if subject.get("name", "").strip().casefold() == name.casefold():
                 existing = subject
                 break
+        created_keys: list[str] = []
         if existing:
             subject_id = existing["id"]
         else:
@@ -1635,8 +1794,11 @@ class HiringEngine:
                         {"subject_id": subject_id, "payer_id": payer["id"], "status": status, "note": ""},
                         actor=actor,
                     )
+                    created_keys.append(f"{subject_id}|{payer['id']}")
                 except Exception:
                     continue
+            credentialing_store.mark_created_by_hire(practice_id, subject_id, hire["id"], created_keys)
+        employee_existed = employees_store.has_record(practice_id, email)
         employees_store.save_contact(
             practice_id,
             email,
@@ -1644,6 +1806,12 @@ class HiringEngine:
             actor,
         )
         employees_store.set_link(practice_id, email, subject_id, actor)
+        if not employee_existed:
+            employees_store.mark_created_by_hire(practice_id, email, hire["id"])
+        hire["activation_created"] = {
+            "subject_id": "" if existing else subject_id,
+            "employee_email": "" if employee_existed else email,
+        }
         due_engine.upsert(
             practice_id=practice_id,
             domain="books",
@@ -2002,7 +2170,7 @@ class HiringEngine:
             )
             session["subject"] = "hire"
             session["subject_id"] = hire["id"]
-            self._save(payload)
+            self._queue_drive(payload, practice_id, offer["id"], "candidate", pdf=True, filing=True)
             return {"ok": True, "hire_id": hire["id"]}
 
     def portal_decline(self, secret: str, reason: str, note: str, ip: str) -> None:

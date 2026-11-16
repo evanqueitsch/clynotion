@@ -333,6 +333,31 @@ class EmployeesStore:
         self._save(payload)
         return self.qualification_types(practice_id)
 
+    def has_record(self, practice_id: str, email: str) -> bool:
+        _, row = self._load(practice_id)
+        key = (email or "").strip().lower()
+        return isinstance((row.get("records") or {}).get(key), dict)
+
+    def mark_created_by_hire(self, practice_id: str, email: str, hire_id: str) -> None:
+        payload, row = self._load(practice_id)
+        key = (email or "").strip().lower()
+        current = (row.get("records") or {}).get(key)
+        if isinstance(current, dict) and not current.get("created_by_hire"):
+            current["created_by_hire"] = hire_id
+            self._save(payload)
+
+    def remove_created_by_hire(self, practice_id: str, hire_id: str) -> None:
+        """Drop an employee record only when this hire created it."""
+        payload, row = self._load(practice_id)
+        records = row.get("records") or {}
+        changed = False
+        for key, current in list(records.items()):
+            if isinstance(current, dict) and current.get("created_by_hire") == hire_id:
+                records.pop(key, None)
+                changed = True
+        if changed:
+            self._save(payload)
+
     def _record(self, row: dict[str, Any], email: str) -> dict[str, Any]:
         key = (email or "").strip().lower()
         records = row.setdefault("records", {})

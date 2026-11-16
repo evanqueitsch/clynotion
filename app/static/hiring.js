@@ -51,12 +51,50 @@
     response_deadline: true,
   };
 
+  function showBusy(msg) {
+    const el = document.getElementById("hiring-status");
+    const api = ui();
+    if (!el || !api || !api.setStatus) return;
+    api.setStatus(el, msg, "ok");
+    el.classList.add("busy");
+  }
+
   function showStatus(msg, kind) {
     const el = document.getElementById("hiring-status");
     const api = ui();
     if (!el || !api || !api.setStatus) return;
     const text = msg || (kind === "error" ? "Could not save." : "");
     api.setStatus(el, text, text ? (kind || "error") : "");
+    el.classList.remove("busy");
+  }
+
+  function sleep(ms) {
+    return new Promise(function (resolve) {
+      setTimeout(resolve, ms);
+    });
+  }
+
+  async function watchDrive(offerId, editId) {
+    showBusy("Creating Drive folders…");
+    for (let i = 0; i < 40; i += 1) {
+      await sleep(1500);
+      try {
+        const offer = await ui().api("/hiring/offers/" + offerId);
+        if (!offer || offer.drive_status !== "working") {
+          const ready = offer && offer.drive_status === "connected";
+          await window.clyHiring.open({
+            editId: editId,
+            offer: editId ? offer : undefined,
+            message: ready ? "Drive folders ready." : "Saved.",
+          });
+          return;
+        }
+      } catch (error) {
+        showStatus((error && error.message) || "Drive folders are still updating.", "error");
+        return;
+      }
+    }
+    showStatus("Drive folders are still updating.", "ok");
   }
 
   function formEl() {
@@ -137,6 +175,7 @@
     ["qsehra_monthly_amount", "qsehra_wait_days"].forEach(function (name) {
       const node = $("hire-" + name);
       if (!node) return;
+      if (node.parentElement) node.parentElement.hidden = part;
       node.disabled = part;
       if (part) node.value = "";
     });
@@ -178,7 +217,6 @@
 
   function render(data, options) {
     const opts = typeof options === "string" ? { editId: options } : (options || {});
-    const editId = opts.editId || "";
     const root = $("hiring-root");
     if (!root) return;
     releaseRoot(root);
@@ -295,6 +333,8 @@
     clear.className = "ghost";
     clear.textContent = "New offer";
     clear.onclick = function () {
+      keptEditId = "";
+      keptOffer = null;
       editing.value = "";
       const kept = document.getElementById("hire-resume-id");
       if (kept) kept.value = "";
@@ -308,7 +348,9 @@
     actions.appendChild(clear);
     form.appendChild(actions);
     root.appendChild(form);
-    fillForm(null);
+    const hasEdit = Object.prototype.hasOwnProperty.call(opts, "editId");
+    const editId = hasEdit ? (opts.editId || "") : keptEditId;
+    if (opts.offer && opts.offer.id) keptOffer = opts.offer;
 
     const list = document.createElement("div");
     list.className = "due-list";
@@ -335,7 +377,7 @@
       left.appendChild(title);
       left.appendChild(meta);
       const buttons = document.createElement("div");
-      buttons.className = "row";
+      buttons.className = "row hire-actions";
       function button(text, className, action) {
         const node = document.createElement("button");
         node.type = "button";
@@ -405,10 +447,10 @@
       });
       if (offer.status === "sent" || offer.status === "viewed") {
         button("Record acceptance", "primary", function () {
-          showDecision(offer, "accept");
+          showDecision(offer, "accept", row);
         });
         button("Record decline", "ghost", function () {
-          showDecision(offer, "decline");
+          showDecision(offer, "decline", row);
         });
       }
       row.appendChild(left);
@@ -424,24 +466,32 @@
     root.appendChild(list);
     renderLibrary(root, data.forms || []);
     renderHires(root, data.hires || []);
-    if (editId) {
-      const match = offers.filter(function (offer) { return offer.id === editId; })[0];
-      if (match) {
-        const editingNow = document.getElementById("hire-editing");
-        if (editingNow) editingNow.value = match.id;
-        fillForm(match);
-      }
+    function usable(offer) {
+      return !!(offer && offer.id === editId && offer.fields);
+    }
+    const listed = offers.filter(function (offer) { return offer.id === editId; })[0];
+    const match = (usable(opts.offer) ? opts.offer : null) || listed || (usable(keptOffer) ? keptOffer : null);
+    if (editId && match) {
+      keptEditId = editId;
+      keptOffer = match;
+      const editingNow = document.getElementById("hire-editing");
+      if (editingNow) editingNow.value = match.id;
+      fillForm(match);
+    } else {
+      keptEditId = "";
+      keptOffer = null;
+      fillForm(null);
     }
     const wrap = document.getElementById("hire-resume-wrap");
     if (wrap) wrap.hidden = false;
   }
 
-  function showDecision(offer, kind) {
+  function showDecision(offer, kind, anchor) {
     const existing = document.getElementById("hire-decision");
     if (existing) existing.remove();
     const box = document.createElement("form");
     box.id = "hire-decision";
-    box.className = "due-row";
+    box.className = "hire-decision";
     box.addEventListener("submit", function (event) {
       event.preventDefault();
       if (kind === "accept") recordAcceptance(offer.id, box);
@@ -449,7 +499,8 @@
     });
     const title = document.createElement("div");
     title.className = "due-title";
-    title.textContent = kind === "accept" ? "Record acceptance" : "Record decline";
+    const who = offer.display_name || "this candidate";
+    title.textContent = (kind === "accept" ? "Record acceptance" : "Record decline") + " for " + who;
     box.appendChild(title);
     if (kind === "accept") {
       const fileLabel = document.createElement("label");
@@ -493,8 +544,7 @@
     };
     box.appendChild(confirm);
     box.appendChild(cancel);
-    const list = document.querySelector("#hiring-root .due-list");
-    if (list) list.appendChild(box);
+    if (anchor && anchor.insertAdjacentElement) anchor.insertAdjacentElement("afterend", box);
   }
 
   async function recordAcceptance(id, box) {
@@ -508,10 +558,12 @@
     const body = new FormData();
     body.append("upload", chosen, chosen.name || "signed.pdf");
     body.append("accepted_on", (date && date.value) || "");
-    showStatus("Saving…", "ok");
+    showBusy("Creating Drive folders…");
     try {
-      await ui().api("/hiring/offers/" + id + "/accept-paper", { method: "POST", body: body });
-      await window.clyHiring.open({ message: "Acceptance recorded." });
+      const saved = await ui().api("/hiring/offers/" + id + "/accept-paper", { method: "POST", body: body });
+      const offer = saved && saved.offer;
+      await window.clyHiring.open({ editId: "", message: "Acceptance recorded." });
+      if (offer && offer.drive_status === "working") await watchDrive(offer.id, "");
     } catch (error) {
       showStatus((error && error.message) || "Could not save.", "error");
     }
@@ -539,7 +591,7 @@
       const link = document.createElement("button");
       link.type = "button";
       link.className = "ghost";
-      link.textContent = form.title || form.form_key;
+      link.textContent = form.form_key === "h4c_welcome_template" ? "Download welcome letter (.docx)" : (form.title || form.form_key);
       link.onclick = function () {
         downloadForm(form.form_key);
       };
@@ -568,7 +620,7 @@
     }
     hires.forEach(function (hire) {
       const card = document.createElement("article");
-      card.className = "due-row";
+      card.className = "hire-card";
       const title = document.createElement("div");
       title.className = "due-title";
       title.textContent = (hire.display_name || "Hire") + " — " + (hire.status || "");
@@ -601,25 +653,25 @@
       card.appendChild(copy);
       (hire.items || []).forEach(function (item) {
         const row = document.createElement("div");
-        row.className = "due-row";
-        if (item.warning) row.style.color = "#8b2e2e";
+        row.className = "hire-item" + (item.warning ? " late" : "");
         const label = document.createElement("div");
-        label.textContent =
-          item.title +
-          " — " +
-          (item.owner_role || "") +
-          " — due " +
-          (item.due_date || "—") +
-          " — " +
-          item.status +
-          (item.done_by ? " — " + item.done_by : "") +
-          (item.done_at ? " — " + String(item.done_at).slice(0, 10) : "");
+        label.className = "hire-item-text";
+        const bits = [
+          item.title,
+          item.owner_role || "",
+          "due " + (item.due_date || "—"),
+          item.status,
+        ];
+        if (item.done_by) bits.push(item.done_by);
+        if (item.done_at) bits.push(String(item.done_at).slice(0, 10));
+        if (item.note) bits.push(item.note);
+        label.textContent = bits.filter(Boolean).join(" — ");
         row.appendChild(label);
-        if (item.note) {
-          const noted = document.createElement("div");
-          noted.className = "meta";
-          noted.textContent = item.note;
-          row.appendChild(noted);
+        if (item.badge) {
+          const badge = document.createElement("span");
+          badge.className = "badge-due";
+          badge.textContent = item.badge;
+          row.appendChild(badge);
         }
         if (item.kind !== "auto") {
           const note = document.createElement("input");
@@ -686,6 +738,26 @@
         };
         card.appendChild(activate);
       }
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.className = "ghost";
+      remove.textContent = "Delete hire";
+      remove.onclick = function (event) {
+        if (event && event.preventDefault) event.preventDefault();
+        const typed = window.prompt("Type the candidate's name to delete this hire");
+        if (typed == null) return;
+        const confirmName = String(typed).trim();
+        if (!confirmName) return;
+        ui()
+          .api("/hiring/hires/" + hire.id + "/delete", { method: "POST", json: { confirm: confirmName } })
+          .then(function () {
+            return window.clyHiring.open({ message: "Hire deleted." });
+          })
+          .catch(function (error) {
+            showStatus((error && error.message) || "Could not delete.", "error");
+          });
+      };
+      card.appendChild(remove);
       box.appendChild(card);
     });
     root.appendChild(box);
@@ -774,6 +846,8 @@
   }
 
   let saving = false;
+  let keptEditId = "";
+  let keptOffer = null;
 
   async function saveOffer() {
     if (saving) return;
@@ -781,7 +855,7 @@
     const saveButton = formEl() && formEl().querySelector("button[type=submit]");
     if (saveButton) saveButton.disabled = true;
     clearFieldErrors();
-    showStatus("Saving…", "ok");
+    showBusy("Saving…");
     try {
       let body;
       try {
@@ -801,6 +875,7 @@
       }
       const offerId = (saved && saved.id) || editingId;
       const opened = await window.clyHiring.open({ message: "Saved.", editId: offerId, offer: saved });
+      if (saved && saved.drive_status === "working") await watchDrive(offerId, offerId);
       if (!opened) {
         const editingNow = document.getElementById("hire-editing");
         if (editingNow && offerId) editingNow.value = offerId;
