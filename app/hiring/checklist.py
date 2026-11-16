@@ -49,6 +49,7 @@ ITEMS: tuple[dict[str, Any], ...] = (
 
 PAYROLL_KEYS = frozenset({"payroll_w4_dd", "pa_new_hire_report"})
 I9_KEYS = frozenset({"i9_section1", "i9_section2", "i9_scan_uploaded"})
+STATUS_ONLY = frozenset(spec["key"] for spec in ITEMS if spec["kind"] in {"status", "payroll", "auto"})
 BLOCKED_DONE = {
     "agreements_signed": "Those agreement files are not on file yet, so this item cannot be marked done.",
 }
@@ -156,6 +157,7 @@ def build_items(
                 "done_by": "clynotion" if status == "done" else "",
                 "dates": {},
                 "where_original_lives": "",
+                "note": "",
                 "document_ref_ids": [],
                 "form_id": "",
             }

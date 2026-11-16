@@ -404,12 +404,11 @@
         post(offer.id, "/delete", { confirm: confirmName }, "Deleted.");
       });
       if (offer.status === "sent" || offer.status === "viewed") {
-        button("Mark accepted", "primary", function () {
-          const typed = (offer.fields || {}).candidate_full_name || offer.display_name;
-          post(offer.id, "/accept", { typed_name: typed }, "Marked accepted.");
+        button("Record acceptance", "primary", function () {
+          showDecision(offer, "accept");
         });
-        button("Mark declined", "ghost", function () {
-          post(offer.id, "/decline", { reason: "other", note: "" }, "Marked declined.");
+        button("Record decline", "ghost", function () {
+          showDecision(offer, "decline");
         });
       }
       row.appendChild(left);
@@ -423,6 +422,8 @@
       list.appendChild(empty);
     }
     root.appendChild(list);
+    renderLibrary(root, data.forms || []);
+    renderHires(root, data.hires || []);
     if (editId) {
       const match = offers.filter(function (offer) { return offer.id === editId; })[0];
       if (match) {
@@ -433,6 +434,285 @@
     }
     const wrap = document.getElementById("hire-resume-wrap");
     if (wrap) wrap.hidden = false;
+  }
+
+  function showDecision(offer, kind) {
+    const existing = document.getElementById("hire-decision");
+    if (existing) existing.remove();
+    const box = document.createElement("form");
+    box.id = "hire-decision";
+    box.className = "due-row";
+    box.addEventListener("submit", function (event) {
+      event.preventDefault();
+      if (kind === "accept") recordAcceptance(offer.id, box);
+      else recordDecline(offer.id, box);
+    });
+    const title = document.createElement("div");
+    title.className = "due-title";
+    title.textContent = kind === "accept" ? "Record acceptance" : "Record decline";
+    box.appendChild(title);
+    if (kind === "accept") {
+      const fileLabel = document.createElement("label");
+      fileLabel.textContent = "Signed offer PDF";
+      const file = document.createElement("input");
+      file.type = "file";
+      file.name = "upload";
+      file.accept = "application/pdf,.pdf";
+      file.required = true;
+      fileLabel.appendChild(file);
+      const dateLabel = document.createElement("label");
+      dateLabel.textContent = "Acceptance date";
+      const date = document.createElement("input");
+      date.type = "text";
+      date.name = "accepted_on";
+      date.placeholder = "MM/DD/YYYY";
+      date.value = todayMDY();
+      date.required = true;
+      dateLabel.appendChild(date);
+      box.appendChild(fileLabel);
+      box.appendChild(dateLabel);
+    } else {
+      const reasonLabel = document.createElement("label");
+      reasonLabel.textContent = "Reason (optional)";
+      const reason = document.createElement("input");
+      reason.type = "text";
+      reason.name = "reason";
+      reasonLabel.appendChild(reason);
+      box.appendChild(reasonLabel);
+    }
+    const confirm = document.createElement("button");
+    confirm.type = "submit";
+    confirm.className = "primary";
+    confirm.textContent = "Confirm";
+    const cancel = document.createElement("button");
+    cancel.type = "button";
+    cancel.className = "ghost";
+    cancel.textContent = "Cancel";
+    cancel.onclick = function () {
+      box.remove();
+    };
+    box.appendChild(confirm);
+    box.appendChild(cancel);
+    const list = document.querySelector("#hiring-root .due-list");
+    if (list) list.appendChild(box);
+  }
+
+  async function recordAcceptance(id, box) {
+    const file = box.querySelector("input[type=file]");
+    const date = box.querySelector("input[name=accepted_on]");
+    const chosen = file && file.files && file.files[0];
+    if (!chosen) {
+      showStatus("Upload the signed offer PDF.", "error");
+      return;
+    }
+    const body = new FormData();
+    body.append("upload", chosen, chosen.name || "signed.pdf");
+    body.append("accepted_on", (date && date.value) || "");
+    showStatus("Saving…", "ok");
+    try {
+      await ui().api("/hiring/offers/" + id + "/accept-paper", { method: "POST", body: body });
+      await window.clyHiring.open({ message: "Acceptance recorded." });
+    } catch (error) {
+      showStatus((error && error.message) || "Could not save.", "error");
+    }
+  }
+
+  async function recordDecline(id, box) {
+    const reason = box.querySelector("input[name=reason]");
+    const text = reason ? String(reason.value || "").trim() : "";
+    const mapped = text ? "other" : "";
+    await post(id, "/decline", { reason: mapped, note: text }, "Decline recorded.");
+  }
+
+  function renderLibrary(root, forms) {
+    const box = document.createElement("section");
+    box.style.marginTop = "1.5rem";
+    const heading = document.createElement("h3");
+    heading.textContent = "Forms";
+    box.appendChild(heading);
+    const note = document.createElement("p");
+    note.className = "meta";
+    note.textContent = "English forms only. Download the packet and send it yourself. Candidate email stays off.";
+    box.appendChild(note);
+    (forms || []).forEach(function (form) {
+      if (!form.available) return;
+      const link = document.createElement("button");
+      link.type = "button";
+      link.className = "ghost";
+      link.textContent = form.title || form.form_key;
+      link.onclick = function () {
+        downloadForm(form.form_key);
+      };
+      box.appendChild(link);
+    });
+    const missing = document.createElement("p");
+    missing.className = "meta";
+    missing.textContent = "Employment agreement, non-solicitation, and handbook files are not on file yet.";
+    box.appendChild(missing);
+    root.appendChild(box);
+  }
+
+  function renderHires(root, hires) {
+    const box = document.createElement("section");
+    box.style.marginTop = "1.5rem";
+    const heading = document.createElement("h3");
+    heading.textContent = "Onboarding";
+    box.appendChild(heading);
+    if (!hires.length) {
+      const empty = document.createElement("p");
+      empty.className = "meta";
+      empty.textContent = "No hires yet.";
+      box.appendChild(empty);
+      root.appendChild(box);
+      return;
+    }
+    hires.forEach(function (hire) {
+      const card = document.createElement("article");
+      card.className = "due-row";
+      const title = document.createElement("div");
+      title.className = "due-title";
+      title.textContent = (hire.display_name || "Hire") + " — " + (hire.status || "");
+      card.appendChild(title);
+      if (hire.i9_drive !== "ready") {
+        const pending = document.createElement("p");
+        pending.className = "meta";
+        pending.textContent = "I-9 drive is not configured. This stays a pending setup item.";
+        card.appendChild(pending);
+      }
+      const welcome = document.createElement("textarea");
+      welcome.readOnly = true;
+      welcome.rows = 6;
+      welcome.value = hire.welcome || "";
+      card.appendChild(welcome);
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "ghost";
+      copy.textContent = "Copy welcome message";
+      copy.onclick = function () {
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(welcome.value).then(function () {
+            showStatus("Welcome message copied.", "ok");
+          });
+        } else {
+          welcome.select();
+          showStatus("Select the message and copy it.", "ok");
+        }
+      };
+      card.appendChild(copy);
+      (hire.items || []).forEach(function (item) {
+        const row = document.createElement("div");
+        row.className = "due-row";
+        if (item.warning) row.style.color = "#8b2e2e";
+        const label = document.createElement("div");
+        label.textContent =
+          item.title +
+          " — " +
+          (item.owner_role || "") +
+          " — due " +
+          (item.due_date || "—") +
+          " — " +
+          item.status +
+          (item.done_by ? " — " + item.done_by : "") +
+          (item.done_at ? " — " + String(item.done_at).slice(0, 10) : "");
+        row.appendChild(label);
+        if (item.note) {
+          const noted = document.createElement("div");
+          noted.className = "meta";
+          noted.textContent = item.note;
+          row.appendChild(noted);
+        }
+        if (item.kind !== "auto") {
+          const note = document.createElement("input");
+          note.type = "text";
+          note.placeholder = "Note";
+          note.value = item.note || "";
+          row.appendChild(note);
+          function mark(status) {
+            ui()
+              .api("/hiring/hires/" + hire.id + "/items/" + item.template_key, {
+                method: "POST",
+                json: { status: status, note: note.value },
+              })
+              .then(function () {
+                return window.clyHiring.open({ message: "Checklist updated." });
+              })
+              .catch(function (error) {
+                showStatus((error && error.message) || "Could not save.", "error");
+              });
+          }
+          const done = document.createElement("button");
+          done.type = "button";
+          done.className = "ghost";
+          done.textContent = "Done";
+          done.onclick = function () {
+            mark("done");
+          };
+          const na = document.createElement("button");
+          na.type = "button";
+          na.className = "ghost";
+          na.textContent = "N/A";
+          na.onclick = function () {
+            mark("n/a");
+          };
+          const undo = document.createElement("button");
+          undo.type = "button";
+          undo.className = "ghost";
+          undo.textContent = "Undo";
+          undo.onclick = function () {
+            mark("open");
+          };
+          row.appendChild(done);
+          row.appendChild(na);
+          row.appendChild(undo);
+        }
+        card.appendChild(row);
+      });
+      if (hire.status === "onboarding") {
+        const activate = document.createElement("button");
+        activate.type = "button";
+        activate.className = "primary";
+        activate.textContent = "Activate";
+        activate.onclick = function () {
+          const email = window.prompt("Work email for the employee record");
+          if (!email) return;
+          ui()
+            .api("/hiring/hires/" + hire.id + "/activate", { method: "POST", json: { work_email: email } })
+            .then(function () {
+              return window.clyHiring.open({ message: "Hire activated." });
+            })
+            .catch(function (error) {
+              showStatus((error && error.message) || "Could not activate.", "error");
+            });
+        };
+        card.appendChild(activate);
+      }
+      box.appendChild(card);
+    });
+    root.appendChild(box);
+  }
+
+  function downloadForm(key) {
+    const headers = {};
+    if (ui().state && ui().state.token) headers.Authorization = "Bearer " + ui().state.token;
+    fetch("/hiring/forms/" + key, { headers: headers })
+      .then(function (res) {
+        if (!res.ok) throw new Error("Could not download that form.");
+        const named = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") || "");
+        return res.blob().then(function (blob) {
+          return { blob: blob, filename: named ? named[1] : key + ".pdf" };
+        });
+      })
+      .then(function (file) {
+        const url = URL.createObjectURL(file.blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = file.filename;
+        link.click();
+        URL.revokeObjectURL(url);
+      })
+      .catch(function (error) {
+        showStatus((error && error.message) || "Could not download that form.", "error");
+      });
   }
 
   function clearResumeNotes() {

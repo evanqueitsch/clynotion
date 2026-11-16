@@ -171,6 +171,8 @@ def ground_fields(text: str, proposed: dict[str, Any]) -> dict[str, str]:
             value = value if _phone_present(text, value) else ""
         elif not _present(text, value):
             value = ""
+        if name in {"candidate_full_name", "candidate_first_name"}:
+            value = _title_case_name(value)
         found[name] = value
     if not found["personal_email"]:
         emails = _EMAIL.findall(text)
@@ -181,6 +183,16 @@ def ground_fields(text: str, proposed: dict[str, Any]) -> dict[str, str]:
         if len(phones) == 1:
             found["phone"] = _clean(phones[0])
     return found
+
+
+def _title_case_name(value: str) -> str:
+    """Title-case a name that is entirely upper or lower case. Mixed case stays."""
+    letters = [char for char in value if char.isalpha()]
+    if not letters:
+        return value
+    if all(char.isupper() for char in letters) or all(char.islower() for char in letters):
+        return value.title()
+    return value
 
 
 def _clean(value: str) -> str:
