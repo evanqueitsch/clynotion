@@ -1,21 +1,21 @@
 /* Hiring offers. Pay stays in the form response and is not written to the console. */
 (function () {
   const FIELDS = [
-    ["candidate_full_name", "Full legal name", "text", "Test Candidate QA"],
-    ["candidate_first_name", "First name", "text", "Test"],
-    ["candidate_credentials", "Credentials (blank if none)", "text", ""],
-    ["personal_email", "Personal email", "email", "qa.candidate@example.com"],
-    ["position_title", "Position (blank uses the default)", "text", ""],
-    ["supervisor_title", "Supervisor title", "text", "Director"],
-    ["supervisor_name", "Supervisor name", "text", "Alex Supervisor"],
-    ["hourly_rate", "Hourly rate", "text", "$45.00"],
-    ["licensed_rate", "Licensed rate (optional)", "text", ""],
-    ["caseload_range", "Caseload range", "text", "25-30"],
-    ["qsehra_monthly_amount", "QSEHRA monthly amount", "text", "$250"],
-    ["qsehra_wait_days", "QSEHRA wait days", "text", "60"],
-    ["offer_date", "Offer date (MM/DD/YYYY)", "text", ""],
-    ["start_date", "Start date (MM/DD/YYYY)", "text", ""],
-    ["response_deadline", "Response deadline (blank uses the setting)", "text", ""],
+    ["candidate_full_name", "Full legal name", "text"],
+    ["candidate_first_name", "First name", "text"],
+    ["candidate_credentials", "Credentials (blank if none)", "text"],
+    ["personal_email", "Personal email", "email"],
+    ["position_title", "Position (blank uses the default)", "text"],
+    ["supervisor_title", "Supervisor title", "text"],
+    ["supervisor_name", "Supervisor name", "text"],
+    ["hourly_rate", "Hourly rate", "text"],
+    ["licensed_rate", "Licensed rate (optional)", "text"],
+    ["caseload_range", "Caseload range", "text"],
+    ["qsehra_monthly_amount", "QSEHRA monthly amount", "text"],
+    ["qsehra_wait_days", "QSEHRA wait days", "text"],
+    ["offer_date", "Offer date (MM/DD/YYYY)", "text"],
+    ["start_date", "Start date (MM/DD/YYYY)", "text"],
+    ["response_deadline", "Response deadline", "text"],
   ];
 
   function $(id) {
@@ -50,8 +50,22 @@
     return body;
   }
 
+  let currentSettings = {};
+
+  function addDays(mdy, days) {
+    const parts = String(mdy || "").split("/");
+    if (parts.length !== 3) return "";
+    const dt = new Date(Number(parts[2]), Number(parts[0]) - 1, Number(parts[1]));
+    if (Number.isNaN(dt.getTime())) return "";
+    dt.setDate(dt.getDate() + Number(days || 0));
+    const month = String(dt.getMonth() + 1).padStart(2, "0");
+    const day = String(dt.getDate()).padStart(2, "0");
+    return month + "/" + day + "/" + dt.getFullYear();
+  }
+
   function fillForm(offer) {
     const fields = (offer && offer.fields) || {};
+    const settings = currentSettings || {};
     $("hire-type").value = offer ? offer.employment_type : "full-time";
     $("hire-client").checked = offer ? !!offer.direct_client_access : true;
     FIELDS.forEach(function (field) {
@@ -62,8 +76,14 @@
         else node.value = fields[field[0]] || "";
       } else if (field[0] === "offer_date") {
         node.value = todayMDY();
+      } else if (field[0] === "supervisor_title") {
+        node.value = settings.offer_supervisor_title_default || "Director";
+      } else if (field[0] === "supervisor_name") {
+        node.value = settings.offer_supervisor_name_default || "";
+      } else if (field[0] === "response_deadline") {
+        node.value = addDays(todayMDY(), settings.offer_response_days || 30);
       } else {
-        node.value = field[3] || "";
+        node.value = "";
       }
     });
     applyType();
@@ -78,13 +98,14 @@
       if (part) node.value = "";
     });
     const caseload = $("hire-caseload_range");
-    if (caseload && !caseload.value) caseload.placeholder = part ? "12-18" : "25-30";
+    if (caseload && !caseload.value) caseload.placeholder = part ? "part-time range" : "full-time range";
   }
 
   function render(data) {
     const root = $("hiring-root");
     root.innerHTML = "";
-    const settings = data.settings || {};
+    currentSettings = data.settings || {};
+    const settings = currentSettings;
     const settingsBox = document.createElement("div");
     const label = document.createElement("label");
     label.textContent = "Response period (days)";
@@ -105,8 +126,8 @@
           method: "PUT",
           json: { offer_response_days: Number(days.value) },
         });
-        ui().setStatus($("hiring-status"), "Saved.", "ok");
         await window.clyHiring.open();
+        ui().setStatus($("hiring-status"), "Saved.", "ok");
       } catch (error) {
         ui().setStatus($("hiring-status"), error.message, "error");
       }
@@ -218,6 +239,18 @@
           post(offer.id, "/send", { channel: "outside" }, "Marked sent.");
         });
       }
+      if (offer.status === "draft" || offer.status === "sent" || offer.status === "viewed") {
+        button("Withdraw", "ghost", function () {
+          const reason = window.prompt("Why is this offer being withdrawn?");
+          if (!reason) return;
+          post(offer.id, "/withdraw", { reason: reason }, "Withdrawn.");
+        });
+      }
+      button("Delete", "ghost", function () {
+        const typed = window.prompt("Type the candidate's name to delete this offer");
+        if (!typed) return;
+        post(offer.id, "/delete", { confirm: typed }, "Deleted.");
+      });
       if (offer.status === "sent" || offer.status === "viewed") {
         button("Mark accepted", "primary", function () {
           const typed = (offer.fields || {}).candidate_full_name || offer.display_name;
@@ -251,6 +284,7 @@
       }
       ui().setStatus($("hiring-status"), "Saved.", "ok");
       await window.clyHiring.open();
+      ui().setStatus($("hiring-status"), "Saved.", "ok");
     } catch (error) {
       ui().setStatus($("hiring-status"), error.message, "error");
     }
@@ -292,7 +326,7 @@
       ui().show("hiring-panel");
       ui().setStatus($("hiring-status"), "Loading…");
       try {
-        const data = await ui().api("/hiring/bootstrap");
+        const data = await ui().api("/hiring/bootstrap", { cache: "no-store" });
         ui().setStatus($("hiring-status"), "");
         render(data);
       } catch (error) {

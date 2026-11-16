@@ -173,3 +173,120 @@ def test_non_admin_with_the_tool_is_still_dark() -> None:
     admin_home = client.get("/home", headers=_alice()).json()
     ids = [tool["id"] for unit in admin_home["units"] for tool in unit["tools"]]
     assert "hiring_onboarding" in ids
+
+
+def test_blank_form_uses_live_defaults_not_sample_values() -> None:
+    from pathlib import Path
+
+    from app.hiring.fill import supervisor_name_default
+
+    page = Path("app/static/hiring.js").read_text(encoding="utf-8")
+    for banned in (
+        "Test Candidate QA",
+        "Alex Supervisor",
+        "qa.candidate@example.com",
+        "$45.00",
+        "25-30",
+        "$250",
+    ):
+        assert banned not in page
+    assert "offer_supervisor_name_default" in page
+    assert "offer_response_days" in page
+    settings = client.get("/hiring/bootstrap", headers=_alice()).json()["settings"]
+    assert settings["offer_supervisor_title_default"] == "Director"
+    assert settings["offer_supervisor_name_default"] == supervisor_name_default()
+    assert settings["offer_response_days"] == 30
+
+
+def test_part_time_can_clear_direct_client_access() -> None:
+    created = client.post(
+        "/hiring/offers",
+        headers=_alice(),
+        json=_offer("12/16/2026")
+        | {
+            "personal_email": "qa.part@example.com",
+            "candidate_full_name": "Riley Sample",
+            "display_name": "Riley Sample",
+            "employment_type": "part-time",
+            "qsehra_monthly_amount": "",
+            "qsehra_wait_days": "",
+            "caseload_range": "12-18",
+            "direct_client_access": False,
+        },
+    )
+    assert created.status_code == 200, created.text
+    assert created.json()["direct_client_access"] is False
+    assert created.json()["employment_type"] == "part-time"
+    loaded = client.get(f"/hiring/offers/{created.json()['id']}", headers=_alice())
+    assert loaded.json()["direct_client_access"] is False
+
+
+def test_withdraw_keeps_history_and_delete_needs_the_typed_name() -> None:
+    from pathlib import Path
+
+    created = client.post("/hiring/offers", headers=_alice(), json=_offer("12/16/2026", "$55.00"))
+    offer_id = created.json()["id"]
+    sent = client.post(f"/hiring/offers/{offer_id}/send", headers=_alice(), json={"channel": "outside"})
+    assert sent.status_code == 200, sent.text
+    withdrawn = client.post(
+        f"/hiring/offers/{offer_id}/withdraw",
+        headers=_alice(),
+        json={"reason": "Position filled"},
+    )
+    assert withdrawn.status_code == 200, withdrawn.text
+    assert withdrawn.json()["status"] == "withdrawn"
+    listed = client.get("/hiring/bootstrap", headers=_alice()).json()
+    assert any(item["id"] == offer_id and item["status"] == "withdrawn" for item in listed["offers"])
+    assert any(item["action"] == "withdrawn" and item["entity_id"] == offer_id for item in listed["history"])
+    wrong = client.post(
+        f"/hiring/offers/{offer_id}/delete",
+        headers=_alice(),
+        json={"confirm": "someone else"},
+    )
+    assert wrong.status_code == 400
+    removed = client.post(
+        f"/hiring/offers/{offer_id}/delete",
+        headers=_alice(),
+        json={"confirm": "Test Candidate QA"},
+    )
+    assert removed.status_code == 200, removed.text
+    after = client.get("/hiring/bootstrap", headers=_alice()).json()
+    assert all(item["id"] != offer_id for item in after["offers"])
+    assert any(item["action"] == "deleted" and item["entity_id"] == offer_id for item in after["history"])
+    assert client.get(f"/hiring/offers/{offer_id}/pdf", headers=_alice()).status_code == 404
+    script = Path("app/static/hiring.js").read_text(encoding="utf-8")
+    assert 'cache: "no-store"' in script
+    assert script.index("await window.clyHiring.open()") < script.rindex('setStatus($("hiring-status"), "Saved.", "ok")')
+    html = Path("app/static/index.html").read_text(encoding="utf-8")
+    assert 'replace(/^#\\/?/, "#")' in html
+    assert "syncTopChrome" in html
+
+
+def test_delete_accepted_offer_removes_it() -> None:
+    created = client.post(
+        "/hiring/offers",
+        headers=_alice(),
+        json=_offer("12/16/2026") | {"personal_email": "qa.accepted@example.com", "display_name": "Accepted Candidate QA", "candidate_full_name": "Accepted Candidate QA"},
+    )
+    offer_id = created.json()["id"]
+    client.post(f"/hiring/offers/{offer_id}/send", headers=_alice(), json={"channel": "outside"})
+    accepted = client.post(
+        f"/hiring/offers/{offer_id}/accept",
+        headers=_alice(),
+        json={"typed_name": "Accepted Candidate QA"},
+    )
+    assert accepted.status_code == 200, accepted.text
+    denied = client.post(
+        f"/hiring/offers/{offer_id}/delete",
+        headers=_auth("staff", "staff@example.com"),
+        json={"confirm": "Accepted Candidate QA"},
+    )
+    assert denied.status_code == 403
+    removed = client.post(
+        f"/hiring/offers/{offer_id}/delete",
+        headers=_alice(),
+        json={"confirm": "Accepted Candidate QA"},
+    )
+    assert removed.status_code == 200, removed.text
+    assert client.get(f"/hiring/offers/{offer_id}", headers=_alice()).status_code == 404
+

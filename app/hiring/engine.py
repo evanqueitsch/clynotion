@@ -393,7 +393,10 @@ class HiringEngine:
             merged["response_deadline"] = deadline.strftime("%m/%d/%Y")
             merged["deadline_overridden"] = False
         else:
-            merged["deadline_overridden"] = True
+            offer_day = datetime.strptime(str(merged["offer_date"]), "%m/%d/%Y").date()
+            computed = offer_day + timedelta(days=int(settings.get("offer_response_days") or 30))
+            given = datetime.strptime(str(merged["response_deadline"]), "%m/%d/%Y").date()
+            merged["deadline_overridden"] = given != computed
         return merged
 
     def _check_deadline(self, value: str) -> date:
@@ -590,6 +593,47 @@ class HiringEngine:
             self._history(row, "offer", offer_id, "deleted", actor, "Draft deleted")
             self._save(payload)
 
+    def delete_offer(self, practice_id: str, offer_id: str, confirm: str, actor: str) -> None:
+        """Remove an offer after the caller types the candidate name. Any status."""
+        with _lock:
+            payload = self._read()
+            row = self._practice(payload, practice_id)
+            offer = row["offers"].get(offer_id)
+            if not offer:
+                raise HiringError(404, "Offer not found.")
+            candidate = row["candidates"].get(offer.get("candidate_id") or "") or {}
+            expected = _norm(str(candidate.get("display_name") or ""))
+            if not expected or _norm(confirm) != expected:
+                raise HiringError(400, "Type the candidate's name to confirm.")
+            hire_ids = [hire["id"] for hire in row["hires"].values() if hire.get("offer_id") == offer_id]
+            store = file_store()
+            for version in list(row["offer_versions"].values()):
+                if version.get("offer_id") != offer_id:
+                    continue
+                for key in ("pdf_object_key", "docx_object_key"):
+                    _delete_stored(store, version.get(key) or "")
+                row["offer_versions"].pop(version["id"], None)
+            for acceptance in list(row["acceptances"].values()):
+                if acceptance.get("offer_id") != offer_id:
+                    continue
+                _delete_stored(store, acceptance.get("certificate_object_key") or "")
+                row["acceptances"].pop(acceptance["id"], None)
+            for ref_id, ref in list(row["document_refs"].items()):
+                if ref.get("hire_id") not in hire_ids:
+                    continue
+                _delete_stored(store, ref.get("object_key") or "")
+                row["document_refs"].pop(ref_id, None)
+            for item_id, item in list(row["checklist_items"].items()):
+                if item.get("hire_id") in hire_ids:
+                    row["checklist_items"].pop(item_id, None)
+            for hire_id in hire_ids:
+                self._void_tokens(row, "hire", hire_id, "deleted")
+                row["hires"].pop(hire_id, None)
+            self._void_tokens(row, "offer", offer_id, "deleted")
+            row["offers"].pop(offer_id, None)
+            self._history(row, "offer", offer_id, "deleted", actor, "Offer deleted")
+            self._save(payload)
+
     def send_offer(self, practice_id: str, offer_id: str, channel: str, actor: str, base_url: str) -> dict[str, Any]:
         if channel not in {"portal", "outside"}:
             raise HiringError(400, "Choose portal or outside.")
@@ -651,7 +695,7 @@ class HiringEngine:
         with _lock:
             payload = self._read()
             row = self._practice(payload, practice_id)
-            offer = self._require_open(row, offer_id, allow_draft=False)
+            offer = self._require_open(row, offer_id, allow_draft=True)
             offer["status"] = "withdrawn"
             offer["withdraw_reason"] = str(reason).strip()[:300]
             offer["closed_at"] = _iso()
@@ -1631,6 +1675,15 @@ def _parse_dt(value: str) -> datetime:
     if moment.tzinfo is None:
         moment = moment.replace(tzinfo=timezone.utc)
     return moment.astimezone(timezone.utc)
+
+
+def _delete_stored(store: Any, object_key: str) -> None:
+    if not object_key or "/" not in object_key:
+        return
+    try:
+        store.delete(_ref(object_key, "local", ""))
+    except Exception:
+        return
 
 
 def _ref(object_key: str, backend: str, sha: str, drive_file_id: str = ""):
