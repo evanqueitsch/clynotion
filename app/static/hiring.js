@@ -38,15 +38,50 @@
     return node ? node.value.trim() : "";
   }
 
+  const REQUIRED = {
+    candidate_full_name: true,
+    candidate_first_name: true,
+    personal_email: true,
+    hourly_rate: true,
+    caseload_range: true,
+    qsehra_monthly_amount: true,
+    qsehra_wait_days: true,
+    offer_date: true,
+    start_date: true,
+    response_deadline: true,
+  };
+
+  function showStatus(msg, kind) {
+    const el = document.getElementById("hiring-status");
+    const api = ui();
+    if (!el || !api || !api.setStatus) return;
+    const text = msg || (kind === "error" ? "Could not save." : "");
+    api.setStatus(el, text, text ? (kind || "error") : "");
+  }
+
+  function formEl() {
+    return document.getElementById("hire-form");
+  }
+
+  function valueOf(name) {
+    const form = formEl();
+    if (!form || !form.elements) return "";
+    const el = form.elements.namedItem(name);
+    if (!el) return "";
+    return String(el.value || "").trim();
+  }
+
   function readForm() {
+    const form = formEl();
+    if (!form) throw new Error("The offer form is not on the page. Reload and try again.");
     const body = {
-      employment_type: fieldValue("hire-type"),
-      direct_client_access: $("hire-client") ? $("hire-client").checked : true,
-      display_name: fieldValue("hire-candidate_full_name"),
+      employment_type: valueOf("employment_type"),
+      direct_client_access: !!(form.elements.direct_client_access && form.elements.direct_client_access.checked),
     };
     FIELDS.forEach(function (field) {
-      body[field[0]] = fieldValue("hire-" + field[0]);
+      body[field[0]] = valueOf(field[0]);
     });
+    body.display_name = body.candidate_full_name;
     return body;
   }
 
@@ -101,7 +136,7 @@
     if (caseload && !caseload.value) caseload.placeholder = part ? "part-time range" : "full-time range";
   }
 
-  function render(data) {
+  function render(data, editId) {
     const root = $("hiring-root");
     root.innerHTML = "";
     currentSettings = data.settings || {};
@@ -126,8 +161,7 @@
           method: "PUT",
           json: { offer_response_days: Number(days.value) },
         });
-        await window.clyHiring.open();
-        ui().setStatus($("hiring-status"), "Saved.", "ok");
+        await window.clyHiring.open({ message: "Saved." });
       } catch (error) {
         ui().setStatus($("hiring-status"), error.message, "error");
       }
@@ -136,12 +170,19 @@
     settingsBox.appendChild(saveDays);
     root.appendChild(settingsBox);
 
-    const form = document.createElement("div");
+    const form = document.createElement("form");
+    form.id = "hire-form";
+    form.noValidate = true;
+    form.addEventListener("submit", function (event) {
+      event.preventDefault();
+      saveOffer();
+    });
     form.style.marginTop = "1rem";
     const typeLabel = document.createElement("label");
-    typeLabel.textContent = "Employment type";
+    typeLabel.textContent = "Employment type *";
     const type = document.createElement("select");
     type.id = "hire-type";
+    type.name = "employment_type";
     ["full-time", "part-time"].forEach(function (value) {
       const option = document.createElement("option");
       option.value = value;
@@ -155,30 +196,34 @@
     clientLabel.textContent = "Direct client access";
     const client = document.createElement("input");
     client.id = "hire-client";
+    client.name = "direct_client_access";
     client.type = "checkbox";
     client.checked = true;
     clientLabel.appendChild(client);
     form.appendChild(clientLabel);
     FIELDS.forEach(function (field) {
       const row = document.createElement("label");
-      row.textContent = field[1];
+      row.textContent = field[1] + (REQUIRED[field[0]] ? " *" : "");
       const input = document.createElement("input");
       input.id = "hire-" + field[0];
-      input.type = field[2];
+      input.name = field[0];
+      input.type = "text";
+      if (field[0] === "personal_email") input.setAttribute("inputmode", "email");
+      input.autocomplete = "off";
       row.appendChild(input);
       form.appendChild(row);
     });
     const editing = document.createElement("input");
     editing.id = "hire-editing";
+    editing.name = "editing";
     editing.type = "hidden";
     form.appendChild(editing);
     const actions = document.createElement("div");
     actions.className = "row";
     const save = document.createElement("button");
-    save.type = "button";
+    save.type = "submit";
     save.className = "primary";
     save.textContent = "Save offer";
-    save.onclick = saveOffer;
     const clear = document.createElement("button");
     clear.type = "button";
     clear.className = "ghost";
@@ -186,7 +231,7 @@
     clear.onclick = function () {
       editing.value = "";
       fillForm(null);
-      ui().setStatus($("hiring-status"), "");
+      showStatus("", "ok");
     };
     actions.appendChild(save);
     actions.appendChild(clear);
@@ -243,7 +288,9 @@
         button("Withdraw", "ghost", function () {
           const reason = window.prompt("Why is this offer being withdrawn?");
           if (!reason) return;
-          post(offer.id, "/withdraw", { reason: reason }, "Withdrawn.");
+          const editingNow = document.getElementById("hire-editing");
+          const keep = !!(editingNow && editingNow.value === offer.id);
+          post(offer.id, "/withdraw", { reason: reason }, "Withdrawn.", keep);
         });
       }
       button("Delete", "ghost", function () {
@@ -271,32 +318,45 @@
       list.appendChild(empty);
     }
     root.appendChild(list);
-  }
-
-  async function saveOffer() {
-    const body = readForm();
-    const id = fieldValue("hire-editing");
-    try {
-      if (id) {
-        await ui().api("/hiring/offers/" + id, { method: "PUT", json: body });
-      } else {
-        await ui().api("/hiring/offers", { method: "POST", json: body });
+    if (editId) {
+      const match = (data.offers || []).filter(function (offer) { return offer.id === editId; })[0];
+      if (match) {
+        const editingNow = document.getElementById("hire-editing");
+        if (editingNow) editingNow.value = match.id;
+        fillForm(match);
       }
-      ui().setStatus($("hiring-status"), "Saved.", "ok");
-      await window.clyHiring.open();
-      ui().setStatus($("hiring-status"), "Saved.", "ok");
-    } catch (error) {
-      ui().setStatus($("hiring-status"), error.message, "error");
     }
   }
 
-  async function post(id, suffix, json, ok) {
+  async function saveOffer() {
+    let body;
+    try {
+      body = readForm();
+    } catch (error) {
+      showStatus((error && error.message) || "Could not save.", "error");
+      return;
+    }
+    const editingId = valueOf("editing");
+    const payload = Object.assign({}, body);
+    delete payload._editing;
+    try {
+      if (editingId) {
+        await ui().api("/hiring/offers/" + editingId, { method: "PUT", json: payload });
+      } else {
+        await ui().api("/hiring/offers", { method: "POST", json: payload });
+      }
+      await window.clyHiring.open({ message: "Saved." });
+    } catch (error) {
+      showStatus((error && error.message) || "Could not save.", "error");
+    }
+  }
+
+  async function post(id, suffix, json, ok, keepEdit) {
     try {
       await ui().api("/hiring/offers/" + id + suffix, { method: "POST", json: json });
-      ui().setStatus($("hiring-status"), ok, "ok");
-      await window.clyHiring.open();
+      await window.clyHiring.open({ editId: keepEdit ? id : "", message: ok || "Saved." });
     } catch (error) {
-      ui().setStatus($("hiring-status"), error.message, "error");
+      showStatus((error && error.message) || "Could not save.", "error");
     }
   }
 
@@ -322,15 +382,17 @@
   }
 
   window.clyHiring = {
-    open: async function () {
-      ui().show("hiring-panel");
-      ui().setStatus($("hiring-status"), "Loading…");
+    open: async function (opts) {
+      const options = opts || {};
+      const api = ui();
+      if (!api) return;
+      api.show("hiring-panel");
       try {
-        const data = await ui().api("/hiring/bootstrap", { cache: "no-store" });
-        ui().setStatus($("hiring-status"), "");
-        render(data);
+        const data = await api.api("/hiring/bootstrap", { cache: "no-store" });
+        render(data, options.editId || "");
+        showStatus(options.message || "", options.message ? "ok" : "");
       } catch (error) {
-        ui().setStatus($("hiring-status"), error.message || "Could not open hiring", "error");
+        showStatus((error && error.message) || "Could not open hiring.", "error");
       }
     },
   };

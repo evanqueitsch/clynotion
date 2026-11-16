@@ -256,7 +256,7 @@ def test_withdraw_keeps_history_and_delete_needs_the_typed_name() -> None:
     assert client.get(f"/hiring/offers/{offer_id}/pdf", headers=_alice()).status_code == 404
     script = Path("app/static/hiring.js").read_text(encoding="utf-8")
     assert 'cache: "no-store"' in script
-    assert script.index("await window.clyHiring.open()") < script.rindex('setStatus($("hiring-status"), "Saved.", "ok")')
+    assert 'message: "Saved."' in script
     html = Path("app/static/index.html").read_text(encoding="utf-8")
     assert 'replace(/^#\\/?/, "#")' in html
     assert "syncTopChrome" in html
