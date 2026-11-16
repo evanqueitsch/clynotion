@@ -129,13 +129,52 @@ def _drive_ok(offer: dict[str, Any], display_name: str) -> bool:
     return str(offer.get("drive_pdf_name") or "") == offer_letter_filename(display_name)
 
 
+def drive_job_pending(row: dict[str, Any], offer: dict[str, Any], *, pdf: bool, filing: bool) -> bool:
+    """True only when this offer still needs a Drive create, rename, move, or upload."""
+    from app.hiring.personnel_drive import ONBOARDING_FOLDERS, folder_name, offer_letter_filename, resume_filename
+
+    if offer.get("drive_status") == "trashed":
+        return False
+    candidate = (row.get("candidates") or {}).get(offer.get("candidate_id") or "") or {}
+    name = str(candidate.get("display_name") or "")
+    if not offer.get("drive_folder_id") or offer.get("drive_folder_name") != folder_name(name):
+        return True
+    resume = (row.get("resumes") or {}).get(offer.get("resume_id") or "")
+    if resume:
+        filename = resume_filename(name, str(resume.get("mime") or "application/octet-stream"))
+        if not offer.get("drive_resume_file_id") or offer.get("drive_resume_name") != filename:
+            return True
+        if filing and not offer.get("resume_in_onboarding"):
+            return True
+    if pdf or filing:
+        letter = offer_letter_filename(name)
+        if not offer.get("drive_pdf_file_id") or offer.get("drive_pdf_name") != letter:
+            return True
+        if filing and not offer.get("pdf_in_onboarding"):
+            return True
+    if filing:
+        hire = next((item for item in (row.get("hires") or {}).values() if item.get("offer_id") == offer.get("id")), None)
+        children = (hire or {}).get("drive_subfolders") or {}
+        if any(not children.get(label) for label in ONBOARDING_FOLDERS):
+            return True
+        acceptance = next(
+            (item for item in (row.get("acceptances") or {}).values() if item.get("offer_id") == offer.get("id")),
+            None,
+        )
+        if acceptance and acceptance.get("signed_upload_ref") and not offer.get("drive_signed_file_id"):
+            return True
+    return False
+
+
 def drive_prompt(offer: dict[str, Any], display_name: str) -> tuple[str, bool]:
     """Status line and whether Retry should show. Working is progress only."""
     status = str(offer.get("drive_status") or "")
     if not status:
         status = "connected" if offer.get("drive_folder_id") else "not_connected"
-    if status == "working":
+    if status == "working" and not offer.get("drive_folder_id"):
         return "Creating Drive folders…", False
+    if status == "working":
+        return "", False
     if status == "trashed":
         return "Folder trashed", False
     if _drive_ok(offer, display_name):
@@ -1318,14 +1357,22 @@ class HiringEngine:
             self._save(payload)
             return
         if _drive_async() and personnel_client() is not None:
-            offer["drive_status"] = "working"
-            self._save(payload)
-            threading.Thread(
-                target=self._drive_job,
-                args=(practice_id, offer_id, actor, pdf, filing),
-                daemon=True,
-                name="clynotion-drive",
-            ).start()
+            if drive_job_pending(row, offer, pdf=pdf, filing=filing):
+                if not offer.get("drive_folder_id"):
+                    offer["drive_status"] = "working"
+                elif offer.get("drive_status") == "working":
+                    offer["drive_status"] = "connected"
+                self._save(payload)
+                threading.Thread(
+                    target=self._drive_job,
+                    args=(practice_id, offer_id, actor, pdf, filing),
+                    daemon=True,
+                    name="clynotion-drive",
+                ).start()
+            else:
+                if offer.get("drive_folder_id") and offer.get("drive_status") != "trashed":
+                    offer["drive_status"] = "connected"
+                self._save(payload)
             return
         self._apply_drive(row, offer, actor, pdf=pdf, filing=filing)
         self._save(payload)

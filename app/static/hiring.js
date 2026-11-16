@@ -457,6 +457,10 @@
         (offer.direct_client_access ? " · direct client access" : "");
       left.appendChild(title);
       left.appendChild(meta);
+      const driveLine = document.createElement("div");
+      driveLine.className = "due-meta hire-drive-note";
+      driveLine.textContent = offer.drive_note || "\u00a0";
+      left.appendChild(driveLine);
       const buttons = document.createElement("div");
       buttons.className = "row hire-actions";
       function button(text, className, action) {
@@ -490,12 +494,6 @@
         link.rel = "noopener noreferrer";
         link.textContent = "Personnel folder";
         buttons.appendChild(link);
-      }
-      if (offer.drive_note) {
-        const note = document.createElement("span");
-        note.className = "meta";
-        note.textContent = offer.drive_note;
-        buttons.appendChild(note);
       }
       if (offer.drive_retry) {
         button("Retry", "ghost", function () {
@@ -651,14 +649,8 @@
     if (confirm) {
       confirm.disabled = true;
       confirm.classList.add("busy");
-      confirm.textContent = "Creating Drive folders…";
     }
-    const working = box.querySelector("p.meta");
-    if (working) {
-      working.hidden = false;
-      working.textContent = "Creating Drive folders…";
-    }
-    showBusy("Creating Drive folders…");
+    showBusy("Saving…");
     try {
       const saved = await ui().api("/hiring/offers/" + id + "/accept-paper", { method: "POST", body: body });
       const offer = saved && saved.offer;

@@ -191,8 +191,10 @@
       margin-top: 0.85rem;
       font-size: 0.92rem;
       color: var(--muted);
-      min-height: 1.25rem;
+      min-height: 1.6rem;
+      line-height: 1.6rem;
     }
+    #hiring-status { min-height: 1.6rem; line-height: 1.6rem; }
     .status.error { color: var(--danger); }
     .status.ok { color: var(--ok); }
     .rec-dot {
@@ -447,7 +449,8 @@
       font-size: 0.82rem;
     }
     #hiring-panel, #hiring-root { max-width: 100%; overflow-x: hidden; }
-    #hiring-root .hire-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; max-width: 100%; }
+    #hiring-root .hire-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; max-width: 100%; align-items: center; }
+    #hiring-root .hire-drive-note { display: block; min-height: 1.15rem; line-height: 1.15rem; }
     #hiring-root .due-row { flex-wrap: wrap; min-width: 0; max-width: 100%; }
     #hiring-root .due-row > div { min-width: 0; }
     #hiring-root .hire-card, #hiring-root .hire-decision {
@@ -1220,7 +1223,7 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.19.7"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.23.4"></script>
+  <script src="/static/hiring.js?v=0.23.5"></script>
   <script>
     const state = {
       token: null,
