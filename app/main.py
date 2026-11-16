@@ -139,6 +139,15 @@ def _hiring_scheduler() -> None:
 
     start_scheduler()
 
+
+@app.on_event("startup")
+def _warm_offer_pdf() -> None:
+    import threading
+
+    from app.hiring.pdf import warm_offer_pdf
+
+    threading.Thread(target=warm_offer_pdf, name="clynotion-soffice-warm", daemon=True).start()
+
 _UPLOAD_ROOT = Path(tempfile.gettempdir()) / "clynotion_uploads"
 _UPLOAD_ROOT.mkdir(parents=True, exist_ok=True)
 

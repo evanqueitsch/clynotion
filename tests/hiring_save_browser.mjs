@@ -78,7 +78,7 @@ await new Promise((resolve) => setTimeout(resolve, 250));
 if (heldPosts !== 1) fail("double submit reached the server " + heldPosts + " times");
 await page.waitForFunction(() => {
   const status = document.getElementById("hiring-status");
-  return status && status.textContent === "";
+  return status && status.textContent === "Saving…";
 });
 const marked = await page.locator("#hire-hourly_rate.field-error").count();
 if (marked) fail("field error was still marked while the save was in flight");
