@@ -28,6 +28,12 @@ class DriveClient(Protocol):
 
     def upload(self, folder_id: str, filename: str, data: bytes, mime: str) -> str: ...
 
+    def rename(self, file_id: str, name: str) -> None: ...
+
+    def ensure_child(self, parent_id: str, name: str) -> str: ...
+
+    def move(self, file_id: str, folder_id: str, name: str = "") -> None: ...
+
 
 def folder_name(full_name: str) -> str:
     """Last, First. A single token is used as-is. Slashes are removed."""
@@ -45,13 +51,24 @@ def folder_link(folder_id: str) -> str:
     return f"https://drive.google.com/drive/folders/{folder_id}"
 
 
-def resume_filename(full_name: str, mime: str) -> str:
-    """Last_First_resume.pdf, from the same Last, First order as the folder."""
+def _file_stem(full_name: str) -> str:
     stem = folder_name(full_name).replace(",", "")
     stem = re.sub(r"\s+", "_", stem.strip())
-    stem = re.sub(r"[^A-Za-z0-9._-]", "", stem).strip("._") or "Candidate"
+    return re.sub(r"[^A-Za-z0-9._-]", "", stem).strip("._") or "Candidate"
+
+
+def resume_filename(full_name: str, mime: str) -> str:
+    """Last_First_resume.pdf, from the same Last, First order as the folder."""
     extension = {"application/pdf": "pdf", "text/plain": "txt"}.get(mime, "docx")
-    return f"{stem}_resume.{extension}"
+    return f"{_file_stem(full_name)}_resume.{extension}"
+
+
+def signed_offer_filename(full_name: str) -> str:
+    """Last_First_offer-signed.pdf, in the same order as the personnel folder."""
+    return f"{_file_stem(full_name)}_offer-signed.pdf"
+
+
+ONBOARDING_FOLDERS = ("01 Onboarding", "02 Payroll & Tax", "03 Credentialing", "04 Clearances")
 
 
 def personnel_configured() -> bool:
@@ -97,6 +114,46 @@ class PersonnelDrive:
         created = self._create_folder(name)
         return created, folder_link(created)
 
+    def rename(self, file_id: str, name: str) -> None:
+        response = self._request(
+            "PATCH",
+            f"{_FILES}/{file_id}",
+            params={"supportsAllDrives": "true", "fields": "id"},
+            json={"name": name},
+        )
+        if getattr(response, "status_code", 500) not in {200, 201}:
+            raise StorageError("drive_rename_failed")
+
+    def ensure_child(self, parent_id: str, name: str) -> str:
+        found = self._find_folder(name, parent_id)
+        if found:
+            return found
+        return self._create_folder(name, parent_id)
+
+    def move(self, file_id: str, folder_id: str, name: str = "") -> None:
+        current = self._request(
+            "GET",
+            f"{_FILES}/{file_id}",
+            params={"supportsAllDrives": "true", "fields": "parents"},
+        )
+        if getattr(current, "status_code", 500) != 200:
+            raise StorageError("drive_move_failed")
+        parents = [str(item) for item in (current.json().get("parents") or []) if item and item != folder_id]
+        body: dict[str, str] = {"name": name} if name else {}
+        response = self._request(
+            "PATCH",
+            f"{_FILES}/{file_id}",
+            params={
+                "supportsAllDrives": "true",
+                "addParents": folder_id,
+                "removeParents": ",".join(parents),
+                "fields": "id",
+            },
+            json=body,
+        )
+        if getattr(response, "status_code", 500) not in {200, 201}:
+            raise StorageError("drive_move_failed")
+
     def upload(self, folder_id: str, filename: str, data: bytes, mime: str) -> str:
         boundary = "clynotion" + uuid.uuid4().hex
         meta = json.dumps({"name": filename, "parents": [folder_id]})
@@ -115,7 +172,7 @@ class PersonnelDrive:
             raise StorageError("drive_put_failed")
         return str(response.json().get("id") or "")
 
-    def _create_folder(self, name: str) -> str:
+    def _create_folder(self, name: str, parent_id: str = "") -> str:
         response = self._request(
             "POST",
             _FILES,
@@ -123,18 +180,19 @@ class PersonnelDrive:
             json={
                 "name": name,
                 "mimeType": "application/vnd.google-apps.folder",
-                "parents": [self._drive_id],
+                "parents": [parent_id or self._drive_id],
             },
         )
         if getattr(response, "status_code", 500) not in {200, 201}:
             raise StorageError("drive_folder_failed")
         return str(response.json()["id"])
 
-    def _find_folder(self, name: str) -> str:
+    def _find_folder(self, name: str, parent_id: str = "") -> str:
         safe = name.replace("\\", "\\\\").replace("'", "\\'")
+        parent = parent_id or self._drive_id
         query = (
             f"name = '{safe}' and mimeType = 'application/vnd.google-apps.folder' "
-            f"and '{self._drive_id}' in parents and trashed = false"
+            f"and '{parent}' in parents and trashed = false"
         )
         response = self._request(
             "GET",

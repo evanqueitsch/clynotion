@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Any, Optional
 
-from fastapi import APIRouter, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
 from pydantic import BaseModel, Field, field_validator
 
@@ -75,6 +75,7 @@ class ItemBody(BaseModel):
     dates: dict[str, str] = Field(default_factory=dict)
     where_original_lives: str = ""
     first_day_worked_for_pay: str = ""
+    note: Optional[str] = None
 
 
 class ActivateBody(BaseModel):
@@ -256,7 +257,8 @@ async def accept_paper(
     offer_id: str,
     request: Request,
     user: CurrentUser,
-    typed_name: str = "",
+    accepted_on: str = Form(""),
+    typed_name: str = Form(""),
     upload: UploadFile | None = File(default=None),
 ) -> dict[str, Any]:
     _require_admin(user)
@@ -270,6 +272,9 @@ async def accept_paper(
             request.client.host if request.client else "",
             request.headers.get("user-agent", ""),
             data,
+            accepted_on,
+            require_upload=True,
+            require_date=True,
         )
     except HiringError as exc:
         _fail(exc)
@@ -318,6 +323,7 @@ def set_item(hire_id: str, key: str, body: ItemBody, user: CurrentUser) -> dict[
             dates=body.dates,
             where=body.where_original_lives,
             first_day=body.first_day_worked_for_pay,
+            note=body.note,
         )
     except HiringError as exc:
         _fail(exc)
