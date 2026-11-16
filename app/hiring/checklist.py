@@ -71,6 +71,11 @@ def is_business_day(day: date, closed: set[date]) -> bool:
     return day.weekday() < 5 and day not in closed
 
 
+def packet_due(start: date, packet_on: date, closed: set[date]) -> date:
+    """Later of the start date (minus 0 business days) and the packet date plus 3 business days."""
+    return max(start, add_business_days(packet_on, 3, closed))
+
+
 def add_business_days(start: date, count: int, closed: set[date]) -> date:
     if count < 0:
         raise ValueError("count")

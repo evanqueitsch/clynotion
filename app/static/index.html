@@ -1214,7 +1214,7 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.19.7"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.23.2"></script>
+  <script src="/static/hiring.js?v=0.23.3"></script>
   <script>
     const state = {
       token: null,
@@ -2621,10 +2621,11 @@
     }
 
     function dateOnlyDue(domain, source) {
-      return domain === "credentialing"
+        return domain === "credentialing"
         || domain === "comply"
         || source === "compliance_registry"
-        || source === "credential_clocks";
+        || source === "credential_clocks"
+        || source === "hiring-payroll";
     }
 
     function formatDue(iso, domain, source) {

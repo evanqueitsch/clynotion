@@ -2,14 +2,14 @@
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 from fastapi.testclient import TestClient
 
 from app.auth import User, issue_token
 from app.credentialing.store import credentialing_store
-from app.hiring.checklist import clearance_state
+from app.hiring.checklist import add_business_days, clearance_state, packet_due
 from app.hiring.engine import hire_cell_status
 from app.hiring.personnel_drive import clear_personnel_drive_for_tests, set_personnel_drive_for_tests
 from app.hiring.resume import ground_fields
@@ -211,6 +211,9 @@ def test_paper_acceptance_files_the_signed_pdf_and_builds_the_checklist() -> Non
         assert benefits["status"] == "skipped"
         clearances = next(item for item in hire["items"] if item["template_key"] == "clearances")
         assert clearances["warning"] is True
+        screening = next(item for item in hire["items"] if item["template_key"] == "exclusion_screening")
+        assert screening["warning"] is True
+        assert screening["badge"] == clearances["badge"]
         signed = [meta for meta in drive.files.values() if meta.get("name") == "Sample_Riley_offer-signed.pdf"]
         assert len(signed) == 1
         assert signed[0]["data"] == b"%PDF-1.4 synthetic"
@@ -290,6 +293,14 @@ def test_checklist_status_note_undo_and_billing_todo() -> None:
     assert packet.status_code == 200, packet.text
     titles = [item.title for item in due_engine.list_open("practice-a")]
     assert "Avery Sample: W-4, direct deposit, and the PA new-hire report" in titles
+    todo = next(item for item in due_engine.list_open("practice-a") if item.source_ref == hire_id + ":packet")
+    assert "T" in todo.due_at
+    assert todo.due_at.endswith("23:59:59-05:00") or todo.due_at.endswith("23:59:59-04:00")
+    assert packet.json()["packet_complete"] is True
+    undone = client.post(f"/hiring/hires/{hire_id}/packet-undo", headers=_alice())
+    assert undone.status_code == 200, undone.text
+    assert undone.json()["packet_complete"] is False
+    assert all(item.source_ref != hire_id + ":packet" for item in due_engine.list_open("practice-a"))
     form = client.get("/hiring/forms/h4c_packet", headers=_alice())
     assert form.status_code == 200
     assert form.content.startswith(b"%PDF")
@@ -400,6 +411,13 @@ def test_clearance_badge_is_amber_before_the_due_date_and_red_after() -> None:
     screening = next(row for row in accepted.json()["hire"]["items"] if row["template_key"] == "exclusion_screening")
     assert screening["badge"] == "due before start"
     assert screening["warning"] is False
+
+
+def test_packet_due_is_the_later_of_the_start_date_and_three_business_days() -> None:
+    monday = date(2026, 11, 16)
+    assert packet_due(date(2027, 1, 5), monday, set()) == date(2027, 1, 5)
+    assert packet_due(monday, monday, set()) == add_business_days(monday, 3, set())
+    assert add_business_days(monday, 3, set()) == date(2026, 11, 19)
 
 
 def test_blank_credentials_are_not_eligible_for_a_restricted_payer() -> None:

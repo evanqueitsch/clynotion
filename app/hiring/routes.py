@@ -365,6 +365,15 @@ def packet_complete(hire_id: str, user: CurrentUser) -> dict[str, Any]:
         _fail(exc)
 
 
+@router.post("/hiring/hires/{hire_id}/packet-undo")
+def packet_undo(hire_id: str, user: CurrentUser) -> dict[str, Any]:
+    _require_admin(user)
+    try:
+        return hiring.undo_packet_complete(user.practice_id, hire_id, _actor(user))
+    except HiringError as exc:
+        _fail(exc)
+
+
 @router.post("/hiring/hires/{hire_id}/delete")
 def delete_hire(hire_id: str, body: DeleteBody, user: CurrentUser) -> dict[str, bool]:
     _require_admin(user)
