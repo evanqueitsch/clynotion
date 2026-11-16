@@ -125,6 +125,15 @@
       border-color: var(--danger);
       outline: 2px solid var(--danger);
     }
+    input.from-resume {
+      box-shadow: inset 0 0 0 2px var(--accent);
+    }
+    .resume-note {
+      display: block;
+      margin: -0.45rem 0 0.85rem;
+      font-size: 0.8rem;
+      color: var(--muted);
+    }
     textarea { min-height: 120px; resize: vertical; }
     .row { display: flex; gap: 0.75rem; flex-wrap: wrap; align-items: center; }
     .row > * { flex: 1 1 auto; }
@@ -1130,7 +1139,7 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.19.7"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.21.4"></script>
+  <script src="/static/hiring.js?v=0.22.0"></script>
   <script>
     const state = {
       token: null,

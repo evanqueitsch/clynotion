@@ -195,6 +195,7 @@ class HiringEngine:
             "checklist_items",
             "document_refs",
             "forms_library",
+            "resumes",
         ):
             row.setdefault(bucket, {})
         row.setdefault("history", [])
@@ -427,7 +428,12 @@ class HiringEngine:
             payload = self._read()
             row = self._practice(payload, practice_id)
             self._expire_row(row)
+            resume_id = str(body.get("resume_id") or "").strip()
+            if resume_id and resume_id not in (row.get("resumes") or {}):
+                raise HiringError(400, "Upload the resume again.")
             offer = self._write_version(row, None, body, actor)
+            if resume_id:
+                self._link_resume(row, offer, resume_id)
             self._history(row, "offer", offer["id"], "drafted", actor, "Offer drafted")
             self._save(payload)
             return self._offer_public(row, offer)
@@ -444,11 +450,13 @@ class HiringEngine:
                 raise HiringError(409, "That offer can no longer be edited.")
             if offer["status"] == "draft":
                 self._write_version(row, offer, body, actor, replace=True)
+                self._link_resume(row, offer, str(body.get("resume_id") or "").strip())
                 self._history(row, "offer", offer_id, "revised", actor, "Draft updated")
             else:
                 self._void_tokens(row, "offer", offer_id, "new_version")
                 offer["status"] = "draft"
                 self._write_version(row, offer, body, actor, replace=False)
+                self._link_resume(row, offer, str(body.get("resume_id") or "").strip())
                 self._history(row, "offer", offer_id, "versioned", actor, "New version started")
             self._save(payload)
             return self._offer_public(row, offer)
@@ -603,6 +611,7 @@ class HiringEngine:
                 raise HiringError(404, "Offer not found.")
             if offer["status"] != "draft":
                 raise HiringError(409, "Only a draft can be deleted.")
+            self._drop_offer_resumes(row, offer)
             row["offers"].pop(offer_id, None)
             self._history(row, "offer", offer_id, "deleted", actor, "Draft deleted")
             self._save(payload)
@@ -644,6 +653,7 @@ class HiringEngine:
                 self._void_tokens(row, "hire", hire_id, "deleted")
                 row["hires"].pop(hire_id, None)
             self._void_tokens(row, "offer", offer_id, "deleted")
+            self._drop_offer_resumes(row, offer)
             row["offers"].pop(offer_id, None)
             self._history(row, "offer", offer_id, "deleted", actor, "Offer deleted")
             self._save(payload)
@@ -989,6 +999,8 @@ class HiringEngine:
             if not offer:
                 raise HiringError(404, "Offer not found.")
             version = row["offer_versions"][offer["current_version_id"]]
+            if kind == "resume":
+                return self._resume_download(row, offer, actor, payload)
             key = "pdf_object_key" if kind == "pdf" else "docx_object_key"
             mime = "application/pdf" if kind == "pdf" else "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             data = file_store().get(_ref(version[key], version.get("docx_backend") or "local", version.get("pdf_sha256") or ""))
@@ -996,6 +1008,78 @@ class HiringEngine:
             self._save(payload)
             filename = f"{offer_id}-offer.{kind if kind == 'pdf' else 'docx'}"
             return data, mime, filename
+
+    def upload_resume(self, practice_id: str, data: bytes, filename: str, actor: str) -> dict[str, Any]:
+        from app.hiring.resume import ResumeReadError, read_resume_for_upload, resume_mime
+
+        try:
+            fields = read_resume_for_upload(data, filename)
+            mime = resume_mime(data, filename)
+        except ResumeReadError as exc:
+            raise HiringError(400, str(exc)) from exc
+        resume_id = _new_id("res-")
+        store = file_store()
+        store.ensure_tree(resume_id)
+        ref = store.put(StorageKey("personnel", resume_id, "01-onboarding", "resume", 1), data, mime)
+        with _lock:
+            payload = self._read()
+            row = self._practice(payload, practice_id)
+            row["resumes"][resume_id] = {
+                "id": resume_id,
+                "object_key": ref.object_key,
+                "sha256": ref.sha256,
+                "mime": mime,
+                "size": len(data),
+                "backend": ref.backend,
+                "offer_id": "",
+                "created_at": _iso(),
+            }
+            self._history(row, "resume", resume_id, "uploaded", actor, "Resume uploaded")
+            self._save(payload)
+        return {"resume_id": resume_id, "fields": fields}
+
+    def _link_resume(self, row: dict[str, Any], offer: dict[str, Any], resume_id: str) -> None:
+        if not resume_id:
+            return
+        resume = (row.get("resumes") or {}).get(resume_id)
+        if not resume:
+            raise HiringError(400, "Upload the resume again.")
+        owner = str(resume.get("offer_id") or "")
+        if owner and owner != offer["id"]:
+            raise HiringError(409, "That resume is already on another offer.")
+        previous = str(offer.get("resume_id") or "")
+        if previous and previous != resume_id:
+            self._drop_resume(row, previous)
+        resume["offer_id"] = offer["id"]
+        offer["resume_id"] = resume_id
+
+    def _drop_offer_resumes(self, row: dict[str, Any], offer: dict[str, Any]) -> None:
+        offer_id = offer.get("id") or ""
+        linked = str(offer.get("resume_id") or "")
+        for resume_id, resume in list((row.get("resumes") or {}).items()):
+            if resume_id == linked or resume.get("offer_id") == offer_id:
+                self._drop_resume(row, resume_id)
+
+    def _drop_resume(self, row: dict[str, Any], resume_id: str) -> None:
+        resume = (row.get("resumes") or {}).pop(resume_id, None)
+        if not resume:
+            return
+        _delete_stored(file_store(), str(resume.get("object_key") or ""))
+
+    def _resume_download(
+        self, row: dict[str, Any], offer: dict[str, Any], actor: str, payload: dict[str, Any]
+    ) -> tuple[bytes, str, str]:
+        resume = (row.get("resumes") or {}).get(offer.get("resume_id") or "")
+        if not resume:
+            raise HiringError(404, "That resume is not on file.")
+        data = file_store().get(
+            _ref(str(resume.get("object_key") or ""), str(resume.get("backend") or "local"), str(resume.get("sha256") or ""))
+        )
+        self._history(row, "resume", str(resume.get("id") or ""), "downloaded", actor, "Resume downloaded")
+        self._save(payload)
+        mime = str(resume.get("mime") or "application/octet-stream")
+        extension = {"application/pdf": "pdf", "text/plain": "txt"}.get(mime, "docx")
+        return data, mime, f"resume.{extension}"
 
     def _offer_public(self, row: dict[str, Any], offer: dict[str, Any]) -> dict[str, Any]:
         candidate = row["candidates"].get(offer["candidate_id"]) or {}
@@ -1026,6 +1110,7 @@ class HiringEngine:
             "link_active": self._active_token(row, "offer", offer["id"]) is not None and offer["status"] in {"sent", "viewed"},
             "acceptance": _acceptance_public(acceptance) if acceptance else None,
             "hire_id": hire["id"] if hire else "",
+            "resume": bool(offer.get("resume_id")) and offer.get("resume_id") in (row.get("resumes") or {}),
         }
 
     def _hire_public(self, row: dict[str, Any], hire: dict[str, Any]) -> dict[str, Any]:
@@ -1356,6 +1441,9 @@ class HiringEngine:
             if not candidate:
                 raise HiringError(404, "Candidate not found.")
             offer_ids = [offer["id"] for offer in row["offers"].values() if offer.get("candidate_id") == candidate_id]
+            for offer in list(row["offers"].values()):
+                if offer.get("id") in offer_ids:
+                    self._drop_offer_resumes(row, offer)
             hire_ids = [hire["id"] for hire in row["hires"].values() if hire.get("candidate_id") == candidate_id]
             removed_files = 0
             store = file_store()

@@ -54,6 +54,7 @@ class OfferBody(BaseModel):
     start_date: str = ""
     response_deadline: str = ""
     direct_client_access: Optional[bool] = None
+    resume_id: str = ""
 
 
 class SendBody(BaseModel):
@@ -126,6 +127,16 @@ def put_settings(body: SettingsBody, user: CurrentUser) -> dict[str, Any]:
     patch = body.model_dump(exclude_none=True)
     try:
         return hiring.update_settings(user.practice_id, patch, _actor(user))
+    except HiringError as exc:
+        _fail(exc)
+
+
+@router.post("/hiring/resumes")
+async def post_resume(user: CurrentUser, resume: UploadFile = File(...)) -> dict[str, Any]:
+    _require_admin(user)
+    data = await resume.read()
+    try:
+        return hiring.upload_resume(user.practice_id, data, resume.filename or "", _actor(user))
     except HiringError as exc:
         _fail(exc)
 
@@ -261,7 +272,7 @@ def force_expire(offer_id: str, user: CurrentUser) -> dict[str, Any]:
 @router.get("/hiring/offers/{offer_id}/{kind}")
 def download_offer(offer_id: str, kind: str, user: CurrentUser) -> Response:
     _require_admin(user)
-    if kind not in {"pdf", "docx"}:
+    if kind not in {"pdf", "docx", "resume"}:
         raise HTTPException(status_code=404, detail="Not found.")
     try:
         data, mime, name = hiring.offer_bytes(user.practice_id, offer_id, kind, _actor(user))

@@ -82,6 +82,7 @@
       body[field[0]] = valueOf(field[0]);
     });
     body.display_name = body.candidate_full_name;
+    body.resume_id = valueOf("resume_id");
     return body;
   }
 
@@ -213,6 +214,27 @@
       saveOffer();
     });
     form.style.marginTop = "1rem";
+    const resumeWrap = document.createElement("div");
+    resumeWrap.id = "hire-resume-wrap";
+    const resumeLabel = document.createElement("label");
+    resumeLabel.textContent = "Upload resume";
+    const resumeInput = document.createElement("input");
+    resumeInput.id = "hire-resume";
+    resumeInput.type = "file";
+    resumeInput.accept = ".pdf,.docx,.txt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain";
+    resumeInput.addEventListener("change", function () {
+      const file = resumeInput.files && resumeInput.files[0];
+      resumeInput.value = "";
+      uploadResume(file);
+    });
+    resumeLabel.appendChild(resumeInput);
+    resumeWrap.appendChild(resumeLabel);
+    form.appendChild(resumeWrap);
+    const resumeId = document.createElement("input");
+    resumeId.id = "hire-resume-id";
+    resumeId.name = "resume_id";
+    resumeId.type = "hidden";
+    form.appendChild(resumeId);
     const typeLabel = document.createElement("label");
     typeLabel.textContent = "Employment type *";
     const type = document.createElement("select");
@@ -265,7 +287,12 @@
     clear.textContent = "New offer";
     clear.onclick = function () {
       editing.value = "";
+      const kept = document.getElementById("hire-resume-id");
+      if (kept) kept.value = "";
+      const wrap = document.getElementById("hire-resume-wrap");
+      if (wrap) wrap.hidden = false;
       fillForm(null);
+      clearResumeNotes();
       showStatus("", "ok");
     };
     actions.appendChild(save);
@@ -319,6 +346,11 @@
       button("DOCX", "ghost", function () {
         download(offer.id, "docx");
       });
+      if (offer.resume) {
+        button("Resume", "ghost", function () {
+          download(offer.id, "resume");
+        });
+      }
       if (offer.status === "draft") {
         button("Mark sent", "primary", function () {
           post(offer.id, "/send", { channel: "outside" }, "Marked sent.");
@@ -366,6 +398,65 @@
         fillForm(match);
       }
     }
+    const wrap = document.getElementById("hire-resume-wrap");
+    if (wrap) wrap.hidden = !!editId;
+  }
+
+  function clearResumeNotes() {
+    document.querySelectorAll("#hire-form .resume-note").forEach(function (node) {
+      node.remove();
+    });
+    document.querySelectorAll("#hire-form .from-resume").forEach(function (node) {
+      node.classList.remove("from-resume");
+    });
+  }
+
+  function markFromResume(input) {
+    if (!input) return;
+    input.classList.add("from-resume");
+    if (input.parentElement && !input.parentElement.querySelector(".resume-note")) {
+      const note = document.createElement("span");
+      note.className = "resume-note";
+      note.textContent = "Filled from resume, please check.";
+      input.insertAdjacentElement("afterend", note);
+    }
+  }
+
+  function applyResume(fields) {
+    const incoming = fields || {};
+    ["candidate_full_name", "candidate_first_name", "personal_email", "candidate_credentials", "position_title"].forEach(function (name) {
+      const value = String(incoming[name] || "").trim();
+      const input = document.getElementById("hire-" + name);
+      if (!value || !input || String(input.value || "").trim()) return;
+      input.value = value;
+      markFromResume(input);
+    });
+    const phoneValue = String(incoming.phone || "").trim();
+    const phone = document.getElementById("hire-phone") || document.getElementById("hire-personal_phone");
+    if (phoneValue && phone && !String(phone.value || "").trim()) {
+      phone.value = phoneValue;
+      markFromResume(phone);
+    }
+  }
+
+  async function uploadResume(file) {
+    if (!file) return;
+    if (file.size > 10 * 1024 * 1024) {
+      showStatus("That resume is larger than 10 MB.", "error");
+      return;
+    }
+    showStatus("Reading resume…", "ok");
+    const body = new FormData();
+    body.append("resume", file, file.name || "resume");
+    try {
+      const data = await ui().api("/hiring/resumes", { method: "POST", body: body });
+      const hidden = document.getElementById("hire-resume-id");
+      if (hidden) hidden.value = (data && data.resume_id) || "";
+      applyResume(data && data.fields);
+      showStatus("", "ok");
+    } catch (error) {
+      showStatus((error && error.message) || "That resume could not be read.", "error");
+    }
   }
 
   let saving = false;
@@ -376,7 +467,7 @@
     const saveButton = formEl() && formEl().querySelector("button[type=submit]");
     if (saveButton) saveButton.disabled = true;
     clearFieldErrors();
-    showStatus("", "");
+    showStatus("Saving…", "ok");
     try {
       let body;
       try {
