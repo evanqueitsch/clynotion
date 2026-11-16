@@ -707,6 +707,35 @@ class CredentialingStore:
         self._save(payload)
         return _public_payer(current)
 
+    def mark_created_by_hire(
+        self, practice_id: str, subject_id: str, hire_id: str, enrollment_keys: list[str]
+    ) -> None:
+        """Tag only the subject and cells this hire just created."""
+        payload, row = self._load_practice(practice_id)
+        subject = row["subjects"].get(subject_id)
+        if isinstance(subject, dict) and not subject.get("created_by_hire"):
+            subject["created_by_hire"] = hire_id
+        for key in enrollment_keys:
+            enrollment = row["enrollments"].get(key)
+            if isinstance(enrollment, dict) and not enrollment.get("created_by_hire"):
+                enrollment["created_by_hire"] = hire_id
+        self._save(payload)
+
+    def remove_created_by_hire(self, practice_id: str, hire_id: str) -> None:
+        """Drop credentialing rows this hire created. Every other row stays."""
+        payload, row = self._load_practice(practice_id)
+        changed = False
+        for subject_id, subject in list(row["subjects"].items()):
+            if isinstance(subject, dict) and subject.get("created_by_hire") == hire_id:
+                row["subjects"].pop(subject_id, None)
+                changed = True
+        for key, enrollment in list(row["enrollments"].items()):
+            if isinstance(enrollment, dict) and enrollment.get("created_by_hire") == hire_id:
+                row["enrollments"].pop(key, None)
+                changed = True
+        if changed:
+            self._save(payload)
+
     def archive_subject(self, practice_id: str, subject_id: str, *, actor: str) -> dict[str, Any]:
         payload, row = self._load_practice(practice_id)
         current = row["subjects"].get(subject_id)

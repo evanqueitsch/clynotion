@@ -32,6 +32,8 @@ class DriveClient(Protocol):
 
     def ensure_child(self, parent_id: str, name: str) -> str: ...
 
+    def trash(self, file_id: str) -> None: ...
+
     def move(self, file_id: str, folder_id: str, name: str = "") -> None: ...
 
 
@@ -66,6 +68,11 @@ def resume_filename(full_name: str, mime: str) -> str:
 def signed_offer_filename(full_name: str) -> str:
     """Last_First_offer-signed.pdf, in the same order as the personnel folder."""
     return f"{_file_stem(full_name)}_offer-signed.pdf"
+
+
+def offer_letter_filename(full_name: str) -> str:
+    """Last_First_offer-letter.pdf, in the same order as the personnel folder."""
+    return f"{_file_stem(full_name)}_offer-letter.pdf"
 
 
 ONBOARDING_FOLDERS = ("01 Onboarding", "02 Payroll & Tax", "03 Credentialing", "04 Clearances")
@@ -153,6 +160,16 @@ class PersonnelDrive:
         )
         if getattr(response, "status_code", 500) not in {200, 201}:
             raise StorageError("drive_move_failed")
+
+    def trash(self, file_id: str) -> None:
+        response = self._request(
+            "PATCH",
+            f"{_FILES}/{file_id}",
+            params={"supportsAllDrives": "true", "fields": "id,trashed"},
+            json={"trashed": True},
+        )
+        if getattr(response, "status_code", 500) not in {200, 201}:
+            raise StorageError("drive_trash_failed")
 
     def upload(self, folder_id: str, filename: str, data: bytes, mime: str) -> str:
         boundary = "clynotion" + uuid.uuid4().hex

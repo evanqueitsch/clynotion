@@ -9,6 +9,7 @@ from fastapi.testclient import TestClient
 
 from app.auth import User, issue_token
 from app.credentialing.store import credentialing_store
+from app.hiring.checklist import clearance_state
 from app.hiring.personnel_drive import clear_personnel_drive_for_tests, set_personnel_drive_for_tests
 from app.hiring.resume import ground_fields
 from app.main import app
@@ -52,6 +53,7 @@ class RecordingDrive:
     def __init__(self) -> None:
         self.folders: dict[str, str] = {}
         self.files: dict[str, dict] = {}
+        self.trashed: list[str] = []
         self.created = 0
 
     def ensure_folder(self, folder_id: str, name: str) -> tuple[str, str]:
@@ -90,6 +92,11 @@ class RecordingDrive:
         self.files[file_id]["parent"] = folder_id
         if name:
             self.files[file_id]["name"] = name
+
+    def trash(self, file_id: str) -> None:
+        self.trashed.append(file_id)
+        if file_id in self.files:
+            self.files[file_id]["trashed"] = True
 
 
 def test_all_caps_and_lower_names_are_title_cased() -> None:
@@ -212,7 +219,10 @@ def test_paper_acceptance_files_the_signed_pdf_and_builds_the_checklist() -> Non
         assert drive.folders[parent] == "Sample, Riley"
         onboarding_id = next(file_id for file_id, meta in drive.files.items() if meta.get("name") == "01 Onboarding")
         onboarding_files = [meta for meta in drive.files.values() if meta.get("parent") == onboarding_id]
-        assert any(item.get("name") == "offer-letter.pdf" for item in onboarding_files)
+        assert any(item.get("name") == "Sample_Riley_offer-letter.pdf" for item in onboarding_files)
+        clearances = next(item for item in hire["items"] if item["template_key"] == "clearances")
+        assert clearances["warning"] is True
+        assert clearances["badge"] == "due before start"
         assert any(item.get("name") == "Sample_Riley_offer-signed.pdf" for item in onboarding_files)
         again = client.post(
             f"/hiring/offers/{offer_id}/accept-paper",
@@ -358,3 +368,91 @@ def test_activate_adds_credentialing_cells_without_overwriting() -> None:
     grid = credentialing_store.public_grid("practice-a")
     cell = next(item for item in grid["cells"] if item["subject_id"] == subject["id"] and item["payer_id"] == payer["id"])
     assert cell["status"] == "in_network"
+
+
+def test_clearance_badge_is_amber_before_the_due_date_and_red_after() -> None:
+    from datetime import date, timedelta
+
+    today = date(2026, 11, 16)
+    state = clearance_state(direct=True, status="open", due=today + timedelta(days=10), today=today)
+    assert state == {"warning": False, "badge": "due before start"}
+    late = clearance_state(direct=True, status="open", due=today, today=today)
+    assert late == {"warning": True, "badge": "due before start"}
+    assert clearance_state(direct=False, status="open", due=today, today=today)["badge"] == ""
+    assert clearance_state(direct=True, status="done", due=today, today=today)["warning"] is False
+    created = client.post(
+        "/hiring/offers",
+        headers=_alice(),
+        json=_offer(email="late.sample@example.com", name="Late Sample", start_date="06/01/2027"),
+    )
+    assert created.status_code == 200, created.text
+    offer_id = created.json()["id"]
+    client.post(f"/hiring/offers/{offer_id}/send", headers=_alice(), json={"channel": "outside"})
+    accepted = client.post(f"/hiring/offers/{offer_id}/accept", headers=_alice(), json={"typed_name": "Late Sample"})
+    item = next(row for row in accepted.json()["hire"]["items"] if row["template_key"] == "clearances")
+    assert item["badge"] == "due before start"
+    assert item["warning"] is False
+
+
+def test_delete_hire_requires_the_exact_name_and_only_removes_that_hire() -> None:
+    drive = RecordingDrive()
+    set_personnel_drive_for_tests(drive)
+    try:
+        other = credentialing_store.save_subject(
+            "practice-a",
+            {"name": "Other Example", "kind": "clinician"},
+            actor="qa",
+        )
+        created = client.post(
+            "/hiring/offers",
+            headers=_alice(),
+            json=_offer(email="deleteme.sample@example.com", name="Delete Me Sample", direct_client_access=False),
+        )
+        offer_id = created.json()["id"]
+        client.post(f"/hiring/offers/{offer_id}/send", headers=_alice(), json={"channel": "outside"})
+        accepted = client.post(
+            f"/hiring/offers/{offer_id}/accept-paper",
+            headers=_alice(),
+            data={"accepted_on": _today()},
+            files={"upload": ("signed.pdf", b"%PDF-1.4 synthetic", "application/pdf")},
+        )
+        assert accepted.status_code == 200, accepted.text
+        hire_id = accepted.json()["hire"]["id"]
+        client.post(
+            f"/hiring/hires/{hire_id}/items/packet_signed",
+            headers=_alice(),
+            json={"status": "done"},
+        )
+        activated = client.post(
+            f"/hiring/hires/{hire_id}/activate",
+            headers=_alice(),
+            json={"work_email": "deleteme.sample@example.com"},
+        )
+        assert activated.status_code == 200, activated.text
+        kept = client.post(
+            f"/hiring/hires/{hire_id}/delete",
+            headers=_alice(),
+            json={"confirm": "wrong name"},
+        )
+        assert kept.status_code == 400
+        assert any(item["id"] == hire_id for item in client.get("/hiring/bootstrap", headers=_alice()).json()["hires"])
+        removed = client.post(
+            f"/hiring/hires/{hire_id}/delete",
+            headers=_alice(),
+            json={"confirm": "Delete Me Sample"},
+        )
+        assert removed.status_code == 200, removed.text
+        hires = client.get("/hiring/bootstrap", headers=_alice()).json()["hires"]
+        assert all(item["id"] != hire_id for item in hires)
+        names = [item["name"] for item in credentialing_store.public_grid("practice-a")["subjects"]]
+        assert "Delete Me Sample" not in names
+        assert "Other Example" in names
+        assert other["id"]
+        open_refs = [item.source_ref for item in due_engine.list_open("practice-a")]
+        assert hire_id not in open_refs
+        assert hire_id + ":packet" not in open_refs
+        assert drive.trashed
+        assert all(drive.files[file_id].get("trashed") for file_id in drive.trashed if file_id in drive.files)
+        assert client.get("/hiring/offers/" + offer_id, headers=_alice()).status_code == 200
+    finally:
+        clear_personnel_drive_for_tests()

@@ -356,6 +356,16 @@ def download_document(document_id: str, user: CurrentUser) -> Response:
     return Response(content=data, media_type=mime, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+@router.post("/hiring/hires/{hire_id}/delete")
+def delete_hire(hire_id: str, body: DeleteBody, user: CurrentUser) -> dict[str, bool]:
+    _require_admin(user)
+    try:
+        hiring.delete_hire(user.practice_id, hire_id, body.confirm, _actor(user))
+    except HiringError as exc:
+        _fail(exc)
+    return {"deleted": True}
+
+
 @router.post("/hiring/hires/{hire_id}/activate")
 def activate(hire_id: str, body: ActivateBody, user: CurrentUser) -> dict[str, Any]:
     _require_admin(user)

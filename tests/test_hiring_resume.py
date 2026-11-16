@@ -233,7 +233,7 @@ def test_personnel_folder_is_created_once_and_receives_resume_then_pdf() -> None
         assert len(drive.uploads) == 1
         sent = client.post(f"/hiring/offers/{offer['id']}/send", headers=_alice(), json={"channel": "outside"})
         assert sent.status_code == 200, sent.text
-        assert [item[1] for item in drive.uploads] == ["Example_Jordan_resume.txt", "offer-letter.pdf"]
+        assert [item[1] for item in drive.uploads] == ["Example_Jordan_resume.txt", "Example_Jordan_offer-letter.pdf"]
         retry = client.post(f"/hiring/offers/{offer['id']}/drive", headers=_alice())
         assert retry.status_code == 200, retry.text
         assert len(drive.uploads) == 2

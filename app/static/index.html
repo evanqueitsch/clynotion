@@ -446,6 +446,59 @@
       padding: 0.4rem 0.85rem;
       font-size: 0.82rem;
     }
+    #hiring-panel, #hiring-root { max-width: 100%; overflow-x: hidden; }
+    #hiring-root .hire-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; max-width: 100%; }
+    #hiring-root .due-row { flex-wrap: wrap; min-width: 0; max-width: 100%; }
+    #hiring-root .due-row > div { min-width: 0; }
+    #hiring-root .hire-card, #hiring-root .hire-decision {
+      display: block;
+      max-width: 100%;
+      min-width: 0;
+      margin: 0.5rem 0;
+      padding: 0.75rem;
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      background: rgba(255, 255, 255, 0.55);
+      box-sizing: border-box;
+    }
+    #hiring-root .hire-item {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 0.4rem;
+      max-width: 100%;
+      min-width: 0;
+      margin: 0.35rem 0;
+    }
+    #hiring-root .hire-item-text {
+      flex: 1 1 16rem;
+      min-width: 0;
+      white-space: normal;
+      overflow-wrap: anywhere;
+    }
+    #hiring-root .hire-item.late .hire-item-text { color: #8b2e2e; font-weight: 600; }
+    #hiring-root textarea, #hiring-root input, #hiring-root select { max-width: 100%; box-sizing: border-box; }
+    .badge-due {
+      background: #f4e2b8;
+      color: #6a4b12;
+      border-radius: 999px;
+      padding: 0.1rem 0.5rem;
+      font-size: 0.75rem;
+      white-space: nowrap;
+    }
+    #hiring-status.busy::before {
+      content: "";
+      display: inline-block;
+      width: 0.8rem;
+      height: 0.8rem;
+      margin-right: 0.4rem;
+      border: 2px solid currentColor;
+      border-right-color: transparent;
+      border-radius: 50%;
+      vertical-align: -0.1rem;
+      animation: hire-spin 0.8s linear infinite;
+    }
+    @keyframes hire-spin { to { transform: rotate(360deg); } }
     .time-mini {
       width: 4.6rem !important;
       margin: 0 !important;
@@ -1139,7 +1192,7 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.19.7"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.23.0"></script>
+  <script src="/static/hiring.js?v=0.23.1"></script>
   <script>
     const state = {
       token: null,
