@@ -27,6 +27,8 @@ FLASH_VARIANTS = ("gemini-3-flash", "gemini-3.1-flash", "gemini-3-flash-001", "g
 VERTEX_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 _MODEL_CACHE_SECONDS = 3600
 _model_cache: tuple[float, str] | None = None
+_last_model_lists: list[dict[str, Any]] = []
+_last_first_attempt: dict[str, Any] = {}
 FIELD_NAMES = (
     "candidate_full_name",
     "candidate_first_name",
@@ -83,6 +85,7 @@ class ResumeReadError(ValueError):
         self.model = model
         self.location = location
         self.attempts = list(attempts or [])
+        self.body = ""
 
 
 def resume_mode() -> str:
@@ -317,23 +320,34 @@ def _json_object(raw: str) -> dict[str, Any]:
 
 
 def _gemini_complete(text: str) -> tuple[str, str, str, list[dict[str, Any]]]:
+    global _last_first_attempt
     token = _gemini_token()
     project = _gemini_project()
     attempts: list[dict[str, Any]] = []
     last_error: ResumeReadError | None = None
+    first = True
     for location, model in _model_attempts(token):
         try:
             reply = _generate(project, location, model, token, text)
         except ResumeReadError as exc:
-            attempts.append(
-                {"model": model, "location": location, "status": exc.http_status or exc.google_status or "error"}
-            )
+            record = {"model": model, "location": location, "status": exc.http_status or exc.google_status or "error"}
+            attempts.append(record)
+            if first:
+                _last_first_attempt = {
+                    "model": model,
+                    "location": location,
+                    "http_status": exc.http_status,
+                    "body": exc.body,
+                }
+            first = False
             exc.attempts = list(attempts)
             last_error = exc
             if exc.google_status == "NOT_FOUND" or exc.http_status == 404:
                 continue
             raise
         attempts.append({"model": model, "location": location, "status": 200})
+        if first:
+            _last_first_attempt = {"model": model, "location": location, "http_status": 200, "body": ""}
         return reply, model, location, attempts
     if last_error is not None:
         last_error.attempts = attempts
@@ -347,16 +361,15 @@ def clear_model_cache() -> None:
 
 
 def _model_attempts(token: str) -> list[tuple[str, str]]:
-    models: list[str] = []
-    override = (os.environ.get("GEMINI_MODEL") or "").strip()
-    if override:
-        models.append(override)
-    newest = _newest_flash_model(token)
-    if newest and newest not in models:
-        models.append(newest)
-    for name in FLASH_VARIANTS:
-        if name not in models:
-            models.append(name)
+    global _last_model_lists
+    project = _gemini_project()
+    model_ids, reports = _fetch_model_lists(token, project)
+    _last_model_lists = reports
+    newest = _prefer_flash(model_ids)
+    if newest:
+        global _model_cache
+        _model_cache = (time.time(), newest)
+    models = _candidate_models(model_ids)
     locations = ["global"]
     regional = (os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-east4").strip() or "us-east4"
     if regional not in locations:
@@ -372,71 +385,93 @@ def _model_attempts(token: str) -> list[tuple[str, str]]:
     return attempts
 
 
-def _newest_flash_model(token: str) -> str:
-    global _model_cache
-    now = time.time()
-    if _model_cache and now - _model_cache[0] < _MODEL_CACHE_SECONDS:
-        return _model_cache[1]
-    try:
-        catalog = _list_publisher_models(token)
-    except Exception as exc:
-        _log_failure(stage="model_list", exc=exc)
-        return ""
-    picked = _choose_ga_flash(catalog)
-    if picked:
-        _model_cache = (now, picked)
-    return picked
-
-
-def _list_publisher_models(token: str) -> list[dict[str, Any]]:
-    found: list[dict[str, Any]] = []
-    page = ""
-    for _ in range(5):
-        params: dict[str, str] = {"pageSize": "100"}
-        if page:
-            params["pageToken"] = page
-        response = httpx.get(
-            "https://aiplatform.googleapis.com/v1/publishers/google/models",
-            headers={"Authorization": f"Bearer {token}"},
-            params=params,
-            timeout=15.0,
+def _fetch_model_lists(token: str, project: str) -> tuple[list[str], list[dict[str, Any]]]:
+    """Query both publisher-model endpoints. Ids are kept exactly as listed."""
+    urls = [
+        "https://aiplatform.googleapis.com/v1beta1/publishers/google/models",
+        f"https://us-central1-aiplatform.googleapis.com/v1/projects/{project}/locations/us-central1/publishers/google/models",
+    ]
+    reports: list[dict[str, Any]] = []
+    ids: list[str] = []
+    for url in urls:
+        try:
+            response = httpx.get(
+                url,
+                headers={"Authorization": f"Bearer {token}"},
+                params={"pageSize": "100"},
+                timeout=15.0,
+            )
+        except httpx.HTTPError as exc:
+            reports.append(
+                {"url": url, "http_status": 0, "count": 0, "model_ids": [], "body": type(exc).__name__}
+            )
+            continue
+        raw = _public_snippet(getattr(response, "text", "") or "", limit=500)
+        found = _ids_from_response(response) if response.status_code < 400 else []
+        for model_id in found:
+            if model_id not in ids:
+                ids.append(model_id)
+        reports.append(
+            {
+                "url": url,
+                "http_status": response.status_code,
+                "count": len(found),
+                "model_ids": found[:30],
+                "body": raw,
+            }
         )
-        if response.status_code >= 400:
-            info = _google_error(response)
-            _log_failure(stage="model_list", **info)
-            break
-        body = response.json() if response.content else {}
-        if not isinstance(body, dict):
-            break
-        batch = body.get("publisherModels") or body.get("models") or []
-        if isinstance(batch, list):
-            found.extend(item for item in batch if isinstance(item, dict))
-        page = str(body.get("nextPageToken") or "")
-        if not page:
-            break
+    return ids, reports
+
+
+def _ids_from_response(response: Any) -> list[str]:
+    try:
+        body = response.json()
+    except Exception:
+        return []
+    items: list[Any] = []
+    if isinstance(body, list):
+        items = body
+    elif isinstance(body, dict):
+        for key in ("publisherModels", "models", "publisher_models"):
+            batch = body.get(key)
+            if isinstance(batch, list):
+                items = batch
+                break
+    found: list[str] = []
+    for item in items:
+        if isinstance(item, str):
+            model_id = item.rsplit("/", 1)[-1]
+        elif isinstance(item, dict):
+            model_id = str(item.get("name") or item.get("model") or "").rsplit("/", 1)[-1]
+        else:
+            continue
+        if model_id and model_id not in found:
+            found.append(model_id)
     return found
 
 
-def _choose_ga_flash(catalog: list[dict[str, Any]]) -> str:
-    ranked: list[tuple[tuple[int, int], str]] = []
-    for item in catalog:
-        model_id = str(item.get("name") or "").rsplit("/", 1)[-1]
-        if not _ga_flash(item, model_id):
-            continue
-        ranked.append((_version_key(model_id), model_id))
-    if not ranked:
+def _prefer_flash(model_ids: list[str]) -> str:
+    flash = [model_id for model_id in model_ids if "flash" in model_id.lower()]
+    if not flash:
         return ""
-    ranked.sort(reverse=True)
-    return ranked[0][1]
+    flash.sort(key=lambda model_id: (_version_key(model_id), "preview" not in model_id.lower()), reverse=True)
+    return flash[0]
 
 
-def _ga_flash(item: dict[str, Any], model_id: str) -> bool:
-    stage = str(item.get("launchStage") or "").upper()
-    if stage not in {"GA", "LAUNCH_STAGE_GA"}:
-        return False
-    if not re.fullmatch(r"gemini-\d+(?:\.\d+)?-flash(?:@\d+)?", model_id):
-        return False
-    return "preview" not in model_id and "exp" not in model_id
+def _candidate_models(model_ids: list[str]) -> list[str]:
+    models: list[str] = []
+    override = (os.environ.get("GEMINI_MODEL") or "").strip()
+    if override:
+        models.append(override)
+    newest = _prefer_flash(model_ids)
+    if newest and newest not in models:
+        models.append(newest)
+    listed_three = [model_id for model_id in model_ids if "flash" in model_id.lower() and "gemini-3" in model_id.lower()]
+    listed_three.sort(key=_version_key, reverse=True)
+    for name in listed_three + list(FLASH_VARIANTS):
+        if name not in models:
+            models.append(name)
+    return models
 
 
 def _version_key(model_id: str) -> tuple[int, int]:
@@ -468,8 +503,9 @@ def _generate(project: str, location: str, model: str, token: str, text: str) ->
         raise ResumeReadError("The resume could not be read.", stage="vertex", model=model, location=location) from exc
     if response.status_code >= 400:
         info = _google_error(response)
+        snippet = _public_snippet(getattr(response, "text", "") or "", limit=500)
         _log_failure(stage="vertex", model=model, location=location, **info)
-        raise ResumeReadError(
+        error = ResumeReadError(
             "The resume could not be read.",
             stage="vertex",
             http_status=int(info["http_status"] or 0),
@@ -478,6 +514,8 @@ def _generate(project: str, location: str, model: str, token: str, text: str) ->
             model=model,
             location=location,
         )
+        error.body = snippet
+        raise error
     try:
         payload = response.json()
         return str(payload["candidates"][0]["content"]["parts"][0]["text"])
@@ -591,6 +629,23 @@ def _google_error(response: Any) -> dict[str, Any]:
     }
 
 
+def _public_snippet(value: str, limit: int = 500) -> str:
+    text = str(value or "")
+    text = re.sub(r"-----BEGIN [^-]+-----.*?-----END [^-]+-----", "[redacted]", text, flags=re.S)
+    text = re.sub(r'("private_key"\s*:\s*")[^"]*"', r'\1[redacted]"', text)
+    text = " ".join(text.split())
+    return text[:limit]
+
+
+def _account_identity() -> tuple[str, str]:
+    try:
+        account = _service_account()
+    except ResumeReadError:
+        return "", ""
+    project = (os.environ.get("GOOGLE_CLOUD_PROJECT") or str(account.get("project_id") or "")).strip()
+    return project, str(account.get("client_email") or "")
+
+
 def _sanitize(value: str) -> str:
     text = " ".join(str(value or "").split())
     text = _EMAIL.sub("[email]", text)
@@ -625,14 +680,36 @@ def reader_health() -> dict[str, Any]:
     """A tiny non-PHI check. Mock mode does not call Vertex."""
     mode = resume_mode()
     pypdf_ok = _pypdf_installed()
+    project_id, service_account = _account_identity()
     if mode == "mock":
-        return {"ok": True, "mode": "mock", "model": "", "chosen_model": "", "location": "", "attempts": [], "scope": VERTEX_SCOPE, "pypdf": pypdf_ok}
+        return {
+            "ok": True,
+            "mode": "mock",
+            "model": "",
+            "chosen_model": "",
+            "location": "",
+            "attempts": [],
+            "project_id": project_id,
+            "service_account": service_account,
+            "model_lists": [],
+            "first_attempt": {},
+            "scope": VERTEX_SCOPE,
+            "pypdf": pypdf_ok,
+        }
     if not resume_configured():
         return {
             "ok": False,
             "mode": mode,
             "stage": "not_configured",
             "error": "Resume reading is not configured.",
+            "model": "",
+            "chosen_model": "",
+            "location": "",
+            "attempts": [],
+            "project_id": project_id,
+            "service_account": service_account,
+            "model_lists": [],
+            "first_attempt": {},
             "scope": VERTEX_SCOPE,
             "pypdf": pypdf_ok,
         }
@@ -651,6 +728,10 @@ def reader_health() -> dict[str, Any]:
             "location": exc.location,
             "attempts": exc.attempts,
             "error": "The resume reader could not reach Vertex.",
+            "project_id": project_id,
+            "service_account": service_account,
+            "model_lists": list(_last_model_lists),
+            "first_attempt": dict(_last_first_attempt),
             "scope": VERTEX_SCOPE,
             "pypdf": pypdf_ok,
         }
@@ -661,6 +742,10 @@ def reader_health() -> dict[str, Any]:
         "chosen_model": model,
         "location": location,
         "attempts": attempts,
+        "project_id": project_id,
+        "service_account": service_account,
+        "model_lists": list(_last_model_lists),
+        "first_attempt": dict(_last_first_attempt),
         "scope": VERTEX_SCOPE,
         "pypdf": pypdf_ok,
     }

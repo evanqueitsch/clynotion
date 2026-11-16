@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import io
+import json
 import logging
 import zipfile
 
@@ -404,6 +405,7 @@ class _VertexResponse:
     def __init__(self, status: int, body: dict) -> None:
         self.status_code = status
         self._body = body
+        self.text = json.dumps(body)
 
     def json(self) -> dict:
         return self._body
@@ -424,7 +426,7 @@ def test_not_found_model_falls_back_and_logs_without_resume_text(monkeypatch, ca
     calls: list[str] = []
 
     def fake_get(url: str, **_kwargs):
-        assert url == "https://aiplatform.googleapis.com/v1/publishers/google/models"
+        assert "publishers/google/models" in url
         return _VertexResponse(
             200,
             {
@@ -526,6 +528,14 @@ def test_resume_reader_health_reports_attempts(monkeypatch) -> None:
     assert report["ok"] is True
     assert report["chosen_model"] == "gemini-3.1-flash"
     assert report["location"] == "global"
+    assert report["project_id"] == "attune-clynotion"
+    assert report["service_account"] == "sa@attune-clynotion.iam.gserviceaccount.com"
+    assert "private_key" not in json.dumps(report)
+    assert len(report["model_lists"]) == 2
+    assert report["model_lists"][0]["http_status"] == 200
+    assert "gemini-3-flash" in report["model_lists"][0]["model_ids"]
+    assert report["first_attempt"]["http_status"] == 404
+    assert "missing" in report["first_attempt"]["body"]
     assert report["attempts"][0] == {"model": "gemini-3-flash", "location": "global", "status": 404}
     assert report["attempts"][1]["model"] == "gemini-3.1-flash"
     assert report["attempts"][1]["status"] == 200
