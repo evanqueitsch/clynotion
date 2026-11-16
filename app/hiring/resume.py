@@ -8,6 +8,7 @@ and nothing from the resume is written to logs.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import time
@@ -18,7 +19,12 @@ from xml.etree import ElementTree
 
 import httpx
 
+logger = logging.getLogger("app.hiring.resume")
+
 MAX_RESUME_BYTES = 10 * 1024 * 1024
+DEFAULT_MODEL = "gemini-2.5-flash"
+FALLBACK_MODEL = "gemini-2.5-flash-lite"
+VERTEX_SCOPE = "https://www.googleapis.com/auth/cloud-platform"
 FIELD_NAMES = (
     "candidate_full_name",
     "candidate_first_name",
@@ -54,6 +60,25 @@ Resume:
 
 class ResumeReadError(ValueError):
     """Safe to show to Admin. The message never includes resume text."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        stage: str = "",
+        http_status: int = 0,
+        google_status: str = "",
+        reason: str = "",
+        model: str = "",
+        location: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.stage = stage
+        self.http_status = http_status
+        self.google_status = google_status
+        self.reason = reason
+        self.model = model
+        self.location = location
 
 
 def resume_mode() -> str:
@@ -223,7 +248,8 @@ def _pdf_text(data: bytes) -> str:
         reader = PdfReader(BytesIO(data))
         parts = [(page.extract_text() or "") for page in reader.pages]
     except Exception as exc:
-        raise ResumeReadError("That resume could not be read.") from exc
+        _log_failure(stage="text_extraction", exc=exc)
+        raise ResumeReadError("That resume could not be read.", stage="text_extraction") from exc
     return "\n".join(parts)
 
 
@@ -233,7 +259,8 @@ def _docx_text(data: bytes) -> str:
             xml = package.read("word/document.xml")
         root = ElementTree.fromstring(xml)
     except Exception as exc:
-        raise ResumeReadError("That resume could not be read.") from exc
+        _log_failure(stage="text_extraction", exc=exc)
+        raise ResumeReadError("That resume could not be read.", stage="text_extraction") from exc
     texts: list[str] = []
     paragraph = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}p"
     run_text = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}t"
@@ -253,17 +280,20 @@ def _txt_text(data: bytes) -> str:
 
 def _gemini_fields(text: str) -> dict[str, str]:
     try:
-        raw = _gemini_complete(text)
+        raw, _model, _location = _gemini_complete(_PROMPT + text)
     except ResumeReadError:
         raise
     except Exception as exc:
-        raise ResumeReadError("The resume could not be read.") from exc
+        _log_failure(stage="vertex", exc=exc)
+        raise ResumeReadError("The resume could not be read.", stage="vertex") from exc
     try:
         parsed = _json_object(raw)
     except ValueError as exc:
-        raise ResumeReadError("The resume could not be read.") from exc
+        _log_failure(stage="vertex_response", exc=exc)
+        raise ResumeReadError("The resume could not be read.", stage="vertex_response") from exc
     if not isinstance(parsed, dict):
-        raise ResumeReadError("The resume could not be read.")
+        _log_failure(stage="vertex_response")
+        raise ResumeReadError("The resume could not be read.", stage="vertex_response")
     return {name: str(parsed.get(name) or "") for name in FIELD_NAMES}
 
 
@@ -282,15 +312,50 @@ def _json_object(raw: str) -> dict[str, Any]:
     return parsed
 
 
-def _gemini_complete(text: str) -> str:
+def _gemini_complete(text: str) -> tuple[str, str, str]:
     token = _gemini_token()
-    project, location, model = _gemini_target()
+    project = _gemini_project()
+    last_error: ResumeReadError | None = None
+    for location, model in _model_attempts():
+        try:
+            reply = _generate(project, location, model, token, text)
+        except ResumeReadError as exc:
+            last_error = exc
+            if exc.google_status == "NOT_FOUND" or exc.http_status == 404:
+                continue
+            raise
+        return reply, model, location
+    if last_error is not None:
+        raise last_error
+    raise ResumeReadError("The resume could not be read.", stage="vertex")
+
+
+def _model_attempts() -> list[tuple[str, str]]:
+    location = (os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-east4").strip() or "us-east4"
+    primary = (os.environ.get("GEMINI_MODEL") or DEFAULT_MODEL).strip() or DEFAULT_MODEL
+    fallback = (os.environ.get("GEMINI_MODEL_FALLBACK") or FALLBACK_MODEL).strip()
+    models = [primary]
+    if fallback and fallback not in models:
+        models.append(fallback)
+    locations = [location]
+    if location != "us-central1":
+        locations.append("us-central1")
+    attempts: list[tuple[str, str]] = []
+    for place in locations:
+        for model in models:
+            item = (place, model)
+            if item not in attempts:
+                attempts.append(item)
+    return attempts
+
+
+def _generate(project: str, location: str, model: str, token: str, text: str) -> str:
     url = (
         f"https://{location}-aiplatform.googleapis.com/v1/projects/{project}"
         f"/locations/{location}/publishers/google/models/{model}:generateContent"
     )
     body = {
-        "contents": [{"role": "user", "parts": [{"text": _PROMPT + text[:20000]}]}],
+        "contents": [{"role": "user", "parts": [{"text": text[:20000]}]}],
         "generationConfig": {"temperature": 0, "maxOutputTokens": 400, "responseMimeType": "application/json"},
     }
     try:
@@ -301,24 +366,44 @@ def _gemini_complete(text: str) -> str:
             timeout=20.0,
         )
     except httpx.HTTPError as exc:
-        raise ResumeReadError("The resume could not be read.") from exc
+        _log_failure(stage="vertex", model=model, location=location, exc=exc)
+        raise ResumeReadError("The resume could not be read.", stage="vertex", model=model, location=location) from exc
     if response.status_code >= 400:
-        raise ResumeReadError("The resume could not be read.")
+        info = _google_error(response)
+        _log_failure(stage="vertex", model=model, location=location, **info)
+        raise ResumeReadError(
+            "The resume could not be read.",
+            stage="vertex",
+            http_status=int(info["http_status"] or 0),
+            google_status=str(info["google_status"]),
+            reason=str(info["reason"]),
+            model=model,
+            location=location,
+        )
     try:
         payload = response.json()
         return str(payload["candidates"][0]["content"]["parts"][0]["text"])
     except Exception as exc:
-        raise ResumeReadError("The resume could not be read.") from exc
+        _log_failure(stage="vertex_response", model=model, location=location, exc=exc)
+        raise ResumeReadError(
+            "The resume could not be read.",
+            stage="vertex_response",
+            model=model,
+            location=location,
+        ) from exc
 
 
-def _gemini_target() -> tuple[str, str, str]:
+def _gemini_project() -> str:
     account = _service_account()
     project = (os.environ.get("GOOGLE_CLOUD_PROJECT") or str(account.get("project_id") or "")).strip()
     if not project:
-        raise ResumeReadError("Resume reading is not configured.")
-    location = (os.environ.get("GOOGLE_CLOUD_LOCATION") or "us-east4").strip() or "us-east4"
-    model = (os.environ.get("GEMINI_MODEL") or "gemini-2.0-flash-001").strip() or "gemini-2.0-flash-001"
-    return project, location, model
+        raise ResumeReadError("Resume reading is not configured.", stage="not_configured")
+    return project
+
+
+def _gemini_target() -> tuple[str, str, str]:
+    location, model = _model_attempts()[0]
+    return _gemini_project(), location, model
 
 
 def _service_account() -> dict[str, Any]:
@@ -345,7 +430,7 @@ def _gemini_token() -> str:
     assertion = jwt.encode(
         {
             "iss": str(account["client_email"]),
-            "scope": "https://www.googleapis.com/auth/cloud-platform",
+            "scope": VERTEX_SCOPE,
             "aud": "https://oauth2.googleapis.com/token",
             "iat": now,
             "exp": now + 3600,
@@ -360,13 +445,132 @@ def _gemini_token() -> str:
             timeout=15.0,
         )
     except httpx.HTTPError as exc:
-        raise ResumeReadError("The resume could not be read.") from exc
+        _log_failure(stage="token", exc=exc)
+        raise ResumeReadError("The resume could not be read.", stage="token") from exc
     if response.status_code >= 400:
-        raise ResumeReadError("The resume could not be read.")
+        info = _google_error(response)
+        _log_failure(stage="token", **info)
+        raise ResumeReadError(
+            "The resume could not be read.",
+            stage="token",
+            http_status=int(info["http_status"] or 0),
+            google_status=str(info["google_status"]),
+            reason=str(info["reason"]),
+        )
     token = str((response.json() or {}).get("access_token") or "")
     if not token:
-        raise ResumeReadError("The resume could not be read.")
+        _log_failure(stage="token", http_status=response.status_code)
+        raise ResumeReadError("The resume could not be read.", stage="token", http_status=response.status_code)
     return token
+
+
+def _google_error(response: Any) -> dict[str, Any]:
+    http_status = int(getattr(response, "status_code", 0) or 0)
+    try:
+        body = response.json()
+    except Exception:
+        body = None
+    if not isinstance(body, dict):
+        return {"http_status": http_status, "google_status": "", "reason": "", "message": ""}
+    error = body.get("error")
+    if isinstance(error, str):
+        return {
+            "http_status": http_status,
+            "google_status": error,
+            "reason": error,
+            "message": str(body.get("error_description") or ""),
+        }
+    if not isinstance(error, dict):
+        return {"http_status": http_status, "google_status": "", "reason": "", "message": ""}
+    reasons: list[str] = []
+    for detail in error.get("details") or []:
+        if isinstance(detail, dict) and detail.get("reason"):
+            reasons.append(str(detail["reason"]))
+    return {
+        "http_status": http_status,
+        "google_status": str(error.get("status") or ""),
+        "reason": ",".join(reasons),
+        "message": str(error.get("message") or ""),
+    }
+
+
+def _sanitize(value: str) -> str:
+    text = " ".join(str(value or "").split())
+    text = _EMAIL.sub("[email]", text)
+    return text[:180]
+
+
+def _log_failure(
+    *,
+    stage: str,
+    http_status: int = 0,
+    google_status: str = "",
+    reason: str = "",
+    message: str = "",
+    model: str = "",
+    location: str = "",
+    exc: BaseException | None = None,
+) -> None:
+    logger.warning(
+        "resume_read_failed stage=%s http_status=%s google_status=%s reason=%s model=%s location=%s exception=%s detail=%s",
+        stage,
+        http_status or "",
+        google_status,
+        reason,
+        model,
+        location,
+        type(exc).__name__ if exc else "",
+        _sanitize(message),
+    )
+
+
+def reader_health() -> dict[str, Any]:
+    """A tiny non-PHI check. Mock mode does not call Vertex."""
+    mode = resume_mode()
+    pypdf_ok = _pypdf_installed()
+    if mode == "mock":
+        return {"ok": True, "mode": "mock", "model": "", "location": "", "scope": VERTEX_SCOPE, "pypdf": pypdf_ok}
+    if not resume_configured():
+        return {
+            "ok": False,
+            "mode": mode,
+            "stage": "not_configured",
+            "error": "Resume reading is not configured.",
+            "scope": VERTEX_SCOPE,
+            "pypdf": pypdf_ok,
+        }
+    try:
+        _reply, model, location = _gemini_complete("Reply with the single word ok.")
+    except ResumeReadError as exc:
+        return {
+            "ok": False,
+            "mode": "gemini",
+            "stage": exc.stage,
+            "http_status": exc.http_status,
+            "google_status": exc.google_status,
+            "reason": exc.reason,
+            "model": exc.model,
+            "location": exc.location,
+            "error": "The resume reader could not reach Vertex.",
+            "scope": VERTEX_SCOPE,
+            "pypdf": pypdf_ok,
+        }
+    return {
+        "ok": True,
+        "mode": "gemini",
+        "model": model,
+        "location": location,
+        "scope": VERTEX_SCOPE,
+        "pypdf": pypdf_ok,
+    }
+
+
+def _pypdf_installed() -> bool:
+    try:
+        import pypdf
+    except Exception:
+        return False
+    return bool(getattr(pypdf, "__version__", "ok"))
 
 
 def set_reader_for_tests(reader: Callable[[bytes, str], dict[str, str]] | None) -> None:

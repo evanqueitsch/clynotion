@@ -131,6 +131,14 @@ def put_settings(body: SettingsBody, user: CurrentUser) -> dict[str, Any]:
         _fail(exc)
 
 
+@router.get("/hiring/resume-reader/health")
+def resume_reader_health(user: CurrentUser) -> dict[str, Any]:
+    _require_admin(user)
+    from app.hiring.resume import reader_health
+
+    return reader_health()
+
+
 @router.post("/hiring/resumes")
 async def post_resume(user: CurrentUser, resume: UploadFile = File(...)) -> dict[str, Any]:
     _require_admin(user)

@@ -6,6 +6,8 @@ import io
 import logging
 import zipfile
 
+import pytest
+
 from fastapi.testclient import TestClient
 
 from app.auth import User, issue_token
@@ -396,3 +398,101 @@ def test_drive_calls_stay_on_one_shared_drive() -> None:
     assert folder_name("Jordan") == "Jordan"
     assert resume_filename("Jordan Example", "application/pdf") == "Example_Jordan_resume.pdf"
     assert resume_filename("Jordan Example", "application/vnd.openxmlformats-officedocument.wordprocessingml.document") == "Example_Jordan_resume.docx"
+
+
+class _VertexResponse:
+    def __init__(self, status: int, body: dict) -> None:
+        self.status_code = status
+        self._body = body
+
+    def json(self) -> dict:
+        return self._body
+
+
+def test_not_found_model_falls_back_and_logs_without_resume_text(monkeypatch, caplog) -> None:
+    monkeypatch.setenv("ATTUNE_RESUME_LLM", "gemini")
+    monkeypatch.setenv(
+        "GOOGLE_SA_JSON",
+        '{"client_email":"sa@attune-clynotion.iam.gserviceaccount.com","private_key":"unused","project_id":"attune-clynotion"}',
+    )
+    monkeypatch.setenv("GOOGLE_CLOUD_LOCATION", "us-east4")
+    monkeypatch.delenv("GEMINI_MODEL", raising=False)
+    monkeypatch.setattr("app.hiring.resume._gemini_token", lambda: "token")
+    calls: list[str] = []
+
+    def fake_post(url: str, **_kwargs):
+        calls.append(url)
+        if "/models/gemini-2.5-flash:" in url:
+            return _VertexResponse(
+                404,
+                {"error": {"code": 404, "status": "NOT_FOUND", "message": "model was not found", "details": [{"reason": "NOT_FOUND"}]}},
+            )
+        return _VertexResponse(
+            200,
+            {"candidates": [{"content": {"parts": [{"text": '{"candidate_full_name":"Jordan Example","personal_email":"jordan.example@example.com"}'}]}}]},
+        )
+
+    monkeypatch.setattr("app.hiring.resume.httpx.post", fake_post)
+    caplog.set_level(logging.WARNING)
+    fields = read_resume(RESUME, "jordan.txt")
+    assert fields["candidate_full_name"] == "Jordan Example"
+    assert fields["personal_email"] == "jordan.example@example.com"
+    assert any("/models/gemini-2.5-flash:" in url for url in calls)
+    assert any("/models/gemini-2.5-flash-lite:" in url for url in calls)
+    assert "resume_read_failed" in caplog.text
+    assert "http_status=404" in caplog.text
+    assert "NOT_FOUND" in caplog.text
+    assert "gemini-2.5-flash" in caplog.text
+    assert "us-east4" in caplog.text
+    assert "jordan.example@example.com" not in caplog.text
+
+
+def test_permission_error_does_not_try_another_model(monkeypatch, caplog) -> None:
+    monkeypatch.setenv("ATTUNE_RESUME_LLM", "gemini")
+    monkeypatch.setenv(
+        "GOOGLE_SA_JSON",
+        '{"client_email":"sa@attune-clynotion.iam.gserviceaccount.com","private_key":"unused","project_id":"attune-clynotion"}',
+    )
+    monkeypatch.setattr("app.hiring.resume._gemini_token", lambda: "token")
+    calls: list[str] = []
+
+    def fake_post(url: str, **_kwargs):
+        calls.append(url)
+        return _VertexResponse(
+            403,
+            {"error": {"code": 403, "status": "PERMISSION_DENIED", "message": "denied", "details": [{"reason": "IAM_PERMISSION_DENIED"}]}},
+        )
+
+    monkeypatch.setattr("app.hiring.resume.httpx.post", fake_post)
+    caplog.set_level(logging.WARNING)
+    with pytest.raises(ResumeReadError) as caught:
+        read_resume(RESUME, "jordan.txt")
+    assert caught.value.stage == "vertex"
+    assert caught.value.http_status == 403
+    assert len(calls) == 1
+    assert "PERMISSION_DENIED" in caplog.text
+    assert "jordan.example@example.com" not in caplog.text
+
+
+def test_pdf_extraction_failure_names_the_stage(caplog) -> None:
+    caplog.set_level(logging.WARNING)
+    with pytest.raises(ResumeReadError) as caught:
+        read_resume(b"%PDF-1.4\nnot-a-pdf", "bad.pdf")
+    assert caught.value.stage == "text_extraction"
+    assert "stage=text_extraction" in caplog.text
+    assert "not-a-pdf" not in caplog.text
+
+
+def test_resume_reader_health_is_admin_only_and_offline() -> None:
+    from app.auth import User, issue_token
+
+    ok = client.get("/hiring/resume-reader/health", headers=_alice())
+    assert ok.status_code == 200, ok.text
+    body = ok.json()
+    assert body["ok"] is True
+    assert body["mode"] == "mock"
+    assert body["pypdf"] is True
+    assert body["scope"] == "https://www.googleapis.com/auth/cloud-platform"
+    other = User("user-bob", "bob", "practice-a", "bob@example.com")
+    denied = client.get("/hiring/resume-reader/health", headers={"Authorization": f"Bearer {issue_token(other)}"})
+    assert denied.status_code == 403
