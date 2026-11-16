@@ -356,6 +356,15 @@ def download_document(document_id: str, user: CurrentUser) -> Response:
     return Response(content=data, media_type=mime, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
+@router.post("/hiring/hires/{hire_id}/packet-complete")
+def packet_complete(hire_id: str, user: CurrentUser) -> dict[str, Any]:
+    _require_admin(user)
+    try:
+        return hiring.mark_packet_complete(user.practice_id, hire_id, _actor(user))
+    except HiringError as exc:
+        _fail(exc)
+
+
 @router.post("/hiring/hires/{hire_id}/delete")
 def delete_hire(hire_id: str, body: DeleteBody, user: CurrentUser) -> dict[str, bool]:
     _require_admin(user)
