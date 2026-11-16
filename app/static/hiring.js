@@ -89,8 +89,8 @@
       dialog.remove();
       options.onConfirm(typed);
     });
-    const root = document.getElementById("hiring-root") || document.body;
-    root.appendChild(dialog);
+    if (options.anchor && options.anchor.insertAdjacentElement) options.anchor.insertAdjacentElement("afterend", dialog);
+    else (document.getElementById("hiring-root") || document.body).appendChild(dialog);
     input.focus();
   }
 
@@ -453,12 +453,15 @@
         link.textContent = "Personnel folder";
         buttons.appendChild(link);
       }
-      if (!offer.drive_ok) {
+      if (offer.drive_status === "working") {
         const note = document.createElement("span");
         note.className = "meta";
-        note.textContent = offer.drive_status === "working"
-          ? "Creating Drive folders…"
-          : (offer.drive_status === "not_connected" || !offer.drive_connected ? "Drive not connected" : "Drive needs another try");
+        note.textContent = "Creating Drive folders…";
+        buttons.appendChild(note);
+      } else if (!offer.drive_ok) {
+        const note = document.createElement("span");
+        note.className = "meta";
+        note.textContent = offer.drive_status === "not_connected" || !offer.drive_connected ? "Drive not connected" : "Drive needs another try";
         buttons.appendChild(note);
         button("Retry", "ghost", function () {
           retryDrive(offer.id);
@@ -466,7 +469,7 @@
       }
       if (offer.status === "draft") {
         button("Mark sent", "primary", function () {
-          post(offer.id, "/send", { channel: "outside" }, "Marked sent.");
+          post(offer.id, "/send", { channel: "outside" }, "Marked sent.", true);
         });
       }
       if (offer.status === "draft" || offer.status === "sent" || offer.status === "viewed") {
@@ -485,6 +488,7 @@
           label: "Type the candidate's name",
           expected: offer.display_name || "",
           confirmText: "Delete offer",
+          anchor: row,
           onConfirm: function (typed) {
             post(offer.id, "/delete", { confirm: typed }, "Deleted.");
           },
@@ -798,6 +802,7 @@
             title: "Activate " + (hire.display_name || "this hire"),
             label: "Work email",
             confirmText: "Activate",
+            anchor: activate,
             onConfirm: function (email) {
               ui()
                 .api("/hiring/hires/" + hire.id + "/activate", { method: "POST", json: { work_email: email } })
@@ -814,7 +819,8 @@
         const packet = document.createElement("button");
         packet.type = "button";
         packet.className = "ghost";
-        packet.textContent = "Mark packet complete";
+        packet.textContent = hire.packet_complete ? "Packet complete" : "Mark packet complete";
+        packet.disabled = !!hire.packet_complete;
         packet.onclick = function () {
           ui()
             .api("/hiring/hires/" + hire.id + "/packet-complete", { method: "POST", json: {} })
@@ -826,6 +832,27 @@
             });
         };
         card.appendChild(packet);
+        if (hire.packet_complete) {
+          const done = document.createElement("p");
+          done.className = "meta";
+          done.textContent = "Packet marked complete.";
+          card.appendChild(done);
+          const undoPacket = document.createElement("button");
+          undoPacket.type = "button";
+          undoPacket.className = "ghost";
+          undoPacket.textContent = "Undo packet";
+          undoPacket.onclick = function () {
+            ui()
+              .api("/hiring/hires/" + hire.id + "/packet-undo", { method: "POST", json: {} })
+              .then(function () {
+                return window.clyHiring.open({ message: "Packet completion undone." });
+              })
+              .catch(function (error) {
+                showStatus((error && error.message) || "Could not save.", "error");
+              });
+          };
+          card.appendChild(undoPacket);
+        }
       }
       const remove = document.createElement("button");
       remove.type = "button";
@@ -838,6 +865,7 @@
           label: "Type the candidate's name",
           expected: hire.display_name || "",
           confirmText: "Delete hire",
+          anchor: remove,
           onConfirm: function (typed) {
             ui()
               .api("/hiring/hires/" + hire.id + "/delete", { method: "POST", json: { confirm: typed } })

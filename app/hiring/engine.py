@@ -29,6 +29,7 @@ from app.hiring.checklist import (
     STATUS_ONLY,
     build_items,
     clearance_state,
+    packet_due,
     clinician_title,
     closed_set,
     add_business_days,
@@ -1558,6 +1559,7 @@ class HiringEngine:
             "activated_at": hire.get("activated_at") or "",
             "employee_view_id": hire.get("employee_view_id") or "",
             "i9_drive": hire.get("i9_drive") or "pending",
+            "packet_complete": bool(hire.get("packet_completed_at")),
             "welcome": _welcome_text(candidate.get("display_name") or "", hire),
             "items": [self._item_public(row, item) for item in items],
         }
@@ -1580,10 +1582,7 @@ class HiringEngine:
                 due=parse_iso(due_text) if due_text else None,
                 today=_today(),
             )
-            if item.get("template_key") == "clearances":
-                warning = flags["warning"]
-            else:
-                flags = {"warning": False, "badge": flags["badge"]}
+            warning = flags["warning"]
         return {
             "id": item["id"],
             "template_key": item["template_key"],
@@ -1671,7 +1670,23 @@ class HiringEngine:
             if not hire:
                 raise HiringError(404, "Hire not found.")
             self._payroll_todo(practice_id, row, hire)
+            hire["packet_completed_at"] = _iso()
             self._history(row, "hire", hire_id, "packet_complete", actor, "Packet marked complete")
+            self._save(payload)
+            return self._hire_public(row, hire)
+
+    def undo_packet_complete(self, practice_id: str, hire_id: str, actor: str) -> dict[str, Any]:
+        with _lock:
+            payload = self._read()
+            row = self._practice(payload, practice_id)
+            hire = row["hires"].get(hire_id)
+            if not hire:
+                raise HiringError(404, "Hire not found.")
+            hire["packet_completed_at"] = ""
+            from app.platform.due import due_engine
+
+            due_engine.complete(practice_id=practice_id, source="hiring-payroll", source_ref=str(hire_id) + ":packet")
+            self._history(row, "hire", hire_id, "packet_reopened", actor, "Packet completion undone")
             self._save(payload)
             return self._hire_public(row, hire)
 
@@ -1680,13 +1695,17 @@ class HiringEngine:
 
         candidate = row["candidates"].get(hire.get("candidate_id") or "") or {}
         name = str(candidate.get("display_name") or "New hire")
+        closed = closed_set(row["settings"].get("business_closed_days") or [])
+        start = parse_iso(str(hire.get("start_date") or _today().isoformat()))
+        due_day = packet_due(start, _today(), closed)
+        due_at = datetime(due_day.year, due_day.month, due_day.day, 23, 59, 59, tzinfo=EASTERN).isoformat()
         due_engine.upsert(
             practice_id=practice_id,
             domain="books",
             source="hiring-payroll",
             title=f"{name}: W-4, direct deposit, and the PA new-hire report",
             owner_user_id="billing",
-            due_at=_iso(),
+            due_at=due_at,
             href="/#hiring",
             source_ref=str(hire.get("id") or "") + ":packet",
         )
