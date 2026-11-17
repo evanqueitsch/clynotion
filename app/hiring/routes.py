@@ -35,6 +35,7 @@ class SettingsBody(BaseModel):
     supervision_agreement_approved: Optional[bool] = None
     staff_handoff_emails_enabled: Optional[bool] = None
     wizard_email_override: Optional[str] = None
+    staff_greeting_name: Optional[str] = None
     staff_handoff_subject: Optional[str] = None
     staff_handoff_intro: Optional[str] = None
     staff_handoff_steps: Optional[str] = None
@@ -164,6 +165,7 @@ class WizardPreviewBody(BaseModel):
     steps: str = ""
     closing: str = ""
     signature: str = ""
+    staff_greeting_name: Optional[str] = None
 
 
 @router.post("/hiring/wizard-email-preview")
@@ -179,6 +181,11 @@ def wizard_email_preview(body: WizardPreviewBody, user: CurrentUser) -> dict[str
                 "steps": body.steps,
                 "closing": body.closing,
                 "signature": body.signature,
+                **(
+                    {"staff_greeting_name": body.staff_greeting_name}
+                    if body.staff_greeting_name is not None
+                    else {}
+                ),
             },
         )
     except HiringError as exc:
