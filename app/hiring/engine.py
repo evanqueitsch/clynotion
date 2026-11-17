@@ -266,6 +266,7 @@ def _default_settings() -> dict[str, Any]:
         "supervision_agreement_approved": False,
         "staff_handoff_emails_enabled": False,
         "wizard_email_override": "",
+        "staff_greeting_name": "",
         **wizard_defaults(),
     }
 
@@ -517,6 +518,8 @@ class HiringEngine:
                     if text and not EMAIL_RX.match(text):
                         raise HiringError(400, "The test recipient must be an email address.")
                     settings[key] = text
+                elif key == "staff_greeting_name":
+                    settings[key] = " ".join(str(value or "").split())[:80]
                 elif key in wizard_defaults():
                     limit = 200 if key.endswith("_subject") else 4000
                     settings[key] = str(value or "").strip()[:limit] or wizard_defaults()[key]
@@ -2020,7 +2023,7 @@ class HiringEngine:
                 link=f"{base}/#hiring",
                 supervisor=str(settings.get("offer_supervisor_name_default") or ""),
                 packet_list=packet_list,
-                billing_first_name=_billing_first_name(practice_id),
+                billing_first_name=_billing_first_name(practice_id, settings),
             )
             staff_status = self._deliver_sample(practice_id, override, settings, "staff", values, ())
             candidate_status = self._deliver_sample(
@@ -2046,7 +2049,10 @@ class HiringEngine:
             before_offers = len(row.get("offers") or {})
         _titles, packet_list = self._sample_packet_list(row)
         base = (os.environ.get("ATTUNE_PUBLIC_BASE_URL") or "https://clynotion.com").rstrip("/")
-        billing_first, greeting_source = _billing_greeting(practice_id)
+        greeting_settings = dict(row["settings"])
+        if "staff_greeting_name" in sections:
+            greeting_settings["staff_greeting_name"] = sections.get("staff_greeting_name") or ""
+        billing_first, greeting_source = _billing_greeting(practice_id, greeting_settings)
         values = sample_wizard_values(
             link=f"{base}/#hiring",
             supervisor=str(row["settings"].get("offer_supervisor_name_default") or ""),
@@ -2088,7 +2094,7 @@ class HiringEngine:
         fields = version.get("field_values") or {}
         name = str(candidate.get("display_name") or "New hire")
         first, last = _person_names(name, str(candidate.get("first_name") or ""))
-        billing_first = _billing_first_name(practice_id)
+        billing_first = _billing_first_name(practice_id, row["settings"])
         supervisor = str(fields.get("supervisor_name") or row["settings"].get("offer_supervisor_name_default") or "")
         direct = bool(hire.get("direct_client_access"))
         values = {
@@ -3084,23 +3090,41 @@ def _first_token(value: str) -> str:
     return token
 
 
+_ROLE_MAILBOXES = {
+    "billing",
+    "operations",
+    "admin",
+    "info",
+    "office",
+    "hr",
+    "payroll",
+    "support",
+    "noreply",
+    "contact",
+    "team",
+}
+
+
 def _local_first(email: str) -> str:
     local = email.split("@", 1)[0]
     token = re.split(r"[._+\-]", local, maxsplit=1)[0]
     letters = "".join(char for char in token if char.isalpha())
-    if not letters:
+    if not letters or letters.casefold() in _ROLE_MAILBOXES:
         return ""
     if letters.isupper() or letters.islower():
         return letters[:1].upper() + letters[1:].lower()
     return token
 
 
-def _billing_greeting(practice_id: str) -> tuple[str, str]:
+def _billing_greeting(practice_id: str, settings: dict[str, Any] | None = None) -> tuple[str, str]:
     """First name for the staff greeting, and which source supplied it.
 
     Billing mailboxes come from the same assignment list as the Roles page.
     The source is a label only. The name and address are not logged.
     """
+    chosen = " ".join(str((settings or {}).get("staff_greeting_name") or "").split())
+    if chosen:
+        return chosen[:80], "setting"
     from app.access.store import access_store
     from app.clinicians import clinician_store
 
@@ -3149,9 +3173,9 @@ def _billing_greeting(practice_id: str) -> tuple[str, str]:
     return ranked[0][1], ranked[0][2]
 
 
-def _billing_first_name(practice_id: str) -> str:
+def _billing_first_name(practice_id: str, settings: dict[str, Any] | None = None) -> str:
     """First name of the Billing user who sorts first by name."""
-    first, _source = _billing_greeting(practice_id)
+    first, _source = _billing_greeting(practice_id, settings)
     return first
 
 

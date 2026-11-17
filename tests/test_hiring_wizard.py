@@ -736,3 +736,63 @@ def test_directory_name_is_used_when_the_profile_name_is_empty(monkeypatch) -> N
     assert preview.status_code == 200, preview.text
     assert "Hi Christine," in preview.json()["html"]
     assert preview.json()["greeting_source"] == "directory"
+
+
+def test_a_role_mailbox_falls_back_to_hello(monkeypatch) -> None:
+    monkeypatch.setattr("app.workspace_directory.directory_names_readonly", lambda _practice: {})
+    person = clinician_store.upsert_workspace_user(
+        "practice-a",
+        google_id="billing-role",
+        email="billing@example.com",
+        display_name="billing@example.com",
+    )
+    person.display_name = ""
+    access_store.set_assignment("practice-a", "billing@example.com", "billing")
+    preview = client.post("/hiring/wizard-email-preview", headers=_alice(), json={"kind": "staff"})
+    assert preview.status_code == 200, preview.text
+    assert "Hello," in preview.json()["text"]
+    assert "Hi Billing," not in preview.json()["html"]
+    assert preview.json()["greeting_source"] == "none"
+    from app.hiring.engine import _billing_greeting
+
+    for local in ("operations", "admin", "info", "office", "hr", "payroll", "support", "noreply", "contact", "team"):
+        email = local + "@example.com"
+        other = clinician_store.upsert_workspace_user(
+            "practice-a",
+            google_id=local + "-role",
+            email=email,
+            display_name=email,
+        )
+        other.display_name = ""
+        access_store.set_assignment("practice-a", "billing@example.com", "")
+        access_store.set_assignment("practice-a", email, "billing")
+        first, source = _billing_greeting("practice-a", {"staff_greeting_name": ""})
+        assert first == "", local
+        assert source == "none", local
+
+
+def test_saved_billing_contact_name_wins_over_the_mailbox(monkeypatch) -> None:
+    monkeypatch.setattr("app.workspace_directory.directory_names_readonly", lambda _practice: {})
+    person = clinician_store.upsert_workspace_user(
+        "practice-a",
+        google_id="billing-role-saved",
+        email="billing@example.com",
+        display_name="billing@example.com",
+    )
+    person.display_name = ""
+    access_store.set_assignment("practice-a", "billing@example.com", "billing")
+    before = client.get("/hiring/bootstrap", headers=_alice()).json()
+    assert before["settings"]["staff_greeting_name"] == ""
+    assert before["settings"]["staff_handoff_emails_enabled"] is False
+    saved = client.put(
+        "/hiring/settings",
+        headers=_alice(),
+        json={"staff_greeting_name": "Christine"},
+    )
+    assert saved.status_code == 200, saved.text
+    assert saved.json()["staff_greeting_name"] == "Christine"
+    assert saved.json()["staff_handoff_emails_enabled"] is False
+    assert saved.json()["candidate_emails_enabled"] is False
+    preview = client.post("/hiring/wizard-email-preview", headers=_alice(), json={"kind": "staff"})
+    assert "Hi Christine," in preview.json()["html"]
+    assert preview.json()["greeting_source"] == "setting"

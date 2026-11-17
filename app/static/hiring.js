@@ -719,12 +719,20 @@
     override.value = settings.wizard_email_override || "";
     override.placeholder = "operations@heart4change.org";
     overrideLabel.appendChild(override);
+    const greetingLabel = document.createElement("label");
+    greetingLabel.textContent = "Billing contact first name — " + (settings.staff_greeting_name ? "currently " + settings.staff_greeting_name : "currently unset");
+    const greetingName = document.createElement("input");
+    greetingName.type = "text";
+    greetingName.value = settings.staff_greeting_name || "";
+    greetingName.placeholder = "Currently unset";
+    greetingLabel.appendChild(greetingName);
     const help = document.createElement("p");
     help.className = "meta";
     help.textContent = "Placeholders: {name} {first_name} {last_name} {position} {employment} {start_date} {start_date_long} {link} {supervisor_name} {packet_list} {billing_first_name}. A next-step line starting with [direct] is included only when the hire has direct client access. [office] is included only when they do not.";
     settingsBox.appendChild(staffLabel);
     settingsBox.appendChild(candidateLabel);
     settingsBox.appendChild(overrideLabel);
+    settingsBox.appendChild(greetingLabel);
     settingsBox.appendChild(help);
     const fields = {};
     function section(title, prefix) {
@@ -771,6 +779,7 @@
           steps: fields[prefix + "_steps"].value,
           closing: fields[prefix + "_closing"].value,
           signature: fields[prefix + "_signature"].value,
+          staff_greeting_name: greetingName.value.trim(),
         },
       }).then(function (result) {
         previewSubject.textContent = "Preview for Riley Sample — " + result.subject;
@@ -798,6 +807,7 @@
         staff_handoff_emails_enabled: staffOn.checked,
         candidate_emails_enabled: candidateOn.checked,
         wizard_email_override: override.value.trim(),
+        staff_greeting_name: greetingName.value.trim(),
       };
       Object.keys(fields).forEach(function (key) { json[key] = fields[key].value; });
       try {
