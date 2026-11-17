@@ -53,18 +53,18 @@ from app.hiring.fill import (
 )
 from app.hiring.forms_catalog import FORMS, form_path, packet_catalog
 from app.hiring.mailer import (
-    CANDIDATE_PACKET_BODY,
-    CANDIDATE_PACKET_SUBJECT,
-    STAFF_HANDOFF_BODY,
-    STAFF_HANDOFF_SUBJECT,
-    candidate_packet_body,
+    LEGACY_CANDIDATE_SUBJECT,
+    LEGACY_STAFF_SUBJECT,
+    REPLY_TO,
     code_body,
+    compose_wizard,
     deliver,
+    long_start_date,
     offer_body,
-    payroll_handoff_body,
     public_queue_row,
     reminder_body,
-    render_template,
+    sample_wizard_values,
+    wizard_defaults,
 )
 
 logger = logging.getLogger("app.hiring.engine")
@@ -265,10 +265,7 @@ def _default_settings() -> dict[str, Any]:
         "supervision_agreement_approved": False,
         "staff_handoff_emails_enabled": False,
         "wizard_email_override": "",
-        "staff_handoff_subject": STAFF_HANDOFF_SUBJECT,
-        "staff_handoff_body": STAFF_HANDOFF_BODY,
-        "candidate_packet_subject": CANDIDATE_PACKET_SUBJECT,
-        "candidate_packet_body": CANDIDATE_PACKET_BODY,
+        **wizard_defaults(),
     }
 
 
@@ -327,6 +324,7 @@ class HiringEngine:
         row.setdefault("settings", _default_settings())
         for key, value in _default_settings().items():
             row["settings"].setdefault(key, value)
+        _refresh_wizard_defaults(row["settings"])
         for bucket in (
             "candidates",
             "offers",
@@ -518,16 +516,9 @@ class HiringEngine:
                     if text and not EMAIL_RX.match(text):
                         raise HiringError(400, "The test recipient must be an email address.")
                     settings[key] = text
-                elif key in {
-                    "staff_handoff_subject",
-                    "candidate_packet_subject",
-                }:
-                    settings[key] = str(value or "").strip()[:200] or (
-                        STAFF_HANDOFF_SUBJECT if key == "staff_handoff_subject" else CANDIDATE_PACKET_SUBJECT
-                    )
-                elif key in {"staff_handoff_body", "candidate_packet_body"}:
-                    fallback = STAFF_HANDOFF_BODY if key == "staff_handoff_body" else CANDIDATE_PACKET_BODY
-                    settings[key] = str(value or "").strip()[:4000] or fallback
+                elif key in wizard_defaults():
+                    limit = 200 if key.endswith("_subject") else 4000
+                    settings[key] = str(value or "").strip()[:limit] or wizard_defaults()[key]
                 elif key == "qa_email_allowlist":
                     if not isinstance(value, list):
                         raise HiringError(400, "The allowlist must be a list.")
@@ -1963,7 +1954,6 @@ class HiringEngine:
     def _send_handoff_mail(self, practice_id: str, row: dict[str, Any], hire: dict[str, Any], actor: str) -> None:
         settings = row["settings"]
         candidate = row["candidates"].get(hire.get("candidate_id") or "") or {}
-        name = str(candidate.get("display_name") or "New hire")
         base = (os.environ.get("ATTUNE_PUBLIC_BASE_URL") or "https://clynotion.com").rstrip("/")
         link = f"{base}/#hiring?hire={hire.get('id') or ''}"
         override = str(settings.get("wizard_email_override") or "").strip().lower()
@@ -1974,15 +1964,8 @@ class HiringEngine:
             hire["staff_email_status"] = "suppressed"
             self._history(row, "hire", hire_id, "staff_email", actor, "Email not sent (setting off)")
         else:
-            status = deliver(
-                practice_id,
-                staff_to,
-                _template(settings, "staff_handoff_subject", STAFF_HANDOFF_SUBJECT),
-                render_template(
-                    _template(settings, "staff_handoff_body", STAFF_HANDOFF_BODY),
-                    _mail_values(name, candidate, hire, link),
-                ),
-            )
+            subject, text, html = self._compose_hire_mail(practice_id, row, hire, candidate, link, "staff")
+            status = deliver(practice_id, staff_to, subject, text, html=html, reply_to=REPLY_TO)
             hire["staff_email_status"] = "sent" if status == "sent" else "failed"
             row["mail_queue"].append(public_queue_row("staff_handoff", str(hire.get("offer_id") or ""), _iso(), status))
             self._history(
@@ -1998,15 +1981,15 @@ class HiringEngine:
             hire["candidate_email_status"] = "suppressed"
             self._history(row, "hire", hire_id, "candidate_email", actor, "Email not sent (setting off)")
             return
+        subject, text, html = self._compose_hire_mail(practice_id, row, hire, candidate, link, "candidate")
         status = deliver(
             practice_id,
             candidate_to,
-            _template(settings, "candidate_packet_subject", CANDIDATE_PACKET_SUBJECT),
-            render_template(
-                _template(settings, "candidate_packet_body", CANDIDATE_PACKET_BODY),
-                _mail_values(name, candidate, hire, link),
-            ),
+            subject,
+            text,
             self._packet_attachments(row, hire),
+            html=html,
+            reply_to=REPLY_TO,
         )
         hire["candidate_email_status"] = "sent" if status == "sent" else "failed"
         row["mail_queue"].append(public_queue_row("candidate_packet", str(hire.get("offer_id") or ""), _iso(), status))
@@ -2031,27 +2014,16 @@ class HiringEngine:
             if not override.endswith("@heart4change.org") or override.count("@") != 1:
                 raise HiringError(400, "Set the test recipient to an @heart4change.org address first.")
             base = (os.environ.get("ATTUNE_PUBLIC_BASE_URL") or "https://clynotion.com").rstrip("/")
-            values = {
-                "name": "Riley Sample",
-                "first_name": "Riley",
-                "position": "Sample position",
-                "employment": "full-time",
-                "start_date": "11/17/2026",
-                "link": f"{base}/#hiring",
-            }
-            staff_subject = "[TEST] " + render_template(
-                _template(settings, "staff_handoff_subject", STAFF_HANDOFF_SUBJECT), values
+            attachments, packet_list = self._sample_packet_attachments(row)
+            values = sample_wizard_values(
+                link=f"{base}/#hiring",
+                supervisor=str(settings.get("offer_supervisor_name_default") or ""),
+                packet_list=packet_list,
             )
-            candidate_subject = "[TEST] " + render_template(
-                _template(settings, "candidate_packet_subject", CANDIDATE_PACKET_SUBJECT), values
+            staff_status = self._deliver_sample(practice_id, override, settings, "staff", values, ())
+            candidate_status = self._deliver_sample(
+                practice_id, override, settings, "candidate", values, attachments
             )
-            staff_body = render_template(_template(settings, "staff_handoff_body", STAFF_HANDOFF_BODY), values)
-            candidate_body = render_template(
-                _template(settings, "candidate_packet_body", CANDIDATE_PACKET_BODY), values
-            )
-            attachments = self._sample_packet_attachments(row)
-            staff_status = deliver(practice_id, override, staff_subject, staff_body)
-            candidate_status = deliver(practice_id, override, candidate_subject, candidate_body, attachments)
             self._history(row, "settings", practice_id, "wizard_email_test", actor, "Test wizard emails attempted")
             if len(row.get("offers") or {}) != before_offers or len(row.get("hires") or {}) != before_hires:
                 raise HiringError(500, "The test must not create a hire.")
@@ -2063,12 +2035,102 @@ class HiringEngine:
                 "attachments": len(attachments),
             }
 
-    def _sample_packet_attachments(self, row: dict[str, Any]) -> tuple[tuple[str, str, bytes], ...]:
-        from app.hiring.forms_catalog import packet_catalog
+    def preview_wizard_email(self, practice_id: str, kind: str, sections: dict[str, str]) -> dict[str, str]:
+        """Render Riley's email. Does not send mail or store a hire."""
+        if kind not in {"staff", "candidate"}:
+            raise HiringError(400, "Choose the staff email or the candidate email.")
+        with _lock:
+            row = self._practice(self._read(), practice_id)
+            before_offers = len(row.get("offers") or {})
+        _titles, packet_list = self._sample_packet_list(row)
+        base = (os.environ.get("ATTUNE_PUBLIC_BASE_URL") or "https://clynotion.com").rstrip("/")
+        values = sample_wizard_values(
+            link=f"{base}/#hiring",
+            supervisor=str(row["settings"].get("offer_supervisor_name_default") or ""),
+            packet_list=packet_list,
+        )
+        stored = _wizard_sections(row["settings"], kind)
+        stored.update({key: value for key, value in sections.items() if str(value or "").strip()})
+        subject, text, html = compose_wizard(kind, stored, values, direct=True)
+        if len(row.get("offers") or {}) != before_offers:
+            raise HiringError(500, "The preview must not create a hire.")
+        return {"kind": kind, "subject": subject, "text": text, "html": html}
 
+    def _deliver_sample(
+        self,
+        practice_id: str,
+        to: str,
+        settings: dict[str, Any],
+        kind: str,
+        values: dict[str, str],
+        attachments: tuple[tuple[str, str, bytes], ...],
+    ) -> str:
+        subject, text, html = compose_wizard(kind, _wizard_sections(settings, kind), values, direct=True)
+        if not subject.startswith("[TEST]"):
+            subject = "[TEST] " + subject
+        return deliver(practice_id, to, subject, text, attachments, html=html, reply_to=REPLY_TO)
+
+    def _compose_hire_mail(
+        self,
+        practice_id: str,
+        row: dict[str, Any],
+        hire: dict[str, Any],
+        candidate: dict[str, Any],
+        link: str,
+        kind: str,
+    ) -> tuple[str, str, str]:
+        offer = row["offers"].get(hire.get("offer_id") or "") or {}
+        version = row["offer_versions"].get(offer.get("current_version_id") or "") or {}
+        fields = version.get("field_values") or {}
+        name = str(candidate.get("display_name") or "New hire")
+        first, last = _person_names(name, str(candidate.get("first_name") or ""))
+        billing_first, _email = _billing_contact(practice_id)
+        if not billing_first or billing_first == "Billing":
+            billing_first = "there"
+        supervisor = str(fields.get("supervisor_name") or row["settings"].get("offer_supervisor_name_default") or "")
+        direct = bool(hire.get("direct_client_access"))
+        values = {
+            "name": name,
+            "first_name": first,
+            "last_name": last,
+            "position": str(hire.get("position") or ""),
+            "employment": _schedule_label(str(hire.get("employment_type") or "")),
+            "start_date": str(hire.get("start_date") or ""),
+            "start_date_long": long_start_date(str(hire.get("start_date") or "")),
+            "link": link,
+            "supervisor_name": supervisor,
+            "packet_list": self._packet_titles(row, hire),
+            "billing_first_name": billing_first,
+        }
+        return compose_wizard(kind, _wizard_sections(row["settings"], kind), values, direct=direct)
+
+    def _packet_titles(self, row: dict[str, Any], hire: dict[str, Any]) -> str:
+        library = {str(item.get("form_key") or ""): item for item in row["forms_library"].values()}
+        titles = []
+        for key in hire.get("packet_form_keys") or []:
+            spec = library.get(str(key)) or {}
+            title = str(spec.get("title") or "").strip()
+            if title:
+                titles.append(title)
+        return ", ".join(titles)
+
+    def _sample_packet_list(self, row: dict[str, Any]) -> tuple[list[str], str]:
+        library = {str(item.get("form_key") or ""): item for item in row["forms_library"].values()}
+        titles: list[str] = []
+        for choice in packet_catalog("full-time", True, "Sample position"):
+            if not choice.get("default") or not choice.get("available"):
+                continue
+            spec = library.get(str(choice.get("form_key") or "")) or {}
+            filename = str(spec.get("filename") or "")
+            if filename.lower().endswith(".pdf"):
+                titles.append(str(spec.get("title") or choice.get("title") or ""))
+        return titles, ", ".join(title for title in titles if title)
+
+    def _sample_packet_attachments(self, row: dict[str, Any]) -> tuple[tuple[tuple[str, str, bytes], ...], str]:
         library = {str(item.get("form_key") or ""): item for item in row["forms_library"].values()}
         files: list[tuple[str, str, bytes]] = []
-        for choice in packet_catalog("full-time", False, "Sample position"):
+        titles: list[str] = []
+        for choice in packet_catalog("full-time", True, "Sample position"):
             if not choice.get("default") or not choice.get("available"):
                 continue
             spec = library.get(str(choice.get("form_key") or "")) or {}
@@ -2078,7 +2140,8 @@ class HiringEngine:
             path = form_path(filename)
             if path.is_file():
                 files.append((path.name, "application/pdf", path.read_bytes()))
-        return tuple(files)
+                titles.append(str(spec.get("title") or choice.get("title") or ""))
+        return tuple(files), ", ".join(title for title in titles if title)
 
     def normalize_personnel_folders(self) -> dict[str, int | bool]:
         """Rename stored personnel folders by id. Does not change offer fields."""
@@ -3042,23 +3105,47 @@ def _store_drive_names(offer: dict[str, Any], display: str, resume: dict[str, An
     return written
 
 
-def _template(settings: dict[str, Any], key: str, default: str) -> str:
-    text = str(settings.get(key) or "").strip()
-    return text or default
-
-
-def _mail_values(name: str, candidate: dict[str, Any], hire: dict[str, Any], link: str) -> dict[str, str]:
-    first = str(candidate.get("first_name") or "").strip()
-    if not first and name:
-        first = name.split(" ", 1)[0]
-    return {
-        "name": name,
-        "first_name": first,
-        "position": str(hire.get("position") or ""),
-        "employment": str(hire.get("employment_type") or ""),
-        "start_date": str(hire.get("start_date") or ""),
-        "link": link,
+def _refresh_wizard_defaults(settings: dict[str, Any]) -> None:
+    """Replace the old plain-text defaults. A saved custom subject is kept."""
+    defaults = wizard_defaults()
+    legacy = {
+        "staff_handoff_subject": LEGACY_STAFF_SUBJECT,
+        "candidate_packet_subject": LEGACY_CANDIDATE_SUBJECT,
     }
+    for key, old in legacy.items():
+        if str(settings.get(key) or "") == old:
+            settings[key] = defaults[key]
+    for key, value in defaults.items():
+        if not str(settings.get(key) or "").strip():
+            settings[key] = value
+
+
+def _wizard_sections(settings: dict[str, Any], kind: str) -> dict[str, str]:
+    prefix = "staff_handoff" if kind == "staff" else "candidate_packet"
+    return {
+        "subject": str(settings.get(f"{prefix}_subject") or ""),
+        "intro": str(settings.get(f"{prefix}_intro") or ""),
+        "steps": str(settings.get(f"{prefix}_steps") or ""),
+        "closing": str(settings.get(f"{prefix}_closing") or ""),
+        "signature": str(settings.get(f"{prefix}_signature") or ""),
+    }
+
+
+def _schedule_label(value: str) -> str:
+    text = (value or "").strip()
+    return {"full-time": "Full-time", "part-time": "Part-time"}.get(text, text)
+
+
+def _person_names(full: str, first_name: str) -> tuple[str, str]:
+    from app.hiring.personnel_drive import folder_name
+
+    label = folder_name(full)
+    if ", " in label:
+        last, derived_first = label.split(", ", 1)
+    else:
+        last, derived_first = "", label
+    first = (first_name or "").strip() or derived_first
+    return first, last
 
 
 def _welcome_text(name: str, hire: dict[str, Any]) -> str:

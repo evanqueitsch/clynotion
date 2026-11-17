@@ -8,6 +8,9 @@ Bodies are not logged. Tests capture messages in memory.
 from __future__ import annotations
 
 import os
+import re
+from datetime import datetime
+from html import escape
 from typing import Any, Optional
 
 from app.hr.time_mail import OutboundMail, RecordingMailer
@@ -58,45 +61,319 @@ def reminder_body(link: str, deadline: str) -> str:
     )
 
 
-STAFF_HANDOFF_SUBJECT = "New hire ready for payroll: {name}"
-STAFF_HANDOFF_BODY = (
-    "{name}\n"
-    "Position: {position}\n"
-    "Schedule: {employment}\n"
-    "Start date: {start_date}\n"
-    "Open the hire: {link}\n"
+OFFICE_ADDRESS = "200 Willow Valley Sq, Suite 210, Lancaster, PA"
+REPLY_TO = "operations@heart4change.org"
+WIZARD_FOOTER = (
+    "Heart for Change Counseling Services, Inc. · "
+    + OFFICE_ADDRESS
+    + ". Heart for Change will never ask for your Social Security number or bank details by email."
 )
-CANDIDATE_PACKET_SUBJECT = "Welcome to Heart for Change, {name}"
-CANDIDATE_PACKET_BODY = (
-    "Hello {name},\n\n"
-    "Welcome. Your start date is {start_date} and your position is {position}.\n"
-    "The new-hire packet is attached for you to complete and return. "
-    "Payroll will send a separate invite for the W-4 and direct deposit.\n"
-    "Bring the identity documents you choose for the Form I-9. "
-    "We will not tell you which documents to bring.\n"
-    "Heart for Change will never ask for a Social Security number or bank details by email."
+HEADER_TEXT = "Heart for Change Counseling Services, Inc."
+_GREEN = "#0f6e56"
+_PLACEHOLDERS = (
+    "name",
+    "first_name",
+    "last_name",
+    "position",
+    "employment",
+    "start_date",
+    "start_date_long",
+    "link",
+    "supervisor_name",
+    "packet_list",
+    "billing_first_name",
 )
-_PLACEHOLDERS = ("name", "first_name", "position", "employment", "start_date", "link")
+LEGACY_STAFF_SUBJECT = "New hire ready for payroll: {name}"
+LEGACY_CANDIDATE_SUBJECT = "Welcome to Heart for Change, {name}"
+
+STAFF_HANDOFF_SUBJECT = "New Hire Ready for Payroll Setup: {name} (starts {start_date})"
+STAFF_HANDOFF_INTRO = (
+    "Hello {billing_first_name},\n\n"
+    "{name} has accepted an offer and the onboarding packet has been sent. "
+    "This hire is now assigned to you in Clynotion to complete payroll setup."
+)
+STAFF_HANDOFF_STEPS = (
+    "Set up the W-4 and direct deposit in QuickBooks Workforce and send the employee's invitation.\n"
+    "File the Pennsylvania new-hire report.\n"
+    "Schedule the in-person Form I-9 and record the appointment and completion dates.\n"
+    "[direct] Confirm PA clearances and exclusion screening are received before the start date.\n"
+    "[office] Confirm exclusion screening is complete.\n"
+    "Activate the hire in Clynotion once everything above is done."
+)
+STAFF_HANDOFF_CLOSING = (
+    "Each step is tracked in Clynotion and appears on your Home page until it is complete. "
+    "No personal identifiers are included in this email."
+)
+STAFF_HANDOFF_SIGNATURE = "Thank you,\n\nClynotion · Heart for Change Operations"
+
+CANDIDATE_PACKET_SUBJECT = "Welcome to Heart for Change — Next Steps Before Your Start Date"
+CANDIDATE_PACKET_INTRO = (
+    "Dear {first_name},\n\n"
+    "On behalf of Heart for Change Counseling Services, we are delighted that you have accepted our offer "
+    "and will be joining our team as {position}. We look forward to working with you."
+)
+CANDIDATE_PACKET_STEPS = (
+    "Review the attached new-hire packet ({packet_list}) and complete each form.\n"
+    "Bring your completed forms with you on or before your first day. "
+    "Please do not email any form that contains your Social Security number or banking information.\n"
+    "[direct] Complete your Pennsylvania clearances (PA Child Abuse History, PA State Police Criminal Record Check, "
+    "and FBI fingerprinting) and provide the results before your start date.\n"
+    "Our payroll team will send you a separate secure invitation to set up your W-4 and direct deposit.\n"
+    "On your first day, bring original, unexpired documents of your choice that establish your identity and "
+    "work eligibility for Form I-9. The list of acceptable documents is in the I-9 instructions attached."
+)
+CANDIDATE_PACKET_CLOSING = (
+    "If you have any questions before your start date, simply reply to this email or call our office "
+    "at 717-478-3411. We are glad to have you with us."
+)
+CANDIDATE_PACKET_SIGNATURE = (
+    "Warm regards,\n\n"
+    "Heart for Change Counseling Services, Inc.\n"
+    "Operations\n"
+    "717-478-3411 · operations@heart4change.org"
+)
+
+WIZARD_FIELDS = (
+    "staff_handoff_subject",
+    "staff_handoff_intro",
+    "staff_handoff_steps",
+    "staff_handoff_closing",
+    "staff_handoff_signature",
+    "candidate_packet_subject",
+    "candidate_packet_intro",
+    "candidate_packet_steps",
+    "candidate_packet_closing",
+    "candidate_packet_signature",
+)
 
 
-def render_template(template: str, values: dict[str, str]) -> str:
+def wizard_defaults() -> dict[str, str]:
+    return {
+        "staff_handoff_subject": STAFF_HANDOFF_SUBJECT,
+        "staff_handoff_intro": STAFF_HANDOFF_INTRO,
+        "staff_handoff_steps": STAFF_HANDOFF_STEPS,
+        "staff_handoff_closing": STAFF_HANDOFF_CLOSING,
+        "staff_handoff_signature": STAFF_HANDOFF_SIGNATURE,
+        "candidate_packet_subject": CANDIDATE_PACKET_SUBJECT,
+        "candidate_packet_intro": CANDIDATE_PACKET_INTRO,
+        "candidate_packet_steps": CANDIDATE_PACKET_STEPS,
+        "candidate_packet_closing": CANDIDATE_PACKET_CLOSING,
+        "candidate_packet_signature": CANDIDATE_PACKET_SIGNATURE,
+    }
+
+
+def render_template(template: str, values: dict[str, str], *, html: bool = False) -> str:
     text = template or ""
     for key in _PLACEHOLDERS:
-        text = text.replace("{" + key + "}", values.get(key) or "")
+        raw = values.get(key) or ""
+        text = text.replace("{" + key + "}", escape(raw) if html else raw)
     return text
 
 
+def long_start_date(value: str) -> str:
+    text = (value or "").strip()
+    for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d"):
+        try:
+            parsed = datetime.strptime(text, fmt)
+        except ValueError:
+            continue
+        return f"{parsed.strftime('%A, %B')} {parsed.day}, {parsed.year}"
+    return text
+
+
+def wizard_steps(raw: str, *, direct: bool) -> list[str]:
+    steps: list[str] = []
+    for line in (raw or "").splitlines():
+        text = re.sub(r"^\d+\.\s*", "", line.strip())
+        if not text:
+            continue
+        marker = text.casefold()
+        if marker.startswith("[direct]"):
+            if not direct:
+                continue
+            text = text.split("]", 1)[1].strip()
+        elif marker.startswith("[office]"):
+            if direct:
+                continue
+            text = text.split("]", 1)[1].strip()
+        if text:
+            steps.append(text)
+    return steps
+
+
+def _paragraphs(text: str, *, html: bool) -> str:
+    blocks = [block.strip() for block in (text or "").split("\n\n") if block.strip()]
+    if not html:
+        return "\n\n".join(blocks)
+    parts = []
+    for block in blocks:
+        inner = "<br>".join(escape(line) for line in block.split("\n"))
+        parts.append(
+            '<p style="margin:0 0 14px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:22px;color:#1c2421;">'
+            + inner
+            + "</p>"
+        )
+    return "".join(parts)
+
+
+def _summary_rows(kind: str, values: dict[str, str]) -> list[tuple[str, str]]:
+    if kind == "staff":
+        return [
+            ("New hire", values.get("name") or ""),
+            ("Position", values.get("position") or ""),
+            ("Schedule", values.get("employment") or ""),
+            ("Start date", values.get("start_date_long") or values.get("start_date") or ""),
+            ("Direct client access", values.get("direct_client") or "No"),
+        ]
+    return [
+        ("Position", values.get("position") or ""),
+        ("Schedule", values.get("employment") or ""),
+        ("Start date", values.get("start_date_long") or values.get("start_date") or ""),
+        ("Supervisor", values.get("supervisor_name") or ""),
+    ]
+
+
+def compose_wizard(
+    kind: str,
+    sections: dict[str, str],
+    values: dict[str, str],
+    *,
+    direct: bool,
+) -> tuple[str, str, str]:
+    """Return subject, plain text, and HTML. Placeholders are filled. HTML is escaped."""
+    defaults = wizard_defaults()
+    prefix = "staff_handoff" if kind == "staff" else "candidate_packet"
+    filled = {key: values.get(key) or "" for key in _PLACEHOLDERS}
+    filled["direct_client"] = "Yes" if direct else "No"
+
+    def section(name: str) -> str:
+        text = str(sections.get(name) or "").strip()
+        return text or defaults[f"{prefix}_{name}"]
+
+    subject = render_template(section("subject"), filled).replace("\r", " ").replace("\n", " ").strip()
+    intro = render_template(section("intro"), filled)
+    closing = render_template(section("closing"), filled)
+    signature = render_template(section("signature"), filled)
+    steps = [render_template(step, filled) for step in wizard_steps(section("steps"), direct=direct)]
+    rows = _summary_rows(kind, filled)
+    link = filled.get("link") or ""
+    text_lines = [HEADER_TEXT, "", intro, ""]
+    for label, value in rows:
+        text_lines.append(f"{label}: {value}")
+    text_lines.append("")
+    if kind == "staff" and link:
+        text_lines.extend(["Open in Clynotion: " + link, ""])
+    text_lines.append("Next steps:")
+    text_lines.extend(f"{index}. {step}" for index, step in enumerate(steps, start=1))
+    text_lines.extend(["", closing, "", signature, "", WIZARD_FOOTER])
+    plain = "\n".join(text_lines).strip() + "\n"
+    html = _wizard_html(kind, intro, rows, steps, closing, signature, link)
+    return subject, plain, html
+
+
+def _wizard_html(
+    kind: str,
+    intro: str,
+    rows: list[tuple[str, str]],
+    steps: list[str],
+    closing: str,
+    signature: str,
+    link: str,
+) -> str:
+    summary = [
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 18px;border-collapse:collapse;">'
+    ]
+    for label, value in rows:
+        summary.append(
+            "<tr>"
+            f'<td width="168" valign="top" style="width:168px;padding:8px 12px;background:#f7f8f7;border:1px solid #e4e7e4;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:18px;color:#3d4742;font-weight:bold;">{escape(label)}</td>'
+            f'<td valign="top" style="padding:8px 12px;border:1px solid #e4e7e4;font-family:Arial,Helvetica,sans-serif;font-size:14px;line-height:20px;color:#1c2421;">{escape(value)}</td>'
+            "</tr>"
+        )
+    summary.append("</table>")
+    button = ""
+    if kind == "staff" and link.startswith(("https://", "http://")):
+        button = (
+            '<table role="presentation" cellpadding="0" cellspacing="0" style="margin:0 0 20px;">'
+            "<tr><td bgcolor=\""
+            + _GREEN
+            + '" style="border-radius:4px;">'
+            f'<a href="{escape(link, quote=True)}" style="display:inline-block;padding:12px 18px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:20px;color:#ffffff;text-decoration:none;font-weight:bold;">Open in Clynotion</a>'
+            "</td></tr></table>"
+        )
+    numbered = [
+        '<p style="margin:0 0 8px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:18px;color:#3d4742;font-weight:bold;letter-spacing:0.04em;">NEXT STEPS</p>',
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 8px;">',
+    ]
+    for index, step in enumerate(steps, start=1):
+        numbered.append(
+            "<tr>"
+            f'<td width="28" valign="top" style="width:28px;padding:0 8px 12px 0;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:22px;color:{_GREEN};font-weight:bold;">{index}.</td>'
+            f'<td valign="top" style="padding:0 0 12px;font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:22px;color:#1c2421;">{escape(step)}</td>'
+            "</tr>"
+        )
+    numbered.append("</table>")
+    body = (
+        _paragraphs(intro, html=True)
+        + "".join(summary)
+        + button
+        + "".join(numbered)
+        + _paragraphs(closing, html=True)
+        + _paragraphs(signature, html=True)
+    )
+    return (
+        "<!DOCTYPE html><html lang=\"en\"><body style=\"margin:0;padding:0;background:#f3f4f3;\">"
+        '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="background:#f3f4f3;">'
+        '<tr><td align="center" style="padding:24px 12px;">'
+        '<table role="presentation" width="600" cellpadding="0" cellspacing="0" style="width:100%;max-width:600px;background:#ffffff;">'
+        "<tr><td style=\"background:"
+        + _GREEN
+        + ';padding:20px 28px;font-family:Arial,Helvetica,sans-serif;font-size:16px;line-height:22px;color:#ffffff;font-weight:bold;">'
+        + HEADER_TEXT
+        + "</td></tr>"
+        '<tr><td style="padding:28px 28px 8px;">'
+        + body
+        + "</td></tr>"
+        '<tr><td style="padding:8px 28px 22px;border-top:1px solid #e4e7e4;font-family:Arial,Helvetica,sans-serif;font-size:12px;line-height:18px;color:#5c6560;">'
+        + escape(WIZARD_FOOTER)
+        + "</td></tr></table></td></tr></table></body></html>"
+    )
+
+
+def sample_wizard_values(*, link: str, supervisor: str, packet_list: str) -> dict[str, str]:
+    """Fake Riley used by the settings preview and the test send. No real hire."""
+    return {
+        "name": "Riley Sample",
+        "first_name": "Riley",
+        "last_name": "Sample",
+        "position": "Sample position",
+        "employment": "Full-time",
+        "start_date": "12/08/2026",
+        "start_date_long": "Monday, December 8, 2026",
+        "link": link,
+        "supervisor_name": supervisor or "Jordan Example",
+        "packet_list": packet_list,
+        "billing_first_name": "there",
+    }
+
+
 def payroll_handoff_body(name: str, position: str, employment: str, start: str, link: str) -> str:
-    return render_template(
-        STAFF_HANDOFF_BODY,
+    subject, text, _html = compose_wizard(
+        "staff",
+        {},
         {
             "name": name,
             "position": position or "—",
             "employment": employment or "—",
             "start_date": start or "—",
+            "start_date_long": long_start_date(start) or "—",
             "link": link,
+            "billing_first_name": "there",
         },
+        direct=False,
     )
+    _ = subject
+    return text
 
 
 def candidate_packet_body(welcome: str) -> str:
@@ -109,6 +386,9 @@ def deliver(
     subject: str,
     text: str,
     attachments: tuple[tuple[str, str, bytes], ...] = (),
+    *,
+    html: str = "",
+    reply_to: str = "",
 ) -> str:
     """Return sent, failed, or suppressed. Does not log the address or body."""
     message = OutboundMail(
@@ -117,6 +397,8 @@ def deliver(
         text=text,
         practice_id=practice_id,
         attachments=attachments,
+        html=html,
+        reply_to=reply_to,
     )
     if _capture is not None or os.environ.get("ATTUNE_MODE") != "real":
         box = _capture or RecordingMailer()
