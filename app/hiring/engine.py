@@ -54,6 +54,7 @@ from app.hiring.fill import (
 from app.hiring.forms_catalog import FORMS, form_path, packet_catalog
 from app.hiring.mailer import (
     LEGACY_CANDIDATE_SUBJECT,
+    LEGACY_STAFF_INTRO,
     LEGACY_STAFF_SUBJECT,
     REPLY_TO,
     code_body,
@@ -2019,6 +2020,7 @@ class HiringEngine:
                 link=f"{base}/#hiring",
                 supervisor=str(settings.get("offer_supervisor_name_default") or ""),
                 packet_list=packet_list,
+                billing_first_name=_billing_first_name(practice_id),
             )
             staff_status = self._deliver_sample(practice_id, override, settings, "staff", values, ())
             candidate_status = self._deliver_sample(
@@ -2048,6 +2050,7 @@ class HiringEngine:
             link=f"{base}/#hiring",
             supervisor=str(row["settings"].get("offer_supervisor_name_default") or ""),
             packet_list=packet_list,
+            billing_first_name=_billing_first_name(practice_id),
         )
         stored = _wizard_sections(row["settings"], kind)
         stored.update({key: value for key, value in sections.items() if str(value or "").strip()})
@@ -2084,9 +2087,7 @@ class HiringEngine:
         fields = version.get("field_values") or {}
         name = str(candidate.get("display_name") or "New hire")
         first, last = _person_names(name, str(candidate.get("first_name") or ""))
-        billing_first, _email = _billing_contact(practice_id)
-        if not billing_first or billing_first == "Billing":
-            billing_first = "there"
+        billing_first = _billing_first_name(practice_id)
         supervisor = str(fields.get("supervisor_name") or row["settings"].get("offer_supervisor_name_default") or "")
         direct = bool(hire.get("direct_client_access"))
         values = {
@@ -3061,6 +3062,31 @@ def _open_offer_for_person(row: dict[str, Any], email: str, name: str, except_id
     return False
 
 
+def _billing_first_name(practice_id: str) -> str:
+    """First name of the Billing user who sorts first by directory name."""
+    from app.access.store import access_store
+    from app.clinicians import clinician_store
+
+    emails = {
+        str(row.get("email") or "").strip().lower()
+        for row in access_store.assignments_public(practice_id)
+        if row.get("role_id") == "billing" and str(row.get("email") or "").strip()
+    }
+    names: list[str] = []
+    for person in clinician_store.list_all_for_practice(practice_id):
+        email = (person.email or "").strip().lower()
+        if email not in emails:
+            continue
+        name = (person.display_name or "").strip()
+        if not name or "@" in name:
+            continue
+        names.append(name)
+    if not names:
+        return ""
+    names.sort(key=str.casefold)
+    return names[0].split(" ", 1)[0].strip(" ,")
+
+
 def _billing_contact(practice_id: str) -> tuple[str, str]:
     """Display name and mailbox for the Billing role. No assignment is changed."""
     from app.access.permissions import CHRISTINE_EMAIL
@@ -3111,6 +3137,7 @@ def _refresh_wizard_defaults(settings: dict[str, Any]) -> None:
     legacy = {
         "staff_handoff_subject": LEGACY_STAFF_SUBJECT,
         "candidate_packet_subject": LEGACY_CANDIDATE_SUBJECT,
+        "staff_handoff_intro": LEGACY_STAFF_INTRO,
     }
     for key, old in legacy.items():
         if str(settings.get(key) or "") == old:

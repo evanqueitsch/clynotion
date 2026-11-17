@@ -188,7 +188,7 @@ def test_override_redirects_both_messages_without_pay(monkeypatch) -> None:
     assert staff["attachments"] == ()
     assert staff["reply_to"] == "operations@heart4change.org"
     assert "Jordan Example" in staff["text"]
-    assert "Hello Casey," in staff["text"]
+    assert "Hi Casey," in staff["text"]
     assert "Full-time" in staff["text"]
     assert f"/#hiring?hire={hire_id}" in staff["html"]
     assert "$45" not in staff["text"] and "$45" not in staff["html"]
@@ -481,7 +481,8 @@ def test_wizard_email_test_sends_only_to_the_override_and_creates_nothing(monkey
     staff = next(item for item in sent if "Payroll Setup" in item["subject"])
     assert staff["attachments"] == ()
     assert "Riley Sample" in staff["text"]
-    assert "Hello there," in staff["text"]
+    assert "Hello," in staff["text"]
+    assert "Hello there," not in staff["text"]
     assert "Monday, December 8, 2026" in staff["html"]
     assert "Open in Clynotion" in staff["html"]
     assert staff["html"].count("max-width:600px") == 1
@@ -660,3 +661,40 @@ def test_wizard_preview_renders_riley_without_sending_or_storing(monkeypatch) ->
     assert after["settings"]["staff_handoff_emails_enabled"] is False
     assert after["settings"]["candidate_emails_enabled"] is False
     assert after["settings"]["wizard_email_override"] == ""
+
+
+def test_staff_greeting_uses_the_first_billing_name_and_otherwise_says_hello() -> None:
+    clinician_store.upsert_workspace_user(
+        "practice-a",
+        google_id="christine-example",
+        email="christine.example@example.com",
+        display_name="Christine Example",
+    )
+    clinician_store.upsert_workspace_user(
+        "practice-a",
+        google_id="morgan-example",
+        email="morgan.example@example.com",
+        display_name="Morgan Example",
+    )
+    access_store.set_assignment("practice-a", "morgan.example@example.com", "billing")
+    access_store.set_assignment("practice-a", "christine.example@example.com", "billing")
+    preview = client.post("/hiring/wizard-email-preview", headers=_alice(), json={"kind": "staff"})
+    assert preview.status_code == 200, preview.text
+    assert "Hi Christine," in preview.json()["html"]
+    assert "Hello there," not in preview.json()["html"]
+    access_store.set_assignment("practice-a", "alex.example@example.com", "billing")
+    clinician_store.upsert_workspace_user(
+        "practice-a",
+        google_id="alex-example",
+        email="alex.example@example.com",
+        display_name="Alex Example",
+    )
+    first = client.post("/hiring/wizard-email-preview", headers=_alice(), json={"kind": "staff"})
+    assert "Hi Alex," in first.json()["html"]
+    access_store.set_assignment("practice-a", "christine.example@example.com", "")
+    access_store.set_assignment("practice-a", "morgan.example@example.com", "")
+    access_store.set_assignment("practice-a", "alex.example@example.com", "")
+    none = client.post("/hiring/wizard-email-preview", headers=_alice(), json={"kind": "staff"})
+    assert "Hello," in none.json()["text"]
+    assert "Hi ," not in none.json()["text"]
+    assert "there," not in none.json()["text"]
