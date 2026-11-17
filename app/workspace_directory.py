@@ -506,6 +506,55 @@ def _mock_directory_users() -> list[WorkspaceUser]:
     ]
 
 
+def directory_names_readonly(practice_id: str) -> dict[str, str]:
+    """Email to directory name. Uses a stored access token and does not write it."""
+    mode = directory_mode()
+    if mode == "off":
+        return {}
+    if mode == "mock":
+        return {user.email.strip().lower(): user.display_name for user in _mock_directory_users() if user.display_name}
+    store = _load_token_store()
+    access = str(((store.get("practices") or {}).get(practice_id) or {}).get("access_token") or "").strip()
+    if not access:
+        return {}
+    domains = allowed_domains()
+    params = {"maxResults": "200", "orderBy": "email", "projection": "full"}
+    if domains:
+        params["domain"] = domains[0]
+    else:
+        params["customer"] = "my_customer"
+    try:
+        with httpx.Client(timeout=15.0) as client:
+            response = client.get(
+                DIRECTORY_USERS_URL,
+                params=params,
+                headers={"Authorization": f"Bearer {access}"},
+            )
+        if response.status_code != 200:
+            return {}
+        payload = response.json()
+    except Exception:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    found: dict[str, str] = {}
+    for row in payload.get("users") or []:
+        if not isinstance(row, dict) or row.get("suspended"):
+            continue
+        email = str(row.get("primaryEmail") or "").strip().lower()
+        name_obj = row.get("name") if isinstance(row.get("name"), dict) else {}
+        given = str(name_obj.get("givenName") or "").strip()
+        full = str(name_obj.get("fullName") or "").strip()
+        chosen = given or full
+        local = email.split("@", 1)[0] if "@" in email else ""
+        if not email or not chosen or "@" in chosen:
+            continue
+        if " " not in chosen and chosen.casefold() == local.casefold():
+            continue
+        found[email] = chosen
+    return found
+
+
 def list_directory_fetch(practice_id: str) -> DirectoryFetch:
     """Read every Directory page for this practice's allowed domain.
 

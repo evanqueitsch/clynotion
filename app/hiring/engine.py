@@ -2046,18 +2046,19 @@ class HiringEngine:
             before_offers = len(row.get("offers") or {})
         _titles, packet_list = self._sample_packet_list(row)
         base = (os.environ.get("ATTUNE_PUBLIC_BASE_URL") or "https://clynotion.com").rstrip("/")
+        billing_first, greeting_source = _billing_greeting(practice_id)
         values = sample_wizard_values(
             link=f"{base}/#hiring",
             supervisor=str(row["settings"].get("offer_supervisor_name_default") or ""),
             packet_list=packet_list,
-            billing_first_name=_billing_first_name(practice_id),
+            billing_first_name=billing_first,
         )
         stored = _wizard_sections(row["settings"], kind)
         stored.update({key: value for key, value in sections.items() if str(value or "").strip()})
         subject, text, html = compose_wizard(kind, stored, values, direct=True)
         if len(row.get("offers") or {}) != before_offers:
             raise HiringError(500, "The preview must not create a hire.")
-        return {"kind": kind, "subject": subject, "text": text, "html": html}
+        return {"kind": kind, "subject": subject, "text": text, "html": html, "greeting_source": greeting_source}
 
     def _deliver_sample(
         self,
@@ -3062,29 +3063,96 @@ def _open_offer_for_person(row: dict[str, Any], email: str, name: str, except_id
     return False
 
 
-def _billing_first_name(practice_id: str) -> str:
-    """First name of the Billing user who sorts first by directory name."""
+def _usable_person_name(value: str) -> str:
+    text = (value or "").strip()
+    if not text or "@" in text or text.casefold().startswith("gw:"):
+        return ""
+    return text
+
+
+def _first_token(value: str) -> str:
+    text = _usable_person_name(value)
+    if not text:
+        return ""
+    if "," in text:
+        parts = [part.strip() for part in text.split(",") if part.strip()]
+        if len(parts) >= 2:
+            text = parts[1]
+    token = text.split()[0].strip(".,")
+    if not token or "@" in token:
+        return ""
+    return token
+
+
+def _local_first(email: str) -> str:
+    local = email.split("@", 1)[0]
+    token = re.split(r"[._+\-]", local, maxsplit=1)[0]
+    letters = "".join(char for char in token if char.isalpha())
+    if not letters:
+        return ""
+    if letters.isupper() or letters.islower():
+        return letters[:1].upper() + letters[1:].lower()
+    return token
+
+
+def _billing_greeting(practice_id: str) -> tuple[str, str]:
+    """First name for the staff greeting, and which source supplied it.
+
+    Billing mailboxes come from the same assignment list as the Roles page.
+    The source is a label only. The name and address are not logged.
+    """
     from app.access.store import access_store
     from app.clinicians import clinician_store
 
-    emails = {
-        str(row.get("email") or "").strip().lower()
-        for row in access_store.assignments_public(practice_id)
-        if row.get("role_id") == "billing" and str(row.get("email") or "").strip()
+    emails = sorted(
+        {
+            str(row.get("email") or "").strip().lower()
+            for row in access_store.assignments_public(practice_id)
+            if str(row.get("role_id") or "").strip().casefold() == "billing" and str(row.get("email") or "").strip()
+        }
+    )
+    if not emails:
+        return "", "none"
+    profiles = {
+        (person.email or "").strip().lower(): person.display_name or ""
+        for person in clinician_store.list_all_for_practice(practice_id)
+        if (person.email or "").strip()
     }
-    names: list[str] = []
-    for person in clinician_store.list_all_for_practice(practice_id):
-        email = (person.email or "").strip().lower()
-        if email not in emails:
-            continue
-        name = (person.display_name or "").strip()
-        if not name or "@" in name:
-            continue
-        names.append(name)
-    if not names:
-        return ""
-    names.sort(key=str.casefold)
-    return names[0].split(" ", 1)[0].strip(" ,")
+    directory: dict[str, str] | None = None
+    ranked: list[tuple[str, str, str]] = []
+    for email in emails:
+        display = _usable_person_name(profiles.get(email, ""))
+        if display:
+            first = _first_token(display)
+            if first:
+                ranked.append((display.casefold(), first, "display"))
+                continue
+        if directory is None:
+            try:
+                from app.workspace_directory import directory_names_readonly
+
+                directory = directory_names_readonly(practice_id)
+            except Exception:
+                directory = {}
+        directory_name = _usable_person_name((directory or {}).get(email, ""))
+        if directory_name:
+            first = _first_token(directory_name)
+            if first:
+                ranked.append((directory_name.casefold(), first, "directory"))
+                continue
+        local = _local_first(email)
+        if local:
+            ranked.append((local.casefold(), local, "email_local"))
+    if not ranked:
+        return "", "none"
+    ranked.sort(key=lambda item: item[0])
+    return ranked[0][1], ranked[0][2]
+
+
+def _billing_first_name(practice_id: str) -> str:
+    """First name of the Billing user who sorts first by name."""
+    first, _source = _billing_greeting(practice_id)
+    return first
 
 
 def _billing_contact(practice_id: str) -> tuple[str, str]:
