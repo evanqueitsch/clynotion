@@ -87,6 +87,12 @@ def test_rollout_stays_off_and_hides_the_tool_from_staff(client: TestClient) -> 
     home = client.get("/catalog", headers=viewer).json()
     ids = [tool["id"] for unit in home for tool in unit["tools"]]
     assert "employee_view" not in ids
+    script = open("app/static/employee.js", encoding="utf-8").read()
+    page = open("app/static/index.html", encoding="utf-8").read()
+    assert "employees-rollout-note" in page
+    assert "On. Staff can open Employee View." in script
+    assert "Off until an Admin turns it on." in script
+    assert employees_store.rollout_enabled("practice-a") is False
     assert "capability:hr_records_view" not in billing_role_permissions()
     assert "capability:hr_records_manage" not in BILLING_HR_WHEN_ROLLOUT
     turned = client.put("/employee/rollout", headers=_alice(), json={"enabled": True})
@@ -334,7 +340,7 @@ def test_idle_logoff_and_small_health_are_in_the_ui(client: TestClient) -> None:
     assert "IDLE_LIMIT_MS = 20 * 60 * 1000" in page.text
     assert "20 minutes of inactivity" in page.text
     health = client.get("/health")
-    assert health.json()["version"] == "0.24.2"
+    assert health.json()["version"] == "0.24.3"
     assert "deepgram" not in health.text.casefold()
     assert "phi_path" not in health.json()
     script = client.get("/static/employee.js")
@@ -709,7 +715,7 @@ def test_employee_file_ui_hides_history_and_keeps_sections(client: TestClient) -
     assert panel.index("employee-credentialing") < panel.index("employee-history")
     assert "btn-employee-directory" in panel
     assert "Staff directory" in panel
-    assert "employee.js?v=0.19.7" in page
+    assert "employee.js?v=0.24.3" in page
     assert "credentialing.js?v=0.19.9" in page
     script = client.get("/static/employee.js").text
     assert "Change history" in script
