@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import copy
 import hashlib
+import io
+import zipfile
 import hmac
 import json
 import logging
@@ -23,6 +25,7 @@ from zoneinfo import ZoneInfo
 
 from app.crypto import decrypt_utf8, encrypt_utf8
 from app.hiring.checklist import (
+    BILLING_STEP_KEYS,
     BLOCKED_DONE,
     I9_KEYS,
     PAYROLL_KEYS,
@@ -46,8 +49,16 @@ from app.hiring.fill import (
     render_docx,
     supervisor_name_default,
 )
-from app.hiring.forms_catalog import FORMS, form_path
-from app.hiring.mailer import code_body, deliver, offer_body, public_queue_row, reminder_body
+from app.hiring.forms_catalog import FORMS, form_path, packet_catalog
+from app.hiring.mailer import (
+    candidate_packet_body,
+    code_body,
+    deliver,
+    offer_body,
+    payroll_handoff_body,
+    public_queue_row,
+    reminder_body,
+)
 
 logger = logging.getLogger("app.hiring.engine")
 from app.hiring.pdf import PdfRenderError, append_certificate, render_offer_pdf
@@ -245,6 +256,8 @@ def _default_settings() -> dict[str, Any]:
         "vault_min_days_i9": 1095,
         "hiring_rollout": False,
         "supervision_agreement_approved": False,
+        "staff_handoff_emails_enabled": False,
+        "wizard_email_override": "",
     }
 
 
@@ -486,8 +499,14 @@ class HiringEngine:
                     "i9_copy_documents",
                     "hiring_rollout",
                     "supervision_agreement_approved",
+                    "staff_handoff_emails_enabled",
                 }:
                     settings[key] = bool(value)
+                elif key == "wizard_email_override":
+                    text = str(value or "").strip().lower()
+                    if text and not EMAIL_RX.match(text):
+                        raise HiringError(400, "The test recipient must be an email address.")
+                    settings[key] = text
                 elif key == "qa_email_allowlist":
                     if not isinstance(value, list):
                         raise HiringError(400, "The allowlist must be a list.")
@@ -1043,6 +1062,12 @@ class HiringEngine:
             "supervisor_name": values.get("supervisor_name") or "",
             "direct_client_access": bool(offer.get("direct_client_access")),
             "status": "onboarding",
+            "stage": "accepted",
+            "owner": "admin",
+            "packet_form_keys": [],
+            "handoff_at": "",
+            "staff_email_status": "",
+            "candidate_email_status": "",
             "first_day_worked_for_pay": "",
             "activated_at": "",
             "employee_view_id": "",
@@ -1129,6 +1154,7 @@ class HiringEngine:
             offers = [self._offer_public(row, offer) for offer in row["offers"].values()]
             offers.sort(key=lambda item: item.get("created_at") or "", reverse=True)
             hires = [self._hire_public(row, hire) for hire in row["hires"].values()]
+            label, _email = _billing_contact(practice_id)
             return {
                 "settings": dict(row["settings"]),
                 "offers": offers,
@@ -1137,7 +1163,25 @@ class HiringEngine:
                 "form_flags": self._form_flags(row),
                 "history": list(reversed(row["history"][-40:])),
                 "mail_queue": list(row["mail_queue"]),
+                "billing_label": label,
+                "viewer": "admin",
             }
+
+    def list_billing(self, practice_id: str) -> dict[str, Any]:
+        """Handoff queue. No offer fields, pay, or letter files."""
+        with _lock:
+            payload = self._read()
+            row = self._practice(payload, practice_id)
+            hires = []
+            for hire in row["hires"].values():
+                if hire.get("status") == "archived" or not self._billing_visible(hire):
+                    continue
+                public = self._hire_public(row, hire)
+                public.pop("packet_choices", None)
+                public.pop("welcome", None)
+                hires.append(public)
+            hires.sort(key=lambda item: item.get("start_date") or "")
+            return {"viewer": "billing", "offers": [], "hires": hires, "settings": {}}
 
     def get_offer(self, practice_id: str, offer_id: str) -> dict[str, Any]:
         with _lock:
@@ -1628,9 +1672,28 @@ class HiringEngine:
             "employee_view_id": hire.get("employee_view_id") or "",
             "i9_drive": hire.get("i9_drive") or "pending",
             "packet_complete": bool(hire.get("packet_completed_at")),
+            "stage": hire.get("stage") or "accepted",
+            "owner": hire.get("owner") or "admin",
+            "packet_form_keys": list(hire.get("packet_form_keys") or []),
+            "packet_choices": self._packet_choices(hire),
+            "staff_email_status": hire.get("staff_email_status") or "",
+            "candidate_email_status": hire.get("candidate_email_status") or "",
             "welcome": _welcome_text(candidate.get("display_name") or "", hire),
             "items": [self._item_public(row, item) for item in items],
         }
+
+    def _packet_choices(self, hire: dict[str, Any]) -> list[dict[str, Any]]:
+        return packet_catalog(
+            str(hire.get("employment_type") or ""),
+            bool(hire.get("direct_client_access")),
+            str(hire.get("position") or ""),
+        )
+
+    @staticmethod
+    def _billing_visible(hire: dict[str, Any]) -> bool:
+        if not hire.get("handoff_at"):
+            return False
+        return str(hire.get("stage") or "") in {"payroll", "active"}
 
     def _item_public(self, row: dict[str, Any], item: dict[str, Any]) -> dict[str, Any]:
         hire = row["hires"].get(item["hire_id"]) or {}
@@ -1681,6 +1744,7 @@ class HiringEngine:
         where: str = "",
         first_day: str = "",
         note: str | None = None,
+        billing: bool = False,
     ) -> dict[str, Any]:
         if status not in {"open", "done", "skipped", "n/a"}:
             raise HiringError(400, "Unknown item status.")
@@ -1704,8 +1768,25 @@ class HiringEngine:
                 for entry in row["checklist_items"].values():
                     if entry.get("hire_id") == hire_id and entry.get("template_key") in {"i9_section2", "i9_scan_uploaded"}:
                         entry["due_date"] = to_iso(due)
+            if billing:
+                if not self._billing_visible(hire):
+                    raise HiringError(403, "That hire has not been handed off.")
+                if key not in BILLING_STEP_KEYS:
+                    raise HiringError(403, "That step is not on the billing list.")
             if dates:
-                allowed = {"i9_section1_on", "i9_docs_examined_on", "i9_section2_completed_on", "examiner"}
+                allowed = {
+                    "i9_section1_on",
+                    "i9_docs_examined_on",
+                    "i9_section2_completed_on",
+                    "examiner",
+                    "w4_received_on",
+                    "direct_deposit_received_on",
+                    "pa_new_hire_filed_on",
+                    "i9_appointment_on",
+                    "i9_completed_on",
+                    "clearances_received_on",
+                    "exclusion_received_on",
+                }
                 for name, value in dates.items():
                     if name not in allowed:
                         raise HiringError(400, "That date is not tracked.")
@@ -1758,6 +1839,153 @@ class HiringEngine:
             self._save(payload)
             return self._hire_public(row, hire)
 
+    def handoff(self, practice_id: str, hire_id: str, form_keys: list[str], actor: str) -> dict[str, Any]:
+        """Give the hire to Billing. Emails send once, and only when their settings are on."""
+        with _lock:
+            payload = self._read()
+            row = self._practice(payload, practice_id)
+            hire = row["hires"].get(hire_id)
+            if not hire or hire.get("status") == "archived":
+                raise HiringError(404, "Hire not found.")
+            choices = {str(item["form_key"]): item for item in self._packet_choices(hire)}
+            selected: list[str] = []
+            for key in form_keys:
+                text = str(key or "").strip()
+                if not text or text in selected:
+                    continue
+                choice = choices.get(text)
+                if not choice or not choice.get("available"):
+                    raise HiringError(400, "That form is not in the library yet.")
+                selected.append(text)
+            hire["packet_form_keys"] = selected
+            hire["stage"] = "payroll"
+            hire["owner"] = "billing"
+            self._payroll_todo(practice_id, row, hire)
+            if not hire.get("handoff_at"):
+                hire["handoff_at"] = _iso()
+                self._history(row, "hire", hire_id, "handoff", actor, "Handed off to billing")
+                self._send_handoff_mail(practice_id, row, hire, actor)
+            else:
+                self._history(row, "hire", hire_id, "handoff", actor, "Handoff already recorded")
+            self._save(payload)
+            return self._hire_public(row, hire)
+
+    def recall_handoff(self, practice_id: str, hire_id: str, actor: str) -> dict[str, Any]:
+        with _lock:
+            payload = self._read()
+            row = self._practice(payload, practice_id)
+            hire = row["hires"].get(hire_id)
+            if not hire or not hire.get("handoff_at"):
+                raise HiringError(409, "That hire has not been handed off.")
+            hire["stage"] = "accepted"
+            hire["owner"] = "admin"
+            self._history(row, "hire", hire_id, "handoff_recalled", actor, "Handoff recalled")
+            self._save(payload)
+            return self._hire_public(row, hire)
+
+    def _send_handoff_mail(self, practice_id: str, row: dict[str, Any], hire: dict[str, Any], actor: str) -> None:
+        settings = row["settings"]
+        candidate = row["candidates"].get(hire.get("candidate_id") or "") or {}
+        name = str(candidate.get("display_name") or "New hire")
+        base = (os.environ.get("ATTUNE_PUBLIC_BASE_URL") or "https://clynotion.com").rstrip("/")
+        link = f"{base}/#hiring?hire={hire.get('id') or ''}"
+        override = str(settings.get("wizard_email_override") or "").strip().lower()
+        _label, billing_email = _billing_contact(practice_id)
+        staff_to = override or billing_email
+        hire_id = str(hire.get("id") or "")
+        if not settings.get("staff_handoff_emails_enabled") or not staff_to:
+            hire["staff_email_status"] = "suppressed"
+            self._history(row, "hire", hire_id, "staff_email", actor, "Email not sent (setting off)")
+        else:
+            status = deliver(
+                practice_id,
+                staff_to,
+                f"New hire ready for payroll: {name}",
+                payroll_handoff_body(
+                    name,
+                    str(hire.get("position") or ""),
+                    str(hire.get("employment_type") or ""),
+                    str(hire.get("start_date") or ""),
+                    link,
+                ),
+            )
+            hire["staff_email_status"] = "sent" if status == "sent" else "failed"
+            row["mail_queue"].append(public_queue_row("staff_handoff", str(hire.get("offer_id") or ""), _iso(), status))
+            self._history(
+                row,
+                "hire",
+                hire_id,
+                "staff_email",
+                actor,
+                "Staff handoff email sent" if status == "sent" else "Staff handoff email failed",
+            )
+        candidate_to = override or str(candidate.get("personal_email") or "").strip().lower()
+        if not settings.get("candidate_emails_enabled") or not candidate_to:
+            hire["candidate_email_status"] = "suppressed"
+            self._history(row, "hire", hire_id, "candidate_email", actor, "Email not sent (setting off)")
+            return
+        status = deliver(
+            practice_id,
+            candidate_to,
+            f"Welcome to Heart for Change, {name}",
+            candidate_packet_body(_welcome_text(name, hire)),
+            self._packet_attachments(row, hire),
+        )
+        hire["candidate_email_status"] = "sent" if status == "sent" else "failed"
+        row["mail_queue"].append(public_queue_row("candidate_packet", str(hire.get("offer_id") or ""), _iso(), status))
+        self._history(
+            row,
+            "hire",
+            hire_id,
+            "candidate_email",
+            actor,
+            "Candidate packet email sent" if status == "sent" else "Candidate packet email failed",
+        )
+
+    def _packet_attachments(self, row: dict[str, Any], hire: dict[str, Any]) -> tuple[tuple[str, str, bytes], ...]:
+        library = {str(item.get("form_key") or ""): item for item in row["forms_library"].values()}
+        files: list[tuple[str, str, bytes]] = []
+        for key in hire.get("packet_form_keys") or []:
+            spec = library.get(str(key)) or {}
+            filename = str(spec.get("filename") or "")
+            if not filename.lower().endswith(".pdf"):
+                continue
+            path = form_path(filename)
+            if not path.is_file():
+                continue
+            files.append((path.name, "application/pdf", path.read_bytes()))
+        return tuple(files)
+
+    def packet_zip(self, practice_id: str, hire_id: str, form_keys: list[str]) -> tuple[bytes, str]:
+        with _lock:
+            row = self._practice(self._read(), practice_id)
+            hire = row["hires"].get(hire_id)
+            if not hire:
+                raise HiringError(404, "Hire not found.")
+            choices = {str(item["form_key"]): item for item in self._packet_choices(hire)}
+            library = {str(item.get("form_key") or ""): item for item in row["forms_library"].values()}
+            names: list[tuple[str, bytes]] = []
+            for key in form_keys:
+                text = str(key or "").strip()
+                choice = choices.get(text)
+                spec = library.get(text) or {}
+                if not choice or not choice.get("available") or not spec.get("filename"):
+                    raise HiringError(400, "That form is not in the library yet.")
+                path = form_path(str(spec["filename"]))
+                if not path.is_file():
+                    raise HiringError(404, "That form is not on file.")
+                names.append((path.name, path.read_bytes()))
+            label = str((row["candidates"].get(hire.get("candidate_id") or "") or {}).get("display_name") or "packet")
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            used: set[str] = set()
+            for filename, data in names:
+                stored = filename if filename not in used else f"{len(used)}-{filename}"
+                used.add(stored)
+                archive.writestr(stored, data)
+        safe = "".join(ch if ch.isalnum() else "_" for ch in label).strip("_") or "packet"
+        return buffer.getvalue(), f"{safe}_packet.zip"
+
     def _payroll_todo(self, practice_id: str, row: dict[str, Any], hire: dict[str, Any]) -> None:
         from app.platform.due import due_engine
 
@@ -1774,7 +2002,7 @@ class HiringEngine:
             title=f"{name}: W-4, direct deposit, and the PA new-hire report",
             owner_user_id="billing",
             due_at=due_at,
-            href="/#hiring",
+            href=f"/#hiring?hire={hire.get('id') or ''}",
             source_ref=str(hire.get("id") or "") + ":packet",
         )
 
@@ -1848,15 +2076,17 @@ class HiringEngine:
     def payroll_set(self, practice_id: str, hire_id: str, key: str, status: str, actor: str) -> dict[str, Any]:
         if key not in PAYROLL_KEYS:
             raise HiringError(403, "That item is not on the payroll handoff.")
-        return self.set_item(practice_id, hire_id, key, status=status, actor=actor)
+        return self.set_item(practice_id, hire_id, key, status=status, actor=actor, billing=True)
 
-    def activate(self, practice_id: str, hire_id: str, actor: str, work_email: str) -> dict[str, Any]:
+    def activate(self, practice_id: str, hire_id: str, actor: str, work_email: str, *, billing: bool = False) -> dict[str, Any]:
         with _lock:
             payload = self._read()
             row = self._practice(payload, practice_id)
             hire = row["hires"].get(hire_id)
             if not hire or hire.get("status") != "onboarding":
                 raise HiringError(409, "That hire cannot be activated.")
+            if billing and not self._billing_visible(hire):
+                raise HiringError(403, "That hire has not been handed off.")
             start = parse_iso(hire["start_date"])
             if start > _today():
                 raise HiringError(409, "Activation is available on or after the start date.")
@@ -1880,6 +2110,7 @@ class HiringEngine:
             credentials = str((version.get("field_values") or {}).get("candidate_credentials") or "")
             self._handoff(practice_id, hire, candidate, email, actor, credentials)
             hire["status"] = "active"
+            hire["stage"] = "active"
             hire["activated_at"] = _iso()
             hire["work_email"] = email
             hire["employee_view_id"] = email
@@ -2491,6 +2722,27 @@ def _acceptance_day(value: str) -> date:
     if not normalized:
         raise HiringError(400, "Acceptance date must be a real date.", "accepted_on")
     return datetime.strptime(normalized, "%m/%d/%Y").date()
+
+
+def _billing_contact(practice_id: str) -> tuple[str, str]:
+    """Display name and mailbox for the Billing role. No assignment is changed."""
+    from app.access.permissions import CHRISTINE_EMAIL
+    from app.access.store import access_store
+    from app.clinicians import clinician_store
+
+    names = {
+        (person.email or "").strip().lower(): (person.display_name or "").strip()
+        for person in clinician_store.list_all_for_practice(practice_id)
+    }
+    emails = [row["email"] for row in access_store.assignments_public(practice_id) if row.get("role_id") == "billing"]
+    if CHRISTINE_EMAIL in emails:
+        emails = [CHRISTINE_EMAIL] + [item for item in emails if item != CHRISTINE_EMAIL]
+    if not emails:
+        return "Billing", ""
+    email = emails[0]
+    name = names.get(email) or ""
+    first = name.split(" ", 1)[0] if name else ""
+    return first or "Billing", email
 
 
 def _welcome_text(name: str, hire: dict[str, Any]) -> str:

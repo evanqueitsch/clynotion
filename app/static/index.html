@@ -451,6 +451,9 @@
     #hiring-panel, #hiring-root { max-width: 100%; overflow-x: hidden; }
     #hiring-root .hire-actions { display: flex; flex-wrap: wrap; gap: 0.35rem; max-width: 100%; align-items: center; }
     #hiring-root .hire-drive-note { display: block; min-height: 1.15rem; line-height: 1.15rem; }
+    #hiring-root .hire-stage { display: block; min-height: 1.4rem; line-height: 1.4rem; }
+    #hiring-root .hire-mail { display: block; min-height: 2.4rem; line-height: 1.2rem; white-space: pre-line; }
+    #hiring-root .packet-row { display: flex; gap: 0.5rem; align-items: center; min-height: 1.6rem; }
     #hiring-root .due-row { flex-wrap: wrap; min-width: 0; max-width: 100%; }
     #hiring-root .due-row > div { min-width: 0; }
     #hiring-root .hire-card, #hiring-root .hire-decision {
@@ -1223,7 +1226,7 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.19.7"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.23.5"></script>
+  <script src="/static/hiring.js?v=0.24.0"></script>
   <script>
     const state = {
       token: null,
@@ -2495,7 +2498,7 @@
       if (href.includes("#billing")) return window.openBilling();
       if (href.includes("#denials")) return window.openDenials();
       if (href.includes("#settings")) return window.openSettings();
-      if (href.includes("#hiring")) return openHiring();
+      if (href.includes("#hiring")) return openHiring(href);
       if (href.includes("#employees")) return window.openEmployees();
       if (href.includes("#employee")) return window.openEmployee();
       if (href.includes("onboarding")) return openOnboarding();
@@ -4078,14 +4081,20 @@
       show("capture-panel");
     };
 
-    async function openHiring() {
-      const hash = (window.location.hash || "").replace(/^#\/?/, "");
-      if (hash !== "hiring") {
-        window.location.hash = "#hiring";
+    async function openHiring(href) {
+      const source = href || window.location.hash || "";
+      const raw = String(source).replace(/^.*#\/?/, "");
+      const q = raw.indexOf("?");
+      const path = q === -1 ? raw : raw.slice(0, q);
+      const params = new URLSearchParams(q === -1 ? "" : raw.slice(q + 1));
+      const hire = path === "hiring" ? (params.get("hire") || "") : "";
+      const next = hire ? "#hiring?hire=" + encodeURIComponent(hire) : "#hiring";
+      if ((window.location.hash || "") !== next) {
+        window.location.hash = next;
         return;
       }
       show("hiring-panel");
-      if (window.clyHiring) await window.clyHiring.open();
+      if (window.clyHiring) await window.clyHiring.open({ hireId: hire });
     }
 
     async function openEmployee() {

@@ -219,6 +219,9 @@ def _raw_message(message: OutboundMail, sender: str) -> str:
             charset="utf-8",
             filename=message.csv_filename or "weekly-hours-self-test.csv",
         )
+    for filename, mime_type, payload in getattr(message, "attachments", ()) or ():
+        main, _, sub = str(mime_type or "application/octet-stream").partition("/")
+        mime.add_attachment(payload, maintype=main or "application", subtype=sub or "octet-stream", filename=filename)
     return base64.urlsafe_b64encode(mime.as_bytes()).decode("ascii")
 
 

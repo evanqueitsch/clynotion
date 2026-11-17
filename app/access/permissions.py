@@ -218,7 +218,7 @@ def permission_registry() -> list[dict[str, Any]]:
                 "name": "Payroll handoff for new hires",
                 "group": "capability",
                 "grantable": True,
-                "note": "Name, start date, and payroll checklist items. Not granted on a role yet.",
+                "note": "Billing role, for hires handed off to payroll. Not an assignment change.",
             },
         ]
     )

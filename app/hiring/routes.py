@@ -33,6 +33,8 @@ class SettingsBody(BaseModel):
     vault_min_days_i9: Optional[int] = None
     hiring_rollout: Optional[bool] = None
     supervision_agreement_approved: Optional[bool] = None
+    staff_handoff_emails_enabled: Optional[bool] = None
+    wizard_email_override: Optional[str] = None
 
 
 class OfferBody(BaseModel):
@@ -86,6 +88,10 @@ class PayrollBody(BaseModel):
     status: str
 
 
+class HandoffBody(BaseModel):
+    form_keys: list[str] = Field(default_factory=list)
+
+
 def _fail(exc: HiringError) -> None:
     if exc.field:
         raise HTTPException(
@@ -99,13 +105,19 @@ def _actor(user: CurrentUser) -> str:
     return (user.email or user.username or "admin").strip().lower()
 
 
-def _require_admin(user: CurrentUser) -> None:
+def _offer_admin(user: CurrentUser) -> bool:
     if sees_every_module(user) or is_owner(user):
-        if has_permission(user, OFFER_MANAGE) or is_owner(user):
-            return
-    if hiring.rollout_enabled(user.practice_id) and has_permission(user, OFFER_MANAGE):
-        return
-    raise HTTPException(status_code=403, detail="You do not have access to that.")
+        return has_permission(user, OFFER_MANAGE) or is_owner(user)
+    return hiring.rollout_enabled(user.practice_id) and has_permission(user, OFFER_MANAGE)
+
+
+def _require_admin(user: CurrentUser) -> None:
+    if not _offer_admin(user):
+        raise HTTPException(status_code=403, detail="You do not have access to that.")
+
+
+def _payroll_actor(user: CurrentUser) -> bool:
+    return is_owner(user) or has_permission(user, HIRING_PAYROLL)
 
 
 def _base(request: Request) -> str:
@@ -114,12 +126,15 @@ def _base(request: Request) -> str:
 
 @router.get("/hiring/bootstrap")
 def bootstrap(response: Response, user: CurrentUser) -> dict[str, Any]:
-    _require_admin(user)
     response.headers["Cache-Control"] = "no-store"
     try:
-        return hiring.list_offers(user.practice_id)
+        if _offer_admin(user):
+            return hiring.list_offers(user.practice_id)
+        if _payroll_actor(user):
+            return hiring.list_billing(user.practice_id)
     except HiringError as exc:
         _fail(exc)
+    raise HTTPException(status_code=403, detail="You do not have access to that.")
 
 
 @router.put("/hiring/settings")
@@ -312,7 +327,12 @@ def download_offer(offer_id: str, kind: str, user: CurrentUser) -> Response:
 
 @router.post("/hiring/hires/{hire_id}/items/{key}")
 def set_item(hire_id: str, key: str, body: ItemBody, user: CurrentUser) -> dict[str, Any]:
-    _require_admin(user)
+    admin = _offer_admin(user)
+    if not admin and not _payroll_actor(user):
+        raise HTTPException(status_code=403, detail="You do not have access to that.")
+    if key in {"i9_section1", "i9_section2", "i9_scan_uploaded"} and not admin:
+        if key != "i9_section2" or not has_permission(user, HIRING_PAYROLL):
+            raise HTTPException(status_code=403, detail="You do not have access to that.")
     try:
         return hiring.set_item(
             user.practice_id,
@@ -324,6 +344,7 @@ def set_item(hire_id: str, key: str, body: ItemBody, user: CurrentUser) -> dict[
             where=body.where_original_lives,
             first_day=body.first_day_worked_for_pay,
             note=body.note,
+            billing=not admin,
         )
     except HiringError as exc:
         _fail(exc)
@@ -386,11 +407,45 @@ def delete_hire(hire_id: str, body: DeleteBody, user: CurrentUser) -> dict[str, 
 
 @router.post("/hiring/hires/{hire_id}/activate")
 def activate(hire_id: str, body: ActivateBody, user: CurrentUser) -> dict[str, Any]:
-    _require_admin(user)
+    admin = _offer_admin(user)
+    if not admin and not _payroll_actor(user):
+        raise HTTPException(status_code=403, detail="You do not have access to that.")
     try:
-        return hiring.activate(user.practice_id, hire_id, _actor(user), body.work_email)
+        return hiring.activate(user.practice_id, hire_id, _actor(user), body.work_email, billing=not admin)
     except HiringError as exc:
         _fail(exc)
+
+
+@router.post("/hiring/hires/{hire_id}/handoff")
+def handoff(hire_id: str, body: HandoffBody, user: CurrentUser) -> dict[str, Any]:
+    _require_admin(user)
+    try:
+        return hiring.handoff(user.practice_id, hire_id, body.form_keys, _actor(user))
+    except HiringError as exc:
+        _fail(exc)
+
+
+@router.post("/hiring/hires/{hire_id}/recall")
+def recall(hire_id: str, user: CurrentUser) -> dict[str, Any]:
+    _require_admin(user)
+    try:
+        return hiring.recall_handoff(user.practice_id, hire_id, _actor(user))
+    except HiringError as exc:
+        _fail(exc)
+
+
+@router.post("/hiring/hires/{hire_id}/packet.zip")
+def packet_zip(hire_id: str, body: HandoffBody, user: CurrentUser) -> Response:
+    _require_admin(user)
+    try:
+        data, name = hiring.packet_zip(user.practice_id, hire_id, body.form_keys)
+    except HiringError as exc:
+        _fail(exc)
+    return Response(
+        content=data,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{name}"'},
+    )
 
 
 @router.get("/hiring/forms")

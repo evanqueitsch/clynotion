@@ -5,7 +5,7 @@ from __future__ import annotations
 from fastapi import HTTPException, Request
 from starlette.responses import JSONResponse
 
-from app.access.permissions import MANAGE_ROLES, PAYROLL_DASHBOARD, TIME_ENTRY
+from app.access.permissions import HIRING_PAYROLL, MANAGE_ROLES, PAYROLL_DASHBOARD, TIME_ENTRY
 from app.access.resolve import has_permission, is_owner
 from app.auth import COOKIE_NAME, decode_token
 
@@ -93,6 +93,9 @@ async def access_middleware(request: Request, call_next):
     user = _user_from_request(request)
     if user is None:
         return JSONResponse({"detail": "Not authenticated"}, status_code=401)
-    if needed and not (is_owner(user) or has_permission(user, needed)):
+    allowed = is_owner(user) or (bool(needed) and has_permission(user, needed))
+    if needed == "tool:hiring_onboarding" and has_permission(user, HIRING_PAYROLL):
+        allowed = True
+    if needed and not allowed:
         return JSONResponse({"detail": "You do not have access to that."}, status_code=403)
     return await call_next(request)
