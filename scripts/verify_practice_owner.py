@@ -142,6 +142,32 @@ def _billing_profile_gap(practice_id: str) -> dict:
     }
 
 
+def _wizard_step_flags(practice_id: str) -> dict:
+    """Whether stored email steps still contain the old W-4 lines. No template text."""
+    path = Path((os.environ.get("ATTUNE_ONBOARDING_DATA_PATH") or "/data/onboarding.enc").strip())
+    if not path.is_file():
+        return {"present": False}
+    try:
+        from app.crypto import decrypt_utf8
+
+        payload = json.loads(decrypt_utf8(path.read_bytes()))
+    except Exception:
+        return {"present": True, "readable": False}
+    practice = ((payload.get("practices") or {}).get(practice_id) or {}) if isinstance(payload, dict) else {}
+    settings = practice.get("settings") if isinstance(practice.get("settings"), dict) else {}
+    candidate = str(settings.get("candidate_packet_steps") or "")
+    staff = str(settings.get("staff_handoff_steps") or "")
+    return {
+        "present": True,
+        "readable": True,
+        "candidate_steps_saved": bool(candidate.strip()),
+        "staff_steps_saved": bool(staff.strip()),
+        "candidate_old_invite": "separate secure invitation to set up your W-4" in candidate,
+        "candidate_w4_packet_line": "w-4" in candidate.casefold() and "packet" in candidate.casefold(),
+        "staff_old_setup": "Set up the W-4 and direct deposit" in staff,
+    }
+
+
 def _rollout(practice_id: str) -> bool | None:
     from app.employees.store import employees_store
 
@@ -211,12 +237,13 @@ def main() -> None:
         "credentialing_present": cred_path.is_file(),
         "personnel_normalize": _personnel_normalize(),
         "billing_greeting": _billing_profile_gap(practice_id),
+        "wizard_step_migration": _wizard_step_flags(practice_id),
     }
     after_stats = {str(path): _stat(path) for path in (access_path, cred_path, employees_path)}
     report["files_unchanged"] = before == after_stats
     print("VERIFY " + json.dumps(report, sort_keys=True))
     ok = (
-        report["version"] == "0.25.3"
+        report["version"] == "0.26.0"
         and report["role_name"] == "Practice Owner"
         and role_permissions == YES
         and report["assigned"] is True

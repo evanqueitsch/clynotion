@@ -9,7 +9,7 @@
 
 ## 1. Purpose
 
-Track each new hire's onboarding progress and each employee's ongoing compliance status in one admin view, replacing the spreadsheet nobody remembers to update. Encodes the onboarding process built 8/18/26 (see the Digital Onboarding Playbook): packet e-signed via Acrobat, W-4 + direct deposit via QuickBooks Workforce, I-9 verified in person, PA clearances, insurance credentialing, and — for LSW hires — a clinical supervision agreement plus supervised-hours logging.
+Track each new hire's onboarding progress and each employee's ongoing compliance status in one admin view, replacing the spreadsheet nobody remembers to update. Encodes the onboarding process: packet e-signed via Acrobat, W-4 and direct deposit entered by the hire after Admin sends a QuickBooks Workforce Employee self-onboard invite (Clynotion records the invite and later mirrors completion only), I-9 verified in person, PA clearances, insurance credentialing, and — for LSW hires — a clinical supervision agreement plus supervised-hours logging.
 
 ## 2. Design principles
 
@@ -46,7 +46,7 @@ Track each new hire's onboarding progress and each employee's ongoing compliance
 ## 5. Business rules
 
 - LSW `licenseType` → `supervisionAgreement` step and SupervisionLog become required/visible; LCSW → hidden/NA.
-- `w4_quickbooks` and `directDeposit_quickbooks` are **status-only mirrors** of QuickBooks Workforce completion — Clynotion never stores the underlying SSN/bank data.
+- `w4_quickbooks` and `directDeposit_quickbooks` are **status-only mirrors** of QuickBooks Workforce self-onboarding. Admin sends the Employee self-onboard invite. Billing confirms completion. Clynotion never stores the underlying SSN or bank data, and QuickBooks does not accept those fields through an API.
 - PA clearances auto-set `expiryDate` = `issueDate` + 60 months on entry.
 - Completing all applicable steps flips `overallStatus` to Complete and timestamps it.
 

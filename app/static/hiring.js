@@ -482,14 +482,67 @@
       hire.start_date || "",
     ].filter(Boolean).join(" · ");
     block.appendChild(summary);
+    const task = document.createElement("p");
+    task.textContent = "Add to QuickBooks Workforce with Employee self onboard on (name, hire date, email). QuickBooks emails the hire to enter their own W-4 and direct deposit.";
+    block.appendChild(task);
+    const copies = [
+      ["First name", hire.first_name || ""],
+      ["Last name", hire.last_name || ""],
+      ["Hire date", hire.start_date || ""],
+      ["Email", hire.personal_email || ""],
+    ];
+    copies.forEach(function (pair) {
+      const row = document.createElement("div");
+      row.className = "row";
+      const label = document.createElement("span");
+      label.textContent = pair[0] + ": " + (pair[1] || "—");
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "ghost";
+      copy.textContent = "Copy " + pair[0].toLowerCase();
+      copy.onclick = function () {
+        const value = pair[1] || "";
+        const done = function () { showStatus("Copied " + pair[0].toLowerCase() + ".", "ok"); };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(value).then(done).catch(function () { done(); });
+          return;
+        }
+        done();
+      };
+      row.appendChild(label);
+      row.appendChild(copy);
+      block.appendChild(row);
+    });
+    const inviteLabel = document.createElement("label");
+    const invite = document.createElement("input");
+    invite.type = "checkbox";
+    invite.checked = !!hire.qb_invite_at;
+    inviteLabel.appendChild(invite);
+    inviteLabel.appendChild(document.createTextNode(" Invite sent in QuickBooks"));
+    block.appendChild(inviteLabel);
+    const inviteNote = document.createElement("p");
+    inviteNote.className = "meta";
+    inviteNote.textContent = hire.qb_invite_at
+      ? "Recorded by " + (hire.qb_invite_by || "admin") + " on " + shortDate(hire.qb_invite_at) + "."
+      : "";
+    block.appendChild(inviteNote);
     const handedOff = hire.owner === "billing" && (hire.stage === "payroll" || hire.stage === "active");
+    const reason = document.createElement("p");
+    reason.className = "meta";
+    reason.textContent = hire.qb_invite_at || handedOff ? "" : "Mark Invite sent in QuickBooks before handing this hire to Billing.";
     const hand = document.createElement("button");
     hand.type = "button";
     hand.className = "primary";
     hand.textContent = handedOff
       ? "Handed off to " + (billingLabel || "Billing") + (hire.handoff_at ? " on " + shortDate(hire.handoff_at) : "")
       : "Hand off to " + (billingLabel || "Billing");
-    hand.disabled = handedOff;
+    hand.disabled = handedOff || !hire.qb_invite_at;
+    invite.onchange = function () {
+      ui()
+        .api("/hiring/hires/" + hire.id + "/qb-invite", { method: "POST", json: { sent: invite.checked } })
+        .then(function (saved) { refreshHire(saved, invite.checked ? "Invite recorded." : "Invite cleared."); })
+        .catch(function (error) { showStatus((error && error.message) || "Could not record the invite.", "error"); });
+    };
     hand.onclick = function () {
       if (hand.disabled) return;
       ui()
@@ -505,6 +558,7 @@
           showStatus((error && error.message) || "Could not hand off.", "error");
         });
     };
+    block.appendChild(reason);
     block.appendChild(hand);
     if (hire.owner === "billing") {
       const recall = document.createElement("button");
@@ -642,20 +696,23 @@
     heading.textContent = "Payroll steps";
     card.appendChild(heading);
     const payroll = itemByKey(hire, "payroll_w4_dd");
-    dateStep(card, hire, payroll, "W-4 received", "w4_received_on", false);
-    dateStep(card, hire, payroll, "Direct deposit received", "direct_deposit_received_on", false);
-    const both = document.createElement("p");
-    both.className = "meta";
-    const dates = payroll.dates || {};
-    both.textContent = dates.w4_received_on && dates.direct_deposit_received_on
-      ? "W-4 and direct deposit are both recorded."
-      : "Saving a date records that step. Both dates mark the checklist item done.";
-    card.appendChild(both);
-    dateStep(card, hire, itemByKey(hire, "pa_new_hire_report"), "PA new-hire report filed", "pa_new_hire_filed_on", true);
-    dateStep(card, hire, itemByKey(hire, "i9_section2"), "I-9 in-person appointment", "i9_appointment_on", false);
-    dateStep(card, hire, itemByKey(hire, "i9_section2"), "I-9 completed", "i9_completed_on", true);
-    dateStep(card, hire, itemByKey(hire, "clearances"), "PA clearances received", "clearances_received_on", true);
-    dateStep(card, hire, itemByKey(hire, "exclusion_screening"), "Exclusion screening verified", "exclusion_received_on", true);
+    const confirm = document.createElement("label");
+    const box = document.createElement("input");
+    box.type = "checkbox";
+    box.checked = payroll.status === "done";
+    confirm.appendChild(box);
+    confirm.appendChild(document.createTextNode(" 1. Confirm the hire finished QuickBooks Workforce self-onboarding (W-4 and direct deposit show complete in QuickBooks Workforce)."));
+    box.onchange = function () {
+      const dates = Object.assign({}, payroll.dates || {});
+      dates.qb_onboarding_confirmed_on = box.checked ? new Date().toISOString().slice(0, 10) : "";
+      postItem(card, hire, "payroll_w4_dd", { status: box.checked ? "done" : "open", dates: dates }, "QuickBooks onboarding saved.");
+    };
+    card.appendChild(confirm);
+    dateStep(card, hire, itemByKey(hire, "pa_new_hire_report"), "2. PA new-hire report filed", "pa_new_hire_filed_on", true);
+    dateStep(card, hire, itemByKey(hire, "i9_section2"), "3. I-9 in-person appointment", "i9_appointment_on", false);
+    dateStep(card, hire, itemByKey(hire, "i9_section2"), "3. I-9 completed", "i9_completed_on", true);
+    dateStep(card, hire, itemByKey(hire, "clearances"), "4. PA clearances received", "clearances_received_on", true);
+    dateStep(card, hire, itemByKey(hire, "exclusion_screening"), "4. Exclusion screening verified", "exclusion_received_on", true);
   }
 
   function render(data, options) {

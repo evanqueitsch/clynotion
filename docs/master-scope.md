@@ -955,7 +955,7 @@ On acceptance, generate a dated checklist from role and license type. For a clin
 
 > **Naming note.** The practice module sheet is titled “OPS-2 · Onboarding & Compliance Tracking.” In this master document, **§6 OPS-2** remains the COMPLY Compliance & Credentialing Registry (practice calendar + six clinician clocks). This §12.9 module is the **HR Employee onboarding tracker** (legacy alias `OPS-2-onboarding` / handoff from OPS-7). Do not merge the two stores.
 
-**Purpose.** Track each new hire’s onboarding progress and each employee’s ongoing clearance/license status in one admin view, replacing `H4C_Onboarding_Tracker.xlsx`. Encodes the Digital Onboarding Playbook: packet e-sign, W-4 + direct deposit via QuickBooks Workforce (status mirrors only), I-9 verified in person, PA clearances, insurance credentialing, and — for LSW hires — a clinical supervision agreement plus supervised-hours logging.
+**Purpose.** Track each new hire’s onboarding progress and each employee’s ongoing clearance/license status in one admin view, replacing `H4C_Onboarding_Tracker.xlsx`. Encodes the Digital Onboarding Playbook: packet e-sign, W-4 and direct deposit entered by the hire through a QuickBooks Workforce Employee self-onboard invite sent by Admin (Clynotion does not enter them), I-9 verified in person, PA clearances, insurance credentialing, and — for LSW hires — a clinical supervision agreement plus supervised-hours logging.
 
 **Design principles**
 
@@ -1118,7 +1118,7 @@ That number requires `OPS-6` (time), `FIN-1` (revenue), and the SP session repor
 
 ## 16. Document conflicts requiring resolution
 
-Three live contradictions across current documents. None is cosmetic.
+Three live contradictions across current documents. None is cosmetic. The QuickBooks W-4 path is not one of them: Admin sends the Workforce Employee self-onboard invite, the hire enters W-4 and direct deposit, and Billing confirms completion (§12.9).
 
 | # | Conflict | Documents | Resolution |
 |---|---|---|---|

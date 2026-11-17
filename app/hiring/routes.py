@@ -479,6 +479,19 @@ def activate(hire_id: str, body: ActivateBody, user: CurrentUser) -> dict[str, A
         _fail(exc)
 
 
+class QbInviteBody(BaseModel):
+    sent: bool = True
+
+
+@router.post("/hiring/hires/{hire_id}/qb-invite")
+def qb_invite(hire_id: str, body: QbInviteBody, user: CurrentUser) -> dict[str, Any]:
+    _require_admin(user)
+    try:
+        return hiring.mark_qb_invite(user.practice_id, hire_id, body.sent, _actor(user))
+    except HiringError as exc:
+        _fail(exc)
+
+
 @router.post("/hiring/hires/{hire_id}/handoff")
 def handoff(hire_id: str, body: HandoffBody, user: CurrentUser) -> dict[str, Any]:
     _require_admin(user)
