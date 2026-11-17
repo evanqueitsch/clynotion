@@ -306,6 +306,20 @@ def _visible_units(user: CurrentUser) -> list[dict]:
     return visible
 
 
+def _with_payroll_todos(practice_id: str, bands_raw: dict) -> dict:
+    """Show the payroll handoff even when its due date is past this week.
+
+    A future due date stays out of the overdue band.
+    """
+    seen = {item.obligation_id for item in bands_raw["overdue"] + bands_raw["this_week"]}
+    later = [
+        item
+        for item in due_engine.list_open(practice_id)
+        if item.source == "hiring-payroll" and item.obligation_id not in seen
+    ]
+    return {"overdue": bands_raw["overdue"], "this_week": list(bands_raw["this_week"]) + later}
+
+
 def _home_payload(user: CurrentUser) -> HomeOut:
     from app.access.resolve import landing_for, sees_every_module
 
@@ -384,7 +398,7 @@ def _home_payload(user: CurrentUser) -> HomeOut:
         owner_user_id=user.user_id,
         sessions=store.list_for_practice(user.practice_id),
     )
-    bands_raw = due_engine.bands(user.practice_id)
+    bands_raw = _with_payroll_todos(user.practice_id, due_engine.bands(user.practice_id))
     bands = HomeBandsOut(
         overdue=[_obligation_out(o) for o in bands_raw["overdue"]],
         this_week=[_obligation_out(o) for o in bands_raw["this_week"]],
@@ -426,7 +440,7 @@ def due_bands(user: CurrentUser) -> HomeBandsOut:
         owner_user_id=user.user_id,
         sessions=store.list_for_practice(user.practice_id),
     )
-    bands_raw = due_engine.bands(user.practice_id)
+    bands_raw = _with_payroll_todos(user.practice_id, due_engine.bands(user.practice_id))
     return _visible_due(user, bands_raw)
 
 

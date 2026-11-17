@@ -61,15 +61,28 @@ def _billing_obligations(practice_id: str) -> list[dict[str, Any]]:
 def _action_items(practice_id: str) -> list[dict[str, str]]:
     bands = due_engine.bands(practice_id)
     items = []
+    seen: set[str] = set()
     for ob in bands["overdue"] + bands["this_week"]:
-        if ob.domain != "credentialing":
+        if ob.domain != "credentialing" and ob.source != "hiring-payroll":
             continue
+        seen.add(ob.obligation_id)
         items.append(
             {
                 "title": ob.title,
                 "due_at": ob.due_at,
                 "href": ob.href,
                 "band": "overdue" if ob in bands["overdue"] else "this_week",
+            }
+        )
+    for ob in due_engine.list_open(practice_id):
+        if ob.source != "hiring-payroll" or ob.obligation_id in seen:
+            continue
+        items.append(
+            {
+                "title": ob.title,
+                "due_at": ob.due_at,
+                "href": ob.href,
+                "band": "upcoming",
             }
         )
     return items

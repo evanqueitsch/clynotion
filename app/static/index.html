@@ -454,6 +454,10 @@
     #hiring-root .hire-stage { display: block; min-height: 1.4rem; line-height: 1.4rem; }
     #hiring-root .hire-mail { display: block; min-height: 2.4rem; line-height: 1.2rem; white-space: pre-line; }
     #hiring-root .packet-row { display: flex; gap: 0.5rem; align-items: center; min-height: 1.6rem; }
+    #hiring-root .hire-stepper { display: flex; flex-wrap: wrap; gap: 0.35rem; list-style: none; margin: 0.35rem 0; padding: 0; }
+    #hiring-root .hire-step { min-height: 1.5rem; line-height: 1.5rem; padding: 0 0.55rem; border: 1px solid var(--line); border-radius: 999px; color: var(--muted); }
+    #hiring-root .hire-step.done { color: var(--ink, inherit); background: rgba(47, 111, 94, 0.12); }
+    #hiring-root .hire-step.current { color: var(--ink, inherit); font-weight: 700; border-color: currentColor; }
     #hiring-root .due-row { flex-wrap: wrap; min-width: 0; max-width: 100%; }
     #hiring-root .due-row > div { min-width: 0; }
     #hiring-root .hire-card, #hiring-root .hire-decision {
@@ -1226,7 +1230,7 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.19.7"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.24.0"></script>
+  <script src="/static/hiring.js?v=0.24.1"></script>
   <script>
     const state = {
       token: null,
@@ -2748,6 +2752,10 @@
       }
       if ((ob.href || "").includes("intake") || ob.source === "ops3") {
         await openIntake();
+        return;
+      }
+      if ((ob.href || "").includes("#hiring") || ob.source === "hiring-payroll") {
+        await openHiring(ob.href);
         return;
       }
       if ((ob.href || "").includes("onboarding") || ob.source === "hr_onboarding") {

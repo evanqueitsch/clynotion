@@ -6,6 +6,7 @@ clearances due before the start date. Payroll items belong to Billing.
 
 from __future__ import annotations
 
+import re
 from datetime import date, datetime, timedelta
 from typing import Any
 from zoneinfo import ZoneInfo
@@ -118,6 +119,23 @@ def clinician_title(title: str) -> bool:
     return "clinician" in (title or "").casefold()
 
 
+def supervision_required(credentials: str) -> bool:
+    """Supervision applies unless the hire is fully licensed.
+
+    Blank credentials need supervision. A candidate credential needs supervision.
+    LCSW, LPC, LMFT, and psychologist do not.
+    """
+    text = (credentials or "").casefold()
+    if not text.strip() or "candidate" in text:
+        return True
+    if "psychologist" in text:
+        return False
+    tokens = {part for part in re.split(r"[^a-z]+", text) if part}
+    if tokens & {"lcsw", "lpc", "lmft"}:
+        return False
+    return True
+
+
 def clearance_state(*, direct: bool, status: str, due: date | None, today: date) -> dict[str, Any]:
     """Red when a direct-client clearance is still open on or after its due date.
 
@@ -152,7 +170,7 @@ def build_items(
             due = to_iso(add_business_days(accepted, 1, closed))
         elif key == "rev_419":
             status = "n/a"
-        elif key == "supervision_agreement" and not needs_supervision:
+        elif key in {"supervision_agreement", "supervision"} and not needs_supervision:
             status = "n/a"
         elif key == "clearances":
             due = to_iso(before_start)

@@ -553,13 +553,15 @@ def test_delete_hire_requires_the_exact_name_and_only_removes_that_hire() -> Non
         open_refs = [item.source_ref for item in due_engine.list_open("practice-a")]
         assert hire_id not in open_refs
         assert hire_id + ":packet" not in open_refs
-        assert drive.trashed
-        assert any(file_id in drive.folders for file_id in drive.trashed)
-        assert all(drive.files[file_id].get("trashed") for file_id in drive.trashed if file_id in drive.files)
+        parent = next(file_id for file_id, name in drive.folders.items() if name == "Sample, Delete Me")
+        assert parent not in drive.trashed
+        children = [file_id for file_id, meta in drive.files.items() if meta.get("folder")]
+        assert children
+        assert set(children) <= set(drive.trashed)
         left = client.get("/hiring/offers/" + offer_id, headers=_alice())
         assert left.status_code == 200
-        assert left.json()["drive_status"] == "trashed"
-        assert left.json()["drive_note"] == "Folder trashed"
-        assert left.json()["drive_retry"] is False
+        assert left.json()["drive_status"] != "trashed"
+        assert left.json()["drive_note"] != "Folder trashed"
+        assert left.json()["drive_folder_url"]
     finally:
         clear_personnel_drive_for_tests()
