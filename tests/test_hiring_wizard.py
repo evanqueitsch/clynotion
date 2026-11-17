@@ -698,3 +698,41 @@ def test_staff_greeting_uses_the_first_billing_name_and_otherwise_says_hello() -
     assert "Hello," in none.json()["text"]
     assert "Hi ," not in none.json()["text"]
     assert "there," not in none.json()["text"]
+
+
+def test_empty_billing_profile_uses_the_mailbox_name(monkeypatch) -> None:
+    """Production shape: the Billing role is assigned and the profile name is empty."""
+    person = clinician_store.upsert_workspace_user(
+        "practice-a",
+        google_id="christine-empty",
+        email="christine.example@example.com",
+        display_name="christine.example@example.com",
+    )
+    person.display_name = ""
+    access_store.set_assignment("practice-a", "christine.example@example.com", "billing")
+    monkeypatch.setattr("app.workspace_directory.directory_names_readonly", lambda _practice: {})
+    preview = client.post("/hiring/wizard-email-preview", headers=_alice(), json={"kind": "staff"})
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert "Hi Christine," in body["html"]
+    assert "Hello there," not in body["html"]
+    assert body["greeting_source"] == "email_local"
+
+
+def test_directory_name_is_used_when_the_profile_name_is_empty(monkeypatch) -> None:
+    clinician_store.upsert_workspace_user(
+        "practice-a",
+        google_id="christine-blank",
+        email="christine.example@example.com",
+        display_name="christine.example@example.com",
+    ).display_name = ""
+    access_store.set_assignment("practice-a", "christine.example@example.com", "billing")
+
+    def names(_practice: str) -> dict[str, str]:
+        return {"christine.example@example.com": "Christine Example"}
+
+    monkeypatch.setattr("app.workspace_directory.directory_names_readonly", names)
+    preview = client.post("/hiring/wizard-email-preview", headers=_alice(), json={"kind": "staff"})
+    assert preview.status_code == 200, preview.text
+    assert "Hi Christine," in preview.json()["html"]
+    assert preview.json()["greeting_source"] == "directory"

@@ -95,6 +95,53 @@ def _personnel_normalize() -> dict:
     }
 
 
+def _billing_profile_gap(practice_id: str) -> dict:
+    """Why the staff greeting could not use a profile name. Counts only."""
+    access_path = Path((os.environ.get("ATTUNE_ACCESS_DATA_PATH") or "/data/access_roles.enc").strip())
+    roster_path = Path((os.environ.get("ATTUNE_CLINICIAN_DATA_PATH") or "/data/clinicians.enc").strip())
+    if not access_path.is_file():
+        return {"present": False}
+    try:
+        from app.crypto import decrypt_utf8
+
+        access = json.loads(decrypt_utf8(access_path.read_bytes()))
+        roster = json.loads(decrypt_utf8(roster_path.read_bytes())) if roster_path.is_file() else {}
+    except Exception:
+        return {"present": True, "readable": False}
+    practice = ((access.get("practices") or {}).get(practice_id) or {}) if isinstance(access, dict) else {}
+    assignments = practice.get("assignments") if isinstance(practice.get("assignments"), dict) else {}
+    billing = [str(email).strip().lower() for email, role in assignments.items() if str(role).strip().casefold() == "billing"]
+    profiles: dict[str, str] = {}
+    practices = roster.get("practices") if isinstance(roster, dict) else {}
+    bucket = (practices or {}).get(practice_id) if isinstance(practices, dict) else {}
+    if isinstance(bucket, dict):
+        for raw in bucket.values():
+            if not isinstance(raw, dict):
+                continue
+            email = str(raw.get("email") or "").strip().lower()
+            if email:
+                profiles[email] = str(raw.get("display_name") or "").strip()
+    usable = 0
+    email_shaped = 0
+    missing = 0
+    for email in billing:
+        name = profiles.get(email, "")
+        if not name or name.casefold().startswith("gw:"):
+            missing += 1
+        elif "@" in name:
+            email_shaped += 1
+        else:
+            usable += 1
+    return {
+        "present": True,
+        "readable": True,
+        "billing_assignments": len(billing),
+        "usable_profile_names": usable,
+        "email_shaped_profiles": email_shaped,
+        "missing_profiles": missing,
+    }
+
+
 def _rollout(practice_id: str) -> bool | None:
     from app.employees.store import employees_store
 
@@ -163,12 +210,13 @@ def main() -> None:
         "rollout_enabled": rollout,
         "credentialing_present": cred_path.is_file(),
         "personnel_normalize": _personnel_normalize(),
+        "billing_greeting": _billing_profile_gap(practice_id),
     }
     after_stats = {str(path): _stat(path) for path in (access_path, cred_path, employees_path)}
     report["files_unchanged"] = before == after_stats
     print("VERIFY " + json.dumps(report, sort_keys=True))
     ok = (
-        report["version"] == "0.25.1"
+        report["version"] == "0.25.2"
         and report["role_name"] == "Practice Owner"
         and role_permissions == YES
         and report["assigned"] is True
