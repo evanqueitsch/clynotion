@@ -82,6 +82,16 @@ def _invite(hire_id: str) -> None:
     assert marked.status_code == 200, marked.text
 
 
+def test_date_only_values_do_not_shift_a_day() -> None:
+    from app.hiring.mailer import long_start_date, short_start_date
+
+    assert short_start_date("2026-12-08") == "12/08/2026"
+    assert short_start_date("2026-12-08T00:00:00Z") == "12/08/2026"
+    assert long_start_date("2026-12-08") == "Tuesday, December 8, 2026"
+    assert long_start_date("2026-12-08T00:00:00+00:00") == "Tuesday, December 8, 2026"
+    assert long_start_date("12/08/2026") == "Tuesday, December 8, 2026"
+
+
 def test_packet_defaults_follow_schedule_and_role() -> None:
     full = {row["form_key"]: row for row in packet_catalog("full-time", True, "Clinician")}
     assert full["h4c_qsehra"]["available"] is False
@@ -93,6 +103,7 @@ def test_packet_defaults_follow_schedule_and_role() -> None:
     assert full["pa_standard_application"]["available"] is False
     assert full["pa_clearances_info"]["available"] is False
     assert "irs_w4" not in full
+    assert "h4c_welcome_template" not in full
     part = packet_catalog("part-time", False, "Coordinator")
     keys = [row["form_key"] for row in part]
     assert "h4c_qsehra" not in keys
@@ -146,12 +157,13 @@ def test_handoff_records_the_packet_and_does_not_send(monkeypatch) -> None:
     packed = client.post(
         f"/hiring/hires/{hire_id}/packet.zip",
         headers=_alice(),
-        json={"form_keys": ["h4c_hipaa_nda", "h4c_welcome_template"]},
+        json={"form_keys": ["h4c_hipaa_nda", "h4c_packet"]},
     )
     assert packed.status_code == 200, packed.text
     names = zipfile.ZipFile(io.BytesIO(packed.content)).namelist()
-    assert any(name.endswith(".pdf") for name in names)
-    assert any(name.endswith(".docx") for name in names)
+    assert len(names) == 2
+    assert all(name.endswith(".pdf") for name in names)
+    assert not any("welcome" in name for name in names)
 
 
 def test_override_redirects_both_messages_without_pay(monkeypatch) -> None:
@@ -352,6 +364,11 @@ def test_hiring_screen_updates_rows_without_a_full_reload() -> None:
     assert "refreshHire(saved, message || \"Saved.\")" in page
     assert "handed off" in page
     assert "Offer deleted." in page
+    assert "Hire deleted." in page
+    assert 'getElementById("hire-" + hire.id)' in page
+    assert "Handing off…" in page
+    assert 'copy.textContent = "Copied"' in page
+    assert "Candidate email is on" in page
     assert "linkedHire.stage" in page
     assert '— v" + offer.current_version' in page
 
@@ -498,7 +515,8 @@ def test_wizard_email_test_sends_only_to_the_override_and_creates_nothing(monkey
     assert "Riley Sample" in staff["text"]
     assert "Hello," in staff["text"]
     assert "Hello there," not in staff["text"]
-    assert "Monday, December 8, 2026" in staff["html"]
+    assert "Tuesday, December 8, 2026" in staff["html"]
+    assert "12/08/2026" in staff["subject"]
     assert "Open in Clynotion" in staff["html"]
     assert staff["html"].count("max-width:600px") == 1
     assert "#hiring?hire=" not in staff["html"]

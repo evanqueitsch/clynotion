@@ -225,15 +225,33 @@ def render_template(template: str, values: dict[str, str], *, html: bool = False
     return text
 
 
+def short_start_date(value: str) -> str:
+    """MM/DD/YYYY. A date-only value is never read as UTC."""
+    parsed = _parse_date_only(value)
+    if parsed is None:
+        return (value or "").strip()
+    return parsed.strftime("%m/%d/%Y")
+
+
 def long_start_date(value: str) -> str:
+    """Weekday, Month D, YYYY. A date-only value is never read as UTC."""
+    parsed = _parse_date_only(value)
+    if parsed is None:
+        return (value or "").strip()
+    return f"{parsed.strftime('%A, %B')} {parsed.day}, {parsed.year}"
+
+
+def _parse_date_only(value: str):
     text = (value or "").strip()
+    if not text:
+        return None
+    head = text.split("T", 1)[0].strip()
     for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d"):
         try:
-            parsed = datetime.strptime(text, fmt)
+            return datetime.strptime(head, fmt)
         except ValueError:
             continue
-        return f"{parsed.strftime('%A, %B')} {parsed.day}, {parsed.year}"
-    return text
+    return None
 
 
 def wizard_steps(raw: str, *, direct: bool) -> list[str]:
@@ -410,8 +428,8 @@ def sample_wizard_values(*, link: str, supervisor: str, packet_list: str, billin
         "last_name": "Sample",
         "position": "Sample position",
         "employment": "Full-time",
-        "start_date": "12/08/2026",
-        "start_date_long": "Monday, December 8, 2026",
+        "start_date": short_start_date("12/08/2026"),
+        "start_date_long": long_start_date("12/08/2026"),
         "link": link,
         "supervisor_name": supervisor or "Jordan Example",
         "packet_list": packet_list,
