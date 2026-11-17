@@ -245,6 +245,7 @@ def _normalize_days(value: str) -> str | None:
 
 def _normalize_caseload(value: str) -> str | None:
     text = value.strip().replace("—", "-").replace("–", "-")
+    text = re.sub(r"\s+to\s+", "-", text, flags=re.IGNORECASE)
     match = re.fullmatch(r"(\d{1,2})\s*-\s*(\d{1,2})", text)
     if not match:
         return None

@@ -136,12 +136,30 @@ def supervision_required(credentials: str) -> bool:
     return True
 
 
-def clearance_state(*, direct: bool, status: str, due: date | None, today: date) -> dict[str, Any]:
+def license_on_file(credentials: str) -> bool:
+    """Blank or an explicit none is not a license. A candidate credential still counts."""
+    text = (credentials or "").strip().casefold()
+    return text not in {"", "none", "n/a", "na"}
+
+
+def clearance_state(
+    *,
+    direct: bool,
+    status: str,
+    due: date | None,
+    today: date,
+    start: date | None = None,
+    created: date | None = None,
+) -> dict[str, Any]:
     """Red when a direct-client clearance is still open on or after its due date.
 
     The amber badge stays while that item is open, including before the due date.
+    When the start date is on or before the hire was created, the creation day
+    shows "due now" instead of an overdue warning.
     """
     open_item = bool(direct) and status == "open"
+    if open_item and start is not None and created is not None and start <= created and today <= created:
+        return {"warning": False, "badge": "due now"}
     late = bool(open_item and due is not None and today >= due)
     return {"warning": late, "badge": "due before start" if open_item else ""}
 
@@ -154,10 +172,12 @@ def build_items(
     accepted: date,
     direct_client_access: bool,
     needs_supervision: bool,
+    has_license: bool = True,
     closed: set[date],
     new_id,
 ) -> list[dict[str, Any]]:
     before_start = previous_business_day(start, closed)
+    floor = add_business_days(accepted, 1, closed)
     rows: list[dict[str, Any]] = []
     for spec in ITEMS:
         key = spec["key"]
@@ -172,6 +192,8 @@ def build_items(
             status = "n/a"
         elif key in {"supervision_agreement", "supervision"} and not needs_supervision:
             status = "n/a"
+        elif key in {"license_verification", "npi_caqh"} and not has_license:
+            status = "n/a"
         elif key == "clearances":
             due = to_iso(before_start)
             if not direct_client_access:
@@ -184,6 +206,9 @@ def build_items(
             due = ""
         elif spec["stage"] >= 3:
             due = to_iso(start)
+        if due and key not in {"clearances", "exclusion_screening"} and due < to_iso(floor):
+            due = to_iso(floor)
+        note = "No license on file" if key in {"license_verification", "npi_caqh"} and status == "n/a" else ""
         rows.append(
             {
                 "id": new_id("item-"),
@@ -199,7 +224,7 @@ def build_items(
                 "done_by": "clynotion" if status == "done" else "",
                 "dates": {},
                 "where_original_lives": "",
-                "note": "",
+                "note": note,
                 "document_ref_ids": [],
                 "form_id": "",
             }

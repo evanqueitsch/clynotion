@@ -32,6 +32,7 @@ from app.hiring.checklist import (
     STATUS_ONLY,
     build_items,
     clearance_state,
+    license_on_file,
     packet_due,
     supervision_required,
     clinician_title,
@@ -601,6 +602,37 @@ class HiringEngine:
             self._queue_drive(payload, practice_id, offer_id, actor, pdf=False)
             return self._offer_public(row, offer)
 
+    def revise_offer(self, practice_id: str, offer_id: str, actor: str) -> dict[str, Any]:
+        """Start a new draft from a sent offer. It has to be marked sent again."""
+        with _lock:
+            payload = self._read()
+            row = self._practice(payload, practice_id)
+            self._expire_row(row)
+            offer = row["offers"].get(offer_id)
+            if not offer or offer.get("status") not in {"sent", "viewed"}:
+                raise HiringError(409, "Only a sent offer can be revised.")
+            version = row["offer_versions"].get(offer.get("current_version_id") or "") or {}
+            candidate = row["candidates"].get(offer.get("candidate_id") or "") or {}
+            body = dict(version.get("field_values") or {})
+            body["display_name"] = candidate.get("display_name") or body.get("candidate_full_name") or ""
+            body["personal_email"] = candidate.get("personal_email") or ""
+            body["employment_type"] = offer.get("employment_type") or body.get("employment_type") or ""
+            body["direct_client_access"] = bool(offer.get("direct_client_access"))
+            body["resume_id"] = offer.get("resume_id") or ""
+            deadline = str(body.get("response_deadline") or "")
+            try:
+                if parse_mdy(deadline) < _today():
+                    body["response_deadline"] = _today().strftime("%m/%d/%Y")
+            except ValueError:
+                body["response_deadline"] = _today().strftime("%m/%d/%Y")
+            self._void_tokens(row, "offer", offer_id, "new_version")
+            offer["status"] = "draft"
+            self._write_version(row, offer, body, actor, replace=False)
+            self._link_resume(row, offer, str(body.get("resume_id") or "").strip())
+            self._history(row, "offer", offer_id, "versioned", actor, "New version started")
+            self._queue_drive(payload, practice_id, offer_id, actor, pdf=False)
+            return self._offer_public(row, offer)
+
     def _write_version(
         self,
         row: dict[str, Any],
@@ -1037,7 +1069,8 @@ class HiringEngine:
         accepted = accepted or _today()
         hire_id = _new_id("hire-")
         closed = closed_set(row["settings"].get("business_closed_days") or [])
-        needs_supervision = supervision_required(str(values.get("candidate_credentials") or ""))
+        credentials = str(values.get("candidate_credentials") or "")
+        needs_supervision = supervision_required(credentials)
         items = build_items(
             hire_id=hire_id,
             employment_type=values["employment_type"],
@@ -1045,6 +1078,7 @@ class HiringEngine:
             accepted=accepted,
             direct_client_access=bool(offer.get("direct_client_access")),
             needs_supervision=needs_supervision,
+            has_license=license_on_file(credentials),
             closed=closed,
             new_id=_new_id,
         )
@@ -1061,6 +1095,7 @@ class HiringEngine:
             "supervisor_title": values.get("supervisor_title") or "",
             "supervisor_name": values.get("supervisor_name") or "",
             "direct_client_access": bool(offer.get("direct_client_access")),
+            "created_on": to_iso(accepted),
             "status": "onboarding",
             "stage": "accepted",
             "owner": "admin",
@@ -1674,6 +1709,8 @@ class HiringEngine:
             "packet_complete": bool(hire.get("packet_completed_at")),
             "stage": hire.get("stage") or "accepted",
             "owner": hire.get("owner") or "admin",
+            "handoff_at": hire.get("handoff_at") or "",
+            "created_on": hire.get("created_on") or "",
             "packet_form_keys": list(hire.get("packet_form_keys") or []),
             "packet_choices": self._packet_choices(hire),
             "staff_email_status": hire.get("staff_email_status") or "",
@@ -1707,11 +1744,15 @@ class HiringEngine:
         flags = {"warning": False, "badge": ""}
         if item.get("template_key") in {"clearances", "exclusion_screening"}:
             due_text = str(item.get("due_date") or "")
+            start_text = str(hire.get("start_date") or "")
+            created_text = str(hire.get("created_on") or "")
             flags = clearance_state(
                 direct=bool(hire.get("direct_client_access")),
                 status=str(item.get("status") or ""),
                 due=parse_iso(due_text) if due_text else None,
                 today=_today(),
+                start=parse_iso(start_text) if start_text else None,
+                created=parse_iso(created_text) if created_text else None,
             )
             warning = flags["warning"]
         return {
@@ -1757,6 +1798,8 @@ class HiringEngine:
             item = next((entry for entry in row["checklist_items"].values() if entry.get("hire_id") == hire_id and entry.get("template_key") == key), None)
             if not item:
                 raise HiringError(404, "Checklist item not found.")
+            if key == "activate":
+                raise HiringError(409, "Activation marks this item done.")
             if status == "done" and key in BLOCKED_DONE:
                 raise HiringError(409, BLOCKED_DONE[key])
             if status == "done" and key == "supervision_agreement" and not row["settings"].get("supervision_agreement_approved"):

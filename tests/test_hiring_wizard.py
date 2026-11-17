@@ -113,6 +113,7 @@ def test_handoff_records_the_packet_and_does_not_send(monkeypatch) -> None:
     body = handed.json()
     assert body["stage"] == "payroll"
     assert body["owner"] == "billing"
+    assert body["handoff_at"]
     assert body["packet_form_keys"] == ["irs_w4", "h4c_hipaa_nda"]
     assert body["staff_email_status"] == "suppressed"
     assert body["candidate_email_status"] == "suppressed"
@@ -262,6 +263,68 @@ def test_billing_sees_only_the_handoff_and_cannot_open_pay_or_i9(monkeypatch) ->
     tools = [tool["id"] for unit in home["units"] for tool in unit["tools"]]
     assert "hiring_onboarding" in tools
     assert access_store.role_id_for("practice-a", "casey.example@example.com") == "billing"
+
+
+def test_blank_credentials_skip_license_items_and_same_day_dues_are_not_red() -> None:
+    from datetime import date, timedelta
+
+    from app.hiring.checklist import add_business_days, build_items, clearance_state
+
+    created = date(2026, 11, 17)
+    items = build_items(
+        hire_id="hire-1",
+        employment_type="full-time",
+        start=created,
+        accepted=created,
+        direct_client_access=True,
+        needs_supervision=True,
+        has_license=False,
+        closed=set(),
+        new_id=lambda prefix: prefix + "1",
+    )
+    by_key = {item["template_key"]: item for item in items}
+    assert by_key["license_verification"]["status"] == "n/a"
+    assert by_key["license_verification"]["note"] == "No license on file"
+    assert by_key["npi_caqh"]["status"] == "n/a"
+    floor = add_business_days(created, 1, set())
+    assert by_key["welcome_sent"]["due_date"] >= floor.isoformat()
+    assert by_key["clearances"]["due_date"] < created.isoformat()
+    state = clearance_state(direct=True, status="open", due=created - timedelta(days=1), today=created, start=created, created=created)
+    assert state == {"warning": False, "badge": "due now"}
+    licensed = build_items(
+        hire_id="hire-2",
+        employment_type="full-time",
+        start=created,
+        accepted=created,
+        direct_client_access=True,
+        needs_supervision=False,
+        has_license=True,
+        closed=set(),
+        new_id=lambda prefix: prefix + "2",
+    )
+    licensed_keys = {item["template_key"]: item for item in licensed}
+    assert licensed_keys["license_verification"]["status"] == "open"
+    assert licensed_keys["npi_caqh"]["note"] == ""
+
+
+def test_revise_sent_offer_starts_a_new_draft_and_activation_is_not_manual(monkeypatch) -> None:
+    hire_id = _hire(monkeypatch, candidate_credentials="LPC-Candidate")
+    blocked = client.post(
+        f"/hiring/hires/{hire_id}/items/activate",
+        headers=_alice(),
+        json={"status": "done"},
+    )
+    assert blocked.status_code == 409
+    created = client.post("/hiring/offers", headers=_alice(), json=_offer(personal_email="revise.sample@example.com", candidate_credentials="LSW"))
+    offer_id = created.json()["id"]
+    client.post(f"/hiring/offers/{offer_id}/send", headers=_alice(), json={"channel": "outside"})
+    revised = client.post(f"/hiring/offers/{offer_id}/revise", headers=_alice())
+    assert revised.status_code == 200, revised.text
+    assert revised.json()["status"] == "draft"
+    assert revised.json()["current_version"] == 2
+    page = open("app/static/hiring.js", encoding="utf-8").read()
+    assert 'hire.stage === "payroll"' in page
+    assert "downloadSelected.disabled = true" in page
 
 
 def test_supervision_applies_until_a_full_license() -> None:
