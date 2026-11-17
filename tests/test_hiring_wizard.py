@@ -508,12 +508,73 @@ def test_folder_normalization_renames_by_id_without_changing_the_offer() -> None
         practice.pop("personnel_normalize", None)
         offer = practice["offers"][offer_id]
         offer["drive_folder_name"] = "SAMPLE, MICHAEL A."
+        offer["drive_status"] = "error"
         before_status = offer["status"]
+        before_name = practice["candidates"][offer["candidate_id"]]["display_name"]
         result = hiring.normalize_personnel_folders()
         assert result["folders"] == 1
         assert drive.folders[offer["drive_folder_id"]] == "Sample, Michael"
         assert offer["status"] == before_status
-        assert offer["drive_folder_name"] == "SAMPLE, MICHAEL A."
+        assert practice["candidates"][offer["candidate_id"]]["display_name"] == before_name
+        assert offer["drive_status"] == "connected"
+        assert offer["drive_folder_name"] == "Sample, Michael"
+        public = client.get(f"/hiring/offers/{offer_id}", headers=_alice()).json()
+        assert public["drive_note"] == ""
+        assert public["status"] == before_status
+    finally:
+        clear_personnel_drive_for_tests()
+        hiring._memory["practices"]["practice-a"].pop("personnel_normalize", None)
+
+
+def test_drive_status_aligns_without_calling_drive_or_changing_the_offer() -> None:
+    from tests.test_hiring_onboarding import RecordingDrive
+    from app.hiring.engine import hiring
+
+    class ExplodingDrive:
+        def rename(self, file_id: str, name: str) -> None:
+            raise AssertionError("Drive should not be called")
+
+    drive = RecordingDrive()
+    set_personnel_drive_for_tests(drive)
+    try:
+        created = client.post(
+            "/hiring/offers",
+            headers=_alice(),
+            json=_offer(
+                display_name="MICHAEL A. SAMPLE",
+                candidate_full_name="MICHAEL A. SAMPLE",
+                candidate_first_name="MICHAEL",
+            ),
+        )
+        assert created.status_code == 200, created.text
+        offer_id = created.json()["id"]
+        practice = hiring._memory["practices"]["practice-a"]
+        offer = practice["offers"][offer_id]
+        offer["status"] = "sent"
+        offer["drive_status"] = "error"
+        offer["drive_folder_id"] = offer.get("drive_folder_id") or "fld-existing"
+        offer["drive_folder_name"] = "SAMPLE, MICHAEL A."
+        offer["drive_pdf_file_id"] = "pdf-1"
+        offer["drive_pdf_name"] = "SAMPLE_MICHAEL_A_offer-letter.pdf"
+        offer["resume_id"] = "res-1"
+        offer["drive_resume_file_id"] = "resume-1"
+        offer["drive_resume_name"] = "SAMPLE_MICHAEL_A_resume.pdf"
+        practice.setdefault("resumes", {})["res-1"] = {"id": "res-1", "mime": "application/pdf", "offer_id": offer_id}
+        practice["personnel_normalize"] = {"done": True, "folders": 1, "files": 2}
+        set_personnel_drive_for_tests(ExplodingDrive())
+        result = hiring.align_drive_status()
+        assert result["fields"] == ["drive_folder_name", "drive_pdf_name", "drive_resume_name", "drive_status"]
+        assert offer["drive_status"] == "connected"
+        assert offer["drive_folder_name"] == "Sample, Michael"
+        assert offer["drive_pdf_name"] == "Sample_Michael_offer-letter.pdf"
+        assert offer["status"] == "sent"
+        assert practice["candidates"][offer["candidate_id"]]["display_name"] == "MICHAEL A. SAMPLE"
+        assert len(drive.folders) == 1
+        public = client.get(f"/hiring/offers/{offer_id}", headers=_alice()).json()
+        assert public["drive_note"] == ""
+        assert public["status"] == "sent"
+        again = hiring.align_drive_status()
+        assert again["offers"] == 0
     finally:
         clear_personnel_drive_for_tests()
         hiring._memory["practices"]["practice-a"].pop("personnel_normalize", None)

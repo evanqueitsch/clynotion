@@ -2110,13 +2110,14 @@ class HiringEngine:
                     folder_id = str(offer.get("drive_folder_id") or "")
                     if not folder_id:
                         continue
-                    before = dict(offer)
+                    if offer.get("drive_status") == "trashed":
+                        continue
                     candidate = (row.get("candidates") or {}).get(offer.get("candidate_id") or "") or {}
                     display = str(candidate.get("display_name") or "")
+                    resume = (row.get("resumes") or {}).get(offer.get("resume_id") or "")
                     try:
                         client.rename(folder_id, folder_name(display))
                         practice_folders += 1
-                        resume = (row.get("resumes") or {}).get(offer.get("resume_id") or "")
                         renames: list[tuple[str, str]] = []
                         if offer.get("drive_resume_file_id") and resume:
                             renames.append(
@@ -2132,13 +2133,11 @@ class HiringEngine:
                         for file_id, filename in renames:
                             client.rename(file_id, filename)
                             practice_files += 1
+                        _store_drive_names(offer, display, resume if isinstance(resume, dict) else None)
                         self._history(row, "drive", folder_id, "normalized", "clynotion", "Personnel folder name normalized")
                     except Exception as exc:
                         failed = True
                         logger.warning("personnel_folder_normalize_failed exception=%s", type(exc).__name__)
-                    if dict(offer) != before:
-                        offer.clear()
-                        offer.update(before)
                 if not failed:
                     row["personnel_normalize"] = {
                         "done": True,
@@ -2154,6 +2153,47 @@ class HiringEngine:
             logger.info("personnel_folder_normalize folders=%s files=%s", folders, files)
             print(f"personnel_folder_normalize folders={folders} files={files}", flush=True)
             return {"done": changed, "folders": folders, "files": files}
+
+    def align_drive_status(self) -> dict[str, Any]:
+        """Write stored drive names and status to match a folder already renamed.
+
+        Does not call Drive, so it cannot create a folder or a second file.
+        """
+        with _lock:
+            payload = self._read()
+            offers_aligned = 0
+            fields: set[str] = set()
+            changed = False
+            for row in (payload.get("practices") or {}).values():
+                if not isinstance(row, dict):
+                    continue
+                marker = row.get("personnel_normalize") if isinstance(row.get("personnel_normalize"), dict) else {}
+                if not marker.get("done") or marker.get("status_aligned"):
+                    continue
+                for offer in (row.get("offers") or {}).values():
+                    if not offer.get("drive_folder_id") or offer.get("drive_status") in {"trashed", "working"}:
+                        continue
+                    candidate = (row.get("candidates") or {}).get(offer.get("candidate_id") or "") or {}
+                    resume = (row.get("resumes") or {}).get(offer.get("resume_id") or "")
+                    written = _store_drive_names(offer, str(candidate.get("display_name") or ""), resume if isinstance(resume, dict) else None)
+                    if written:
+                        offers_aligned += 1
+                        fields.update(written)
+                        self._history(row, "drive", str(offer.get("drive_folder_id") or ""), "aligned", "clynotion", "Drive status aligned")
+                marker["status_aligned"] = True
+                marker["status_fields"] = sorted(fields)
+                row["personnel_normalize"] = marker
+                changed = True
+            if changed:
+                self._save(payload)
+            print(
+                "personnel_drive_status offers="
+                + str(offers_aligned)
+                + " fields="
+                + ",".join(sorted(fields)),
+                flush=True,
+            )
+            return {"offers": offers_aligned, "fields": sorted(fields)}
 
     def _packet_attachments(self, row: dict[str, Any], hire: dict[str, Any]) -> tuple[tuple[str, str, bytes], ...]:
         library = {str(item.get("form_key") or ""): item for item in row["forms_library"].values()}
@@ -2977,6 +3017,29 @@ def _billing_contact(practice_id: str) -> tuple[str, str]:
     name = names.get(email) or ""
     first = name.split(" ", 1)[0] if name else ""
     return first or "Billing", email
+
+
+def _store_drive_names(offer: dict[str, Any], display: str, resume: dict[str, Any] | None) -> list[str]:
+    """Set the stored names the status line compares. Returns the keys written."""
+    from app.hiring.personnel_drive import folder_name, offer_letter_filename, resume_filename, signed_offer_filename
+
+    written: list[str] = []
+
+    def put(key: str, value: str) -> None:
+        if offer.get(key) != value:
+            offer[key] = value
+            written.append(key)
+
+    put("drive_folder_name", folder_name(display))
+    if offer.get("drive_status") not in {"trashed", "working"}:
+        put("drive_status", "connected")
+    if offer.get("drive_resume_file_id") and resume:
+        put("drive_resume_name", resume_filename(display, str(resume.get("mime") or "")))
+    if offer.get("drive_pdf_file_id"):
+        put("drive_pdf_name", offer_letter_filename(display))
+    if offer.get("drive_signed_file_id"):
+        put("drive_signed_name", signed_offer_filename(display))
+    return written
 
 
 def _template(settings: dict[str, Any], key: str, default: str) -> str:

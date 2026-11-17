@@ -142,6 +142,7 @@ def _normalize_personnel_folders() -> None:
 
     try:
         hiring.normalize_personnel_folders()
+        hiring.align_drive_status()
     except Exception as exc:
         print(f"personnel_folder_normalize error={type(exc).__name__}", flush=True)
 
