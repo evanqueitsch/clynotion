@@ -48,6 +48,15 @@ ITEMS: tuple[dict[str, Any], ...] = (
 )
 
 PAYROLL_KEYS = frozenset({"payroll_w4_dd", "pa_new_hire_report"})
+BILLING_STEP_KEYS = frozenset(
+    {
+        "payroll_w4_dd",
+        "pa_new_hire_report",
+        "i9_section2",
+        "clearances",
+        "exclusion_screening",
+    }
+)
 I9_KEYS = frozenset({"i9_section1", "i9_section2", "i9_scan_uploaded"})
 STATUS_ONLY = frozenset(spec["key"] for spec in ITEMS if spec["kind"] in {"status", "payroll", "auto"})
 BLOCKED_DONE = {

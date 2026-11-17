@@ -296,11 +296,249 @@
     }
   }
 
+  function stageBar(stage, owner, label) {
+    const line = document.createElement("div");
+    line.className = "due-meta hire-stage";
+    const who = owner === "billing" ? (label || "Billing") : "Admin";
+    line.textContent = "Stage: " + (stage || "offer") + " · Owner: " + who;
+    return line;
+  }
+
+  function emailText(status) {
+    if (status === "sent") return "Email sent";
+    if (status === "suppressed") return "Email not sent (setting off)";
+    if (status === "failed") return "Email not sent";
+    return "\u00a0";
+  }
+
+  function checkedPacketKeys(root) {
+    return Array.prototype.map.call(root.querySelectorAll("input.packet-key:checked"), function (box) {
+      return box.value;
+    });
+  }
+
+  function renderPacketStep(card, hire) {
+    const block = document.createElement("div");
+    const heading = document.createElement("h4");
+    heading.textContent = "4. Choose packet documents";
+    block.appendChild(heading);
+    const choices = hire.packet_choices || [];
+    const saved = hire.packet_form_keys || [];
+    choices.forEach(function (choice) {
+      const row = document.createElement("label");
+      row.className = "packet-row";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.className = "packet-key";
+      box.value = choice.form_key;
+      box.disabled = !choice.available;
+      box.checked = !!choice.available && (saved.length ? saved.indexOf(choice.form_key) !== -1 : !!choice.default);
+      row.appendChild(box);
+      const text = document.createElement("span");
+      text.textContent = choice.title + (choice.available ? "" : " — not in the library yet");
+      row.appendChild(text);
+      if (choice.available) {
+        const download = document.createElement("button");
+        download.type = "button";
+        download.className = "ghost";
+        download.textContent = choice.form_key === "h4c_welcome_template" ? "Download welcome letter (.docx)" : "Download";
+        download.onclick = function (event) {
+          event.preventDefault();
+          downloadForm(choice.form_key);
+        };
+        row.appendChild(download);
+      }
+      block.appendChild(row);
+    });
+    const downloadSelected = document.createElement("button");
+    downloadSelected.type = "button";
+    downloadSelected.className = "ghost";
+    downloadSelected.textContent = "Download selected";
+    downloadSelected.onclick = function () {
+      const headers = { "Content-Type": "application/json" };
+      if (ui().state && ui().state.token) headers.Authorization = "Bearer " + ui().state.token;
+      fetch("/hiring/hires/" + hire.id + "/packet.zip", {
+        method: "POST",
+        headers: headers,
+        body: JSON.stringify({ form_keys: checkedPacketKeys(block) }),
+      })
+        .then(function (res) {
+          if (!res.ok) throw new Error("Could not download the packet.");
+          const named = /filename="([^"]+)"/.exec(res.headers.get("Content-Disposition") || "");
+          return res.blob().then(function (blob) {
+            return { blob: blob, filename: named ? named[1] : "packet.zip" };
+          });
+        })
+        .then(function (file) {
+          const url = URL.createObjectURL(file.blob);
+          const link = document.createElement("a");
+          link.href = url;
+          link.download = file.filename;
+          link.click();
+          URL.revokeObjectURL(url);
+        })
+        .catch(function (error) {
+          showStatus((error && error.message) || "Could not download the packet.", "error");
+        });
+    };
+    block.appendChild(downloadSelected);
+    card.appendChild(block);
+    return block;
+  }
+
+  function renderHandoff(card, hire, packetRoot, billingLabel) {
+    const block = document.createElement("div");
+    const heading = document.createElement("h4");
+    heading.textContent = "5. Review and hand off";
+    block.appendChild(heading);
+    const summary = document.createElement("p");
+    summary.className = "meta";
+    summary.textContent = [
+      hire.display_name || "",
+      hire.position || "",
+      hire.employment_type || "",
+      hire.start_date || "",
+    ].filter(Boolean).join(" · ");
+    block.appendChild(summary);
+    const hand = document.createElement("button");
+    hand.type = "button";
+    hand.className = "primary";
+    hand.textContent = "Hand off to " + (billingLabel || "Billing");
+    hand.onclick = function () {
+      ui()
+        .api("/hiring/hires/" + hire.id + "/handoff", {
+          method: "POST",
+          json: { form_keys: checkedPacketKeys(packetRoot) },
+        })
+        .then(function () {
+          return window.clyHiring.open({ message: "Handed off.", hireId: hire.id });
+        })
+        .catch(function (error) {
+          showStatus((error && error.message) || "Could not hand off.", "error");
+        });
+    };
+    block.appendChild(hand);
+    if (hire.owner === "billing") {
+      const recall = document.createElement("button");
+      recall.type = "button";
+      recall.className = "ghost";
+      recall.textContent = "Recall to Admin";
+      recall.onclick = function () {
+        ui()
+          .api("/hiring/hires/" + hire.id + "/recall", { method: "POST", json: {} })
+          .then(function () {
+            return window.clyHiring.open({ message: "Handoff recalled.", hireId: hire.id });
+          })
+          .catch(function (error) {
+            showStatus((error && error.message) || "Could not recall.", "error");
+          });
+      };
+      block.appendChild(recall);
+    }
+    const mail = document.createElement("div");
+    mail.className = "meta hire-mail";
+    const staff = emailText(hire.staff_email_status);
+    const candidate = emailText(hire.candidate_email_status);
+    mail.textContent = "Staff: " + staff + "\nCandidate: " + candidate;
+    block.appendChild(mail);
+    card.appendChild(block);
+  }
+
+  function itemByKey(hire, key) {
+    return (hire.items || []).filter(function (item) { return item.template_key === key; })[0] || {};
+  }
+
+  function postItem(hire, key, body) {
+    ui()
+      .api("/hiring/hires/" + hire.id + "/items/" + key, { method: "POST", json: body })
+      .then(function () {
+        return window.clyHiring.open({ message: "Saved.", hireId: hire.id });
+      })
+      .catch(function (error) {
+        showStatus((error && error.message) || "Could not save.", "error");
+      });
+  }
+
+  function dateStep(card, hire, item, label, dateKey, doneWhenSet) {
+    const row = document.createElement("div");
+    row.className = "hire-item" + (item.warning ? " late" : "");
+    const text = document.createElement("div");
+    text.textContent = label + " — " + (item.status || "open");
+    row.appendChild(text);
+    if (item.badge) {
+      const badge = document.createElement("span");
+      badge.className = "badge-due";
+      badge.textContent = item.badge;
+      row.appendChild(badge);
+    }
+    const input = document.createElement("input");
+    input.type = "date";
+    input.value = (item.dates && item.dates[dateKey]) || "";
+    row.appendChild(input);
+    const save = document.createElement("button");
+    save.type = "button";
+    save.className = "ghost";
+    save.textContent = "Save";
+    save.onclick = function () {
+      const dates = Object.assign({}, item.dates || {});
+      dates[dateKey] = input.value;
+      const ready = doneWhenSet ? !!input.value : item.status === "done";
+      postItem(hire, item.template_key, { status: ready ? "done" : "open", dates: dates, note: item.note || "" });
+    };
+    const undo = document.createElement("button");
+    undo.type = "button";
+    undo.className = "ghost";
+    undo.textContent = "Undo";
+    undo.onclick = function () {
+      const dates = Object.assign({}, item.dates || {});
+      dates[dateKey] = "";
+      postItem(hire, item.template_key, { status: "open", dates: dates, note: "" });
+    };
+    row.appendChild(save);
+    row.appendChild(undo);
+    card.appendChild(row);
+  }
+
+  function renderBillingSteps(card, hire) {
+    const heading = document.createElement("h4");
+    heading.textContent = "Payroll steps";
+    card.appendChild(heading);
+    const payroll = itemByKey(hire, "payroll_w4_dd");
+    dateStep(card, hire, payroll, "W-4 received", "w4_received_on", false);
+    dateStep(card, hire, payroll, "Direct deposit received", "direct_deposit_received_on", false);
+    const both = document.createElement("p");
+    both.className = "meta";
+    const dates = payroll.dates || {};
+    both.textContent = dates.w4_received_on && dates.direct_deposit_received_on
+      ? "W-4 and direct deposit are both recorded."
+      : "Both dates are required before this checklist item is done.";
+    card.appendChild(both);
+    if (dates.w4_received_on && dates.direct_deposit_received_on && payroll.status !== "done") {
+      const finish = document.createElement("button");
+      finish.type = "button";
+      finish.className = "ghost";
+      finish.textContent = "Mark W-4 and direct deposit done";
+      finish.onclick = function () {
+        postItem(hire, "payroll_w4_dd", { status: "done", dates: dates, note: payroll.note || "" });
+      };
+      card.appendChild(finish);
+    }
+    dateStep(card, hire, itemByKey(hire, "pa_new_hire_report"), "PA new-hire report filed", "pa_new_hire_filed_on", true);
+    dateStep(card, hire, itemByKey(hire, "i9_section2"), "I-9 in-person appointment", "i9_appointment_on", false);
+    dateStep(card, hire, itemByKey(hire, "i9_section2"), "I-9 completed", "i9_completed_on", true);
+    dateStep(card, hire, itemByKey(hire, "clearances"), "PA clearances received", "clearances_received_on", true);
+    dateStep(card, hire, itemByKey(hire, "exclusion_screening"), "Exclusion screening verified", "exclusion_received_on", true);
+  }
+
   function render(data, options) {
     const opts = typeof options === "string" ? { editId: options } : (options || {});
     const root = $("hiring-root");
     if (!root) return;
     releaseRoot(root);
+    if (data.viewer === "billing") {
+      renderBillingHome(root, data, opts);
+      return;
+    }
     currentSettings = data.settings || {};
     const settings = currentSettings;
     const settingsBox = document.createElement("div");
@@ -330,7 +568,53 @@
     };
     settingsBox.appendChild(label);
     settingsBox.appendChild(saveDays);
+    const staffLabel = document.createElement("label");
+    staffLabel.textContent = "Staff handoff emails";
+    const staffOn = document.createElement("input");
+    staffOn.type = "checkbox";
+    staffOn.checked = !!settings.staff_handoff_emails_enabled;
+    staffLabel.appendChild(staffOn);
+    const candidateLabel = document.createElement("label");
+    candidateLabel.textContent = "Candidate emails";
+    const candidateOn = document.createElement("input");
+    candidateOn.type = "checkbox";
+    candidateOn.checked = !!settings.candidate_emails_enabled;
+    candidateLabel.appendChild(candidateOn);
+    const overrideLabel = document.createElement("label");
+    overrideLabel.textContent = "Test recipient override";
+    const override = document.createElement("input");
+    override.type = "email";
+    override.value = settings.wizard_email_override || "";
+    override.placeholder = "Unset";
+    overrideLabel.appendChild(override);
+    const saveMail = document.createElement("button");
+    saveMail.type = "button";
+    saveMail.className = "ghost";
+    saveMail.textContent = "Save email settings";
+    saveMail.onclick = async function () {
+      try {
+        await ui().api("/hiring/settings", {
+          method: "PUT",
+          json: {
+            staff_handoff_emails_enabled: staffOn.checked,
+            candidate_emails_enabled: candidateOn.checked,
+            wizard_email_override: override.value.trim(),
+          },
+        });
+        await window.clyHiring.open({ message: "Saved." });
+      } catch (error) {
+        ui().setStatus($("hiring-status"), error.message, "error");
+      }
+    };
+    settingsBox.appendChild(staffLabel);
+    settingsBox.appendChild(candidateLabel);
+    settingsBox.appendChild(overrideLabel);
+    settingsBox.appendChild(saveMail);
     root.appendChild(settingsBox);
+    const steps = document.createElement("p");
+    steps.className = "meta";
+    steps.textContent = "1 Create the offer · 2 Mark sent · 3 Record acceptance · 4 Choose packet documents · 5 Review and hand off";
+    root.appendChild(steps);
 
     const form = document.createElement("form");
     form.id = "hire-form";
@@ -461,6 +745,8 @@
       driveLine.className = "due-meta hire-drive-note";
       driveLine.textContent = offer.drive_note || "\u00a0";
       left.appendChild(driveLine);
+      const offerStage = offer.hire_id ? "accepted" : (offer.status === "draft" ? "offer" : offer.status);
+      left.appendChild(stageBar(offerStage, "admin", data.billing_label));
       const buttons = document.createElement("div");
       buttons.className = "row hire-actions";
       function button(text, className, action) {
@@ -547,7 +833,7 @@
     }
     root.appendChild(list);
     renderLibrary(root, data.forms || []);
-    renderHires(root, data.hires || []);
+    renderHires(root, data.hires || [], data);
     function usable(offer) {
       return !!(offer && offer.id === editId && offer.fields);
     }
@@ -567,6 +853,78 @@
     const wrap = document.getElementById("hire-resume-wrap");
     if (wrap) wrap.hidden = false;
     maybeWatch(offers);
+    focusHire(opts.hireId);
+  }
+
+  function focusHire(hireId) {
+    if (!hireId) return;
+    const card = document.getElementById("hire-" + hireId);
+    if (card && card.scrollIntoView) card.scrollIntoView();
+  }
+
+  function renderBillingHome(root, data, opts) {
+    const heading = document.createElement("h3");
+    heading.textContent = "Payroll onboarding";
+    root.appendChild(heading);
+    const hires = data.hires || [];
+    if (!hires.length) {
+      const empty = document.createElement("p");
+      empty.className = "meta";
+      empty.textContent = "No hires have been handed off.";
+      root.appendChild(empty);
+      return;
+    }
+    hires.forEach(function (hire) {
+      const card = document.createElement("article");
+      card.className = "hire-card";
+      card.id = "hire-" + hire.id;
+      const title = document.createElement("div");
+      title.className = "due-title";
+      title.textContent = (hire.display_name || "Hire") + " — " + (hire.position || "") + " — " + (hire.employment_type || "");
+      card.appendChild(title);
+      card.appendChild(stageBar(hire.stage, hire.owner, "Billing"));
+      const meta = document.createElement("p");
+      meta.className = "meta";
+      meta.textContent = "Start date " + (hire.start_date || "—");
+      card.appendChild(meta);
+      renderBillingSteps(card, hire);
+      if (hire.status === "onboarding") {
+        const clearances = itemByKey(hire, "clearances");
+        const needsClearance = hire.direct_client_access && clearances.status !== "done" && clearances.status !== "n/a";
+        const activate = document.createElement("button");
+        activate.type = "button";
+        activate.className = "primary";
+        activate.textContent = "Activate";
+        activate.disabled = !!needsClearance;
+        if (needsClearance) {
+          const why = document.createElement("p");
+          why.className = "meta";
+          why.textContent = "Mark PA clearances received first";
+          card.appendChild(why);
+        }
+        activate.onclick = function () {
+          askDialog({
+            title: "Activate " + (hire.display_name || "this hire"),
+            label: "Work email",
+            confirmText: "Activate",
+            anchor: activate,
+            onConfirm: function (email) {
+              ui()
+                .api("/hiring/hires/" + hire.id + "/activate", { method: "POST", json: { work_email: email } })
+                .then(function () {
+                  return window.clyHiring.open({ message: "Hire activated.", hireId: hire.id });
+                })
+                .catch(function (error) {
+                  showStatus((error && error.message) || "Could not activate.", "error");
+                });
+            },
+          });
+        };
+        card.appendChild(activate);
+      }
+      root.appendChild(card);
+    });
+    focusHire(opts.hireId);
   }
 
   function showDecision(offer, kind, anchor) {
@@ -695,7 +1053,7 @@
     root.appendChild(box);
   }
 
-  function renderHires(root, hires) {
+  function renderHires(root, hires, data) {
     const box = document.createElement("section");
     box.style.marginTop = "1.5rem";
     const heading = document.createElement("h3");
@@ -712,10 +1070,15 @@
     hires.forEach(function (hire) {
       const card = document.createElement("article");
       card.className = "hire-card";
+      card.id = "hire-" + hire.id;
       const title = document.createElement("div");
       title.className = "due-title";
       title.textContent = (hire.display_name || "Hire") + " — " + (hire.status || "");
       card.appendChild(title);
+      card.appendChild(stageBar(hire.stage, hire.owner, data.billing_label));
+      const packetRoot = renderPacketStep(card, hire);
+      renderHandoff(card, hire, packetRoot, data.billing_label);
+      renderBillingSteps(card, hire);
       if (hire.i9_drive !== "ready") {
         const pending = document.createElement("p");
         pending.className = "meta";

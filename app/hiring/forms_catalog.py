@@ -118,7 +118,96 @@ FORMS: tuple[dict[str, str], ...] = (
         "filename": "",
         "applies_to": "credentialing handoff, file not shipped",
     },
+    {
+        "form_key": "h4c_employment_agreement",
+        "title": "Employment agreement",
+        "publisher": "H4C",
+        "edition": "",
+        "expires_on": "",
+        "source_url": "",
+        "filename": "",
+        "applies_to": "every hire, file not shipped",
+    },
+    {
+        "form_key": "h4c_confidentiality",
+        "title": "Confidentiality and non-solicitation",
+        "publisher": "H4C",
+        "edition": "",
+        "expires_on": "",
+        "source_url": "",
+        "filename": "",
+        "applies_to": "every hire, file not shipped",
+    },
+    {
+        "form_key": "h4c_handbook",
+        "title": "Handbook acknowledgment",
+        "publisher": "H4C",
+        "edition": "",
+        "expires_on": "",
+        "source_url": "",
+        "filename": "",
+        "applies_to": "every hire, file not shipped",
+    },
+    {
+        "form_key": "h4c_qsehra",
+        "title": "QSEHRA enrollment",
+        "publisher": "H4C",
+        "edition": "",
+        "expires_on": "",
+        "source_url": "",
+        "filename": "",
+        "applies_to": "full-time benefits, file not shipped",
+    },
+    {
+        "form_key": "h4c_simple_ira",
+        "title": "SIMPLE IRA enrollment",
+        "publisher": "H4C",
+        "edition": "",
+        "expires_on": "",
+        "source_url": "",
+        "filename": "",
+        "applies_to": "full-time benefits, file not shipped",
+    },
+    {
+        "form_key": "pa_clearances_info",
+        "title": "PA clearances",
+        "publisher": "Pennsylvania",
+        "edition": "",
+        "expires_on": "",
+        "source_url": "",
+        "filename": "",
+        "applies_to": "client-facing roles, file not shipped",
+    },
 )
+
+BENEFIT_KEYS = frozenset({"h4c_qsehra", "h4c_simple_ira"})
+CLIENT_KEYS = frozenset({"pa_standard_application", "pa_clearances_info"})
+OPTIONAL_KEYS = frozenset({"pa_rev_419"})
+
+
+def packet_catalog(employment_type: str, direct_client_access: bool, position: str) -> list[dict[str, str | bool]]:
+    """Forms for the packet step. Missing files stay visible and cannot be selected."""
+    rows: list[dict[str, str | bool]] = []
+    clinical = "lsw" in (position or "").casefold() or "clinician" in (position or "").casefold()
+    for spec in FORMS:
+        key = spec["form_key"]
+        if employment_type == "part-time" and key in BENEFIT_KEYS:
+            continue
+        if key in CLIENT_KEYS and not direct_client_access:
+            continue
+        if key == "h4c_supervision_agreement" and not clinical:
+            continue
+        available = bool(spec.get("filename"))
+        rows.append(
+            {
+                "form_key": key,
+                "title": spec["title"],
+                "available": available,
+                "default": available and key not in OPTIONAL_KEYS,
+                "note": "" if available else "not in the library yet",
+            }
+        )
+    return rows
 
 
 def form_path(filename: str) -> Path:

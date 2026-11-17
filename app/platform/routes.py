@@ -271,12 +271,16 @@ def _visible_units(user: CurrentUser) -> list[dict]:
                 tool["coming_soon"] = False
                 tool["open_label"] = "Open Employee View"
             if tool.get("id") == "hiring_onboarding":
-                if not full and not _hiring_rollout_on(user):
+                from app.access.permissions import HIRING_PAYROLL
+
+                payroll_access = HIRING_PAYROLL in perms
+                if not full and not payroll_access and not _hiring_rollout_on(user):
                     continue
-                tool["status"] = "live"
-                tool["href"] = "/#hiring"
-                tool["coming_soon"] = False
-                tool["open_label"] = "Open Hiring"
+                if full or payroll_access or _hiring_rollout_on(user):
+                    tool["status"] = "live"
+                    tool["href"] = "/#hiring"
+                    tool["coming_soon"] = False
+                    tool["open_label"] = "Open Hiring"
             if tool.get("status") == "planned":
                 if not full:
                     continue
@@ -292,6 +296,8 @@ def _visible_units(user: CurrentUser) -> list[dict]:
             else:
                 granted = full or tool_perm in perms or unit_perm in perms
             if tool.get("id") == "denials" and "tool:denials_summary" in perms:
+                granted = True
+            if tool.get("id") == "hiring_onboarding" and "capability:hiring_payroll" in perms:
                 granted = True
             if granted:
                 kept.append(tool)

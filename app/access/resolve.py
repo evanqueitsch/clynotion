@@ -16,6 +16,7 @@ from app.access.permissions import (
     CHRISTINE_EMAIL,
     DENIALS_TOOL,
     MANAGE_ROLES,
+    HIRING_PAYROLL,
     PAYROLL_CORRECT,
     PAYROLL_DASHBOARD,
     PHI_CLAIMS,
@@ -75,6 +76,8 @@ def permissions_for(user: User) -> set[str]:
         role_id = assigned_role_id(user)
         perms = set(access_store.permissions_for_role(user.practice_id, role_id))
         perms.update(access_store.account_permissions_for(user.practice_id, user.email))
+        if role_id == "billing":
+            perms.add(HIRING_PAYROLL)
         if is_christine(user):
             perms.add(DENIALS_TOOL)
             perms.add(PHI_CLAIMS)

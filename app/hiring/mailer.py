@@ -58,9 +58,35 @@ def reminder_body(link: str, deadline: str) -> str:
     )
 
 
-def deliver(practice_id: str, to: str, subject: str, text: str) -> str:
+def payroll_handoff_body(name: str, position: str, employment: str, start: str, link: str) -> str:
+    return (
+        f"{name}\n"
+        f"Position: {position or '—'}\n"
+        f"Schedule: {employment or '—'}\n"
+        f"Start date: {start or '—'}\n"
+        f"Open the hire: {link}\n"
+    )
+
+
+def candidate_packet_body(welcome: str) -> str:
+    return f"{welcome.rstrip()}\n\n{FOOTER}\n"
+
+
+def deliver(
+    practice_id: str,
+    to: str,
+    subject: str,
+    text: str,
+    attachments: tuple[tuple[str, str, bytes], ...] = (),
+) -> str:
     """Return sent, failed, or suppressed. Does not log the address or body."""
-    message = OutboundMail(to=to, subject=subject, text=text, practice_id=practice_id)
+    message = OutboundMail(
+        to=to,
+        subject=subject,
+        text=text,
+        practice_id=practice_id,
+        attachments=attachments,
+    )
     if _capture is not None or os.environ.get("ATTUNE_MODE") != "real":
         box = _capture or RecordingMailer()
         if _capture is None:

@@ -66,6 +66,7 @@ class OutboundMail:
     csv_filename: str = ""
     csv_text: str = ""
     practice_id: str = ""
+    attachments: tuple[tuple[str, str, bytes], ...] = ()
 
 
 @dataclass(frozen=True)

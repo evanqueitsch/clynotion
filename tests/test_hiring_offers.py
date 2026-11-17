@@ -153,7 +153,15 @@ def test_other_roles_cannot_see_offers() -> None:
         ("staff@example.com", "clinician"),
     ):
         headers = _auth(role, email)
-        assert client.get("/hiring/bootstrap", headers=headers).status_code == 403
+        bootstrap = client.get("/hiring/bootstrap", headers=headers)
+        if role == "billing":
+            assert bootstrap.status_code == 200, bootstrap.text
+            body = bootstrap.json()
+            assert body["viewer"] == "billing"
+            assert body["offers"] == []
+            assert "hourly_rate" not in bootstrap.text
+        else:
+            assert bootstrap.status_code == 403
         assert client.post("/hiring/offers", headers=headers, json=_offer("12/16/2026")).status_code == 403
     home = client.get("/home", headers=_auth("own", "own@example.com")).json()
     ids = [tool["id"] for unit in home["units"] for tool in unit["tools"]]
