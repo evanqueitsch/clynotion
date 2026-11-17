@@ -191,7 +191,7 @@ def packet_catalog(employment_type: str, direct_client_access: bool, position: s
     clinical = "lsw" in (position or "").casefold() or "clinician" in (position or "").casefold()
     for spec in FORMS:
         key = spec["form_key"]
-        if key == "irs_w4":
+        if key in {"irs_w4", "h4c_welcome_template"}:
             continue
         if employment_type == "part-time" and key in BENEFIT_KEYS:
             continue

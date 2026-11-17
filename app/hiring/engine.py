@@ -66,6 +66,7 @@ from app.hiring.mailer import (
     public_queue_row,
     reminder_body,
     sample_wizard_values,
+    short_start_date,
     wizard_defaults,
 )
 
@@ -2137,7 +2138,7 @@ class HiringEngine:
             "last_name": last,
             "position": str(hire.get("position") or ""),
             "employment": _schedule_label(str(hire.get("employment_type") or "")),
-            "start_date": str(hire.get("start_date") or ""),
+            "start_date": short_start_date(str(hire.get("start_date") or "")),
             "start_date_long": long_start_date(str(hire.get("start_date") or "")),
             "link": link,
             "supervisor_name": supervisor,
@@ -2150,6 +2151,8 @@ class HiringEngine:
         library = {str(item.get("form_key") or ""): item for item in row["forms_library"].values()}
         titles = []
         for key in hire.get("packet_form_keys") or []:
+            if str(key) == "h4c_welcome_template":
+                continue
             spec = library.get(str(key)) or {}
             title = str(spec.get("title") or "").strip()
             if title:

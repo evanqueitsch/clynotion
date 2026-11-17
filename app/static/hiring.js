@@ -499,16 +499,20 @@
       const copy = document.createElement("button");
       copy.type = "button";
       copy.className = "ghost";
-      copy.textContent = "Copy " + pair[0].toLowerCase();
-      copy.onclick = function () {
-        const value = pair[1] || "";
-        const done = function () { showStatus("Copied " + pair[0].toLowerCase() + ".", "ok"); };
-        if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(value).then(done).catch(function () { done(); });
-          return;
-        }
-        done();
-      };
+        copy.textContent = "Copy " + pair[0].toLowerCase();
+        copy.onclick = function () {
+          const value = pair[1] || "";
+          const label = copy.textContent;
+          const showCopied = function () {
+            copy.textContent = "Copied";
+            window.setTimeout(function () { copy.textContent = label; }, 1200);
+          };
+          if (navigator.clipboard && navigator.clipboard.writeText) {
+            navigator.clipboard.writeText(value).then(showCopied).catch(showCopied);
+            return;
+          }
+          showCopied();
+        };
       row.appendChild(label);
       row.appendChild(copy);
       block.appendChild(row);
@@ -545,6 +549,8 @@
     };
     hand.onclick = function () {
       if (hand.disabled) return;
+      hand.disabled = true;
+      hand.textContent = "Handing off…";
       ui()
         .api("/hiring/hires/" + hire.id + "/handoff", {
           method: "POST",
@@ -555,6 +561,10 @@
           refreshHire(saved, note);
         })
         .catch(function (error) {
+          hand.disabled = handedOff || !hire.qb_invite_at;
+          hand.textContent = handedOff
+            ? "Handed off to " + (billingLabel || "Billing") + (hire.handoff_at ? " on " + shortDate(hire.handoff_at) : "")
+            : "Hand off to " + (billingLabel || "Billing");
           showStatus((error && error.message) || "Could not hand off.", "error");
         });
     };
@@ -579,10 +589,12 @@
     }
     const mail = document.createElement("div");
     mail.className = "meta hire-mail";
-    const staff = emailText(hire.staff_email_status);
-    const candidate = emailText(hire.candidate_email_status);
-    mail.textContent = "Staff: " + staff + "\nCandidate: " + candidate;
-    block.appendChild(mail);
+    if (hire.handoff_at) {
+      const staff = emailText(hire.staff_email_status);
+      const candidate = emailText(hire.candidate_email_status);
+      mail.textContent = "Staff: " + staff + "\nCandidate: " + candidate;
+      block.appendChild(mail);
+    }
     card.appendChild(block);
   }
 
@@ -727,6 +739,12 @@
     }
     currentSettings = data.settings || {};
     const settings = currentSettings;
+    const intro = document.getElementById("hiring-intro");
+    if (intro) {
+      intro.textContent = settings.candidate_emails_enabled
+        ? "Offers stay with Admin. Candidate email is on, so the selected packet is emailed at handoff."
+        : "Offers stay with Admin. Letters are downloaded and sent by hand until candidate email is turned on.";
+    }
     const settingsBox = document.createElement("div");
     const label = document.createElement("label");
     label.textContent = "Response period (days)";
@@ -1166,7 +1184,7 @@
       list.appendChild(empty);
     }
     root.appendChild(list);
-    renderLibrary(root, data.forms || []);
+    renderLibrary(root, data.forms || [], settings);
     renderHires(root, data.hires || [], data);
     function usable(offer) {
       return !!(offer && offer.id === editId && offer.fields);
@@ -1370,7 +1388,7 @@
     await post(id, "/decline", { reason: mapped, note: text }, "Decline recorded.");
   }
 
-  function renderLibrary(root, forms) {
+  function renderLibrary(root, forms, settings) {
     const box = document.createElement("section");
     box.style.marginTop = "1.5rem";
     const heading = document.createElement("h3");
@@ -1378,7 +1396,9 @@
     box.appendChild(heading);
     const note = document.createElement("p");
     note.className = "meta";
-    note.textContent = "English forms only. Download the packet and send it yourself. Candidate email stays off.";
+    note.textContent = settings && settings.candidate_emails_enabled
+      ? "English forms only. Candidate email is on, so the selected packet is emailed at handoff."
+      : "English forms only. Download the packet and send it yourself. Candidate email stays off.";
     box.appendChild(note);
     (forms || []).forEach(function (form) {
       if (!form.available) return;
@@ -1657,7 +1677,9 @@
             ui()
               .api("/hiring/hires/" + hire.id + "/delete", { method: "POST", json: { confirm: typed } })
               .then(function () {
-                return window.clyHiring.open({ message: "Hire deleted." });
+                const card = document.getElementById("hire-" + hire.id);
+                if (card) card.remove();
+                showStatus("Hire deleted.", "ok");
               })
               .catch(function (error) {
                 remove.disabled = false;
