@@ -210,10 +210,11 @@ def test_paper_acceptance_files_the_signed_pdf_and_builds_the_checklist() -> Non
         benefits = next(item for item in hire["items"] if item["template_key"] == "benefits")
         assert benefits["status"] == "skipped"
         clearances = next(item for item in hire["items"] if item["template_key"] == "clearances")
-        assert clearances["warning"] is True
+        assert clearances["warning"] is False
+        assert clearances["badge"] == "due now"
         screening = next(item for item in hire["items"] if item["template_key"] == "exclusion_screening")
-        assert screening["warning"] is True
-        assert screening["badge"] == clearances["badge"]
+        assert screening["warning"] is False
+        assert screening["badge"] == "due now"
         signed = [meta for meta in drive.files.values() if meta.get("name") == "Sample_Riley_offer-signed.pdf"]
         assert len(signed) == 1
         assert signed[0]["data"] == b"%PDF-1.4 synthetic"
@@ -225,8 +226,8 @@ def test_paper_acceptance_files_the_signed_pdf_and_builds_the_checklist() -> Non
         onboarding_files = [meta for meta in drive.files.values() if meta.get("parent") == onboarding_id]
         assert any(item.get("name") == "Sample_Riley_offer-letter.pdf" for item in onboarding_files)
         clearances = next(item for item in hire["items"] if item["template_key"] == "clearances")
-        assert clearances["warning"] is True
-        assert clearances["badge"] == "due before start"
+        assert clearances["warning"] is False
+        assert clearances["badge"] == "due now"
         assert any(item.get("name") == "Sample_Riley_offer-signed.pdf" for item in onboarding_files)
         again = client.post(
             f"/hiring/offers/{offer_id}/accept-paper",
@@ -393,6 +394,8 @@ def test_clearance_badge_is_amber_before_the_due_date_and_red_after() -> None:
     state = clearance_state(direct=True, status="open", due=today + timedelta(days=10), today=today)
     assert state == {"warning": False, "badge": "due before start"}
     late = clearance_state(direct=True, status="open", due=today, today=today)
+    same_day = clearance_state(direct=True, status="open", due=today, today=today, start=today, created=today)
+    assert same_day == {"warning": False, "badge": "due now"}
     assert late == {"warning": True, "badge": "due before start"}
     assert clearance_state(direct=False, status="open", due=today, today=today)["badge"] == ""
     assert clearance_state(direct=True, status="done", due=today, today=today)["warning"] is False

@@ -212,7 +212,7 @@
     });
     applyType();
     const form = formEl();
-    const locked = !!(offer && offer.status === "accepted");
+    const locked = !!(offer && (offer.status === "accepted" || offer.status === "sent" || offer.status === "viewed"));
     if (form) {
       form.querySelectorAll("input, select, textarea, button[type=submit]").forEach(function (node) {
         if (!locked && node.id !== "hire-editing") {
@@ -234,8 +234,12 @@
         lockedNote = document.createElement("p");
         lockedNote.id = "hire-locked-note";
         lockedNote.className = "meta";
-        lockedNote.textContent = "Accepted offers can't be edited.";
         form.appendChild(lockedNote);
+      }
+      if (lockedNote) {
+        lockedNote.textContent = offer.status === "accepted"
+          ? "Accepted offers can't be edited."
+          : "Sent offers can't be edited. Revise offer starts a new draft.";
       }
     } else if (lockedNote) {
       lockedNote.remove();
@@ -269,6 +273,7 @@
   function clearFieldErrors() {
     const form = formEl();
     if (!form || !form.querySelectorAll) return;
+    form.querySelectorAll(".field-error-text").forEach(function (node) { node.remove(); });
     const marked = form.querySelectorAll(".field-error");
     for (let i = 0; i < marked.length; i++) {
       const node = marked[i];
@@ -337,7 +342,7 @@
     const sent = !!(offer && (offer.status === "sent" || offer.status === "viewed" || offer.status === "accepted"));
     const accepted = !!(offer && offer.status === "accepted") || !!(hire && hire.id);
     const chosen = !!(hire && (hire.packet_form_keys || []).length);
-    const handed = !!(hire && hire.handoff_at && hire.owner === "billing");
+    const handed = !!(hire && hire.owner === "billing" && (hire.stage === "payroll" || hire.stage === "active"));
     return [
       { label: "Create the offer", state: stepState(!!(offer && offer.id), !(offer && offer.id)) },
       { label: "Mark sent", state: stepState(sent || accepted, !!(offer && offer.id) && !sent && !accepted) },
@@ -405,7 +410,11 @@
     downloadSelected.type = "button";
     downloadSelected.className = "ghost";
     downloadSelected.textContent = "Download selected";
-    downloadSelected.onclick = function () {
+    downloadSelected.onclick = function (event) {
+      event.preventDefault();
+      event.stopPropagation();
+      if (downloadSelected.disabled) return;
+      downloadSelected.disabled = true;
       const headers = { "Content-Type": "application/json" };
       if (ui().state && ui().state.token) headers.Authorization = "Bearer " + ui().state.token;
       fetch("/hiring/hires/" + hire.id + "/packet.zip", {
@@ -425,11 +434,16 @@
           const link = document.createElement("a");
           link.href = url;
           link.download = file.filename;
+          document.body.appendChild(link);
           link.click();
-          URL.revokeObjectURL(url);
+          link.remove();
+          window.setTimeout(function () { URL.revokeObjectURL(url); }, 1500);
         })
         .catch(function (error) {
           showStatus((error && error.message) || "Could not download the packet.", "error");
+        })
+        .then(function () {
+          downloadSelected.disabled = false;
         });
     };
     block.appendChild(downloadSelected);
@@ -451,12 +465,12 @@
       hire.start_date || "",
     ].filter(Boolean).join(" · ");
     block.appendChild(summary);
-    const handedOff = hire.owner === "billing" && !!hire.handoff_at;
+    const handedOff = hire.owner === "billing" && (hire.stage === "payroll" || hire.stage === "active");
     const hand = document.createElement("button");
     hand.type = "button";
     hand.className = "primary";
     hand.textContent = handedOff
-      ? "Handed off to " + (billingLabel || "Billing") + " on " + shortDate(hire.handoff_at)
+      ? "Handed off to " + (billingLabel || "Billing") + (hire.handoff_at ? " on " + shortDate(hire.handoff_at) : "")
       : "Hand off to " + (billingLabel || "Billing");
     hand.disabled = handedOff;
     hand.onclick = function () {
@@ -468,6 +482,12 @@
         })
         .then(function (saved) {
           const note = saved && saved.notice === "already handed off" ? "Already handed off." : "Handed off.";
+          if (saved && saved.owner === "billing") {
+            hand.disabled = true;
+            hand.textContent = "Handed off to " + (billingLabel || "Billing") + (saved.handoff_at ? " on " + shortDate(saved.handoff_at) : "");
+            const bar = card.querySelector(".hire-stage");
+            if (bar) bar.textContent = "Stage: " + (saved.stage || "payroll") + " · Owner: " + (billingLabel || "Billing");
+          }
           return window.clyHiring.open({ message: note, hireId: hire.id });
         })
         .catch(function (error) {
@@ -483,7 +503,11 @@
       recall.onclick = function () {
         ui()
           .api("/hiring/hires/" + hire.id + "/recall", { method: "POST", json: {} })
-          .then(function () {
+          .then(function (saved) {
+            const bar = card.querySelector(".hire-stage");
+            if (bar && saved) bar.textContent = "Stage: " + (saved.stage || "accepted") + " · Owner: Admin";
+            hand.disabled = false;
+            hand.textContent = "Hand off to " + (billingLabel || "Billing");
             return window.clyHiring.open({ message: "Handoff recalled.", hireId: hire.id });
           })
           .catch(function (error) {
@@ -509,7 +533,7 @@
     ui()
       .api("/hiring/hires/" + hire.id + "/items/" + key, { method: "POST", json: body })
       .then(function () {
-        return window.clyHiring.open({ message: message || "Saved.", hireId: hire.id });
+        showStatus(message || "Saved.", "ok");
       })
       .catch(function (error) {
         showStatus((error && error.message) || "Could not save.", "error");
@@ -822,7 +846,7 @@
         node.onclick = action;
         buttons.appendChild(node);
       }
-      button(offer.status === "accepted" ? "View" : "Edit", "ghost", function () {
+      button(offer.status === "draft" ? "Edit" : "View", "ghost", function () {
         editing.value = offer.id;
         fillForm(offer);
         ui().setStatus(
@@ -853,6 +877,22 @@
       if (offer.drive_retry) {
         button("Retry", "ghost", function () {
           retryDrive(offer.id);
+        });
+      }
+      if (offer.status === "sent" || offer.status === "viewed") {
+        button("Revise offer", "ghost", function () {
+          ui()
+            .api("/hiring/offers/" + offer.id + "/revise", { method: "POST", json: {} })
+            .then(function (saved) {
+              return window.clyHiring.open({
+                editId: (saved && saved.id) || offer.id,
+                offer: saved,
+                message: "New draft started. Mark it sent again.",
+              });
+            })
+            .catch(function (error) {
+              showStatus((error && error.message) || "Could not revise.", "error");
+            });
         });
       }
       if (offer.status === "draft") {
@@ -1205,11 +1245,11 @@
         row.appendChild(label);
         if (item.badge) {
           const badge = document.createElement("span");
-          badge.className = "badge-due";
+          badge.className = item.badge === "due now" ? "badge-due" : "badge-due";
           badge.textContent = item.badge;
           row.appendChild(badge);
         }
-        if (item.kind !== "auto") {
+        if (item.kind !== "auto" && item.template_key !== "activate") {
           const note = document.createElement("input");
           note.type = "text";
           note.placeholder = "Note";
@@ -1490,8 +1530,8 @@
         showStatus("Saved.", "ok");
       }
     } catch (error) {
-      showStatus((error && error.message) || "Could not save.", "error");
-      markField(error && error.field);
+      if (error && error.field) showFieldError(error.field, error.message);
+      else showStatus((error && error.message) || "Could not save.", "error");
     } finally {
       saving = false;
       const button = formEl() && formEl().querySelector("button[type=submit]");
@@ -1501,15 +1541,30 @@
 
   function markField(name) {
     clearFieldErrors();
-    if (!name) return;
+    if (!name) return null;
     const el = fieldNode(name) || (formEl() && formEl().querySelector('[name="' + String(name).replace(/"/g, "") + '"]'));
-    if (!el || !el.classList) return;
+    if (!el || !el.classList) return null;
     el.classList.add("field-error");
+    return el;
+  }
+
+  function showFieldError(name, message) {
+    const el = markField(name);
+    if (!el) {
+      showStatus(message, "error");
+      return;
+    }
+    const note = document.createElement("div");
+    note.className = "field-error-text";
+    note.textContent = message;
+    el.insertAdjacentElement("afterend", note);
+    if (el.scrollIntoView) el.scrollIntoView({ block: "center" });
     try {
       if (el.focus) el.focus();
     } catch (ignore) {
-      /* The field is already marked. Focusing it is optional. */
+      /* The message is already under the field. */
     }
+    showStatus(message, "error");
   }
 
   async function retryDrive(id) {

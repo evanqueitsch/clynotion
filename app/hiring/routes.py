@@ -223,6 +223,15 @@ def retry_drive(offer_id: str, user: CurrentUser) -> dict[str, Any]:
         _fail(exc)
 
 
+@router.post("/hiring/offers/{offer_id}/revise")
+def revise_offer(offer_id: str, user: CurrentUser) -> dict[str, Any]:
+    _require_admin(user)
+    try:
+        return hiring.revise_offer(user.practice_id, offer_id, _actor(user))
+    except HiringError as exc:
+        _fail(exc)
+
+
 @router.post("/hiring/offers/{offer_id}/send")
 def send_offer(offer_id: str, body: SendBody, request: Request, user: CurrentUser) -> dict[str, Any]:
     _require_admin(user)

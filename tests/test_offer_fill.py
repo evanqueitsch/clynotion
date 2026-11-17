@@ -128,7 +128,6 @@ def test_regex_formats_and_caseload_dash() -> None:
         "qsehra_monthly_amount": "lots",
         "qsehra_wait_days": "soon",
         "offer_date": "tomorrow",
-        "caseload_range": "25 to 30",
     }
     for field, value in bad.items():
         with pytest.raises(OfferFillError) as caught:
@@ -137,6 +136,10 @@ def test_regex_formats_and_caseload_dash() -> None:
         assert field not in str(caught.value)
     values = load_values({**FULL, "caseload_range": "25 - 30"}, spec)
     assert values["caseload_range"] == "25–30"
+    words = load_values({**FULL, "caseload_range": "25 to 30"}, spec)
+    assert words["caseload_range"] == "25–30"
+    endash = load_values({**FULL, "caseload_range": "25–30"}, spec)
+    assert endash["caseload_range"] == "25–30"
 
 
 def test_plain_amounts_normalize_to_letter_format() -> None:
