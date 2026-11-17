@@ -329,8 +329,10 @@ def test_revise_sent_offer_starts_a_new_draft_and_activation_is_not_manual(monke
 
 def test_hiring_screen_updates_rows_without_a_full_reload() -> None:
     page = open("app/static/hiring.js", encoding="utf-8").read()
-    assert "function paintChecklist" in page
-    assert "paintChecklist(card, saved)" in page
+    assert "function refreshHire" in page
+    assert "function renderHireCard" in page
+    assert "refreshHire(saved, message || \"Saved.\")" in page
+    assert "handed off" in page
     assert "Offer deleted." in page
     assert "linkedHire.stage" in page
     assert '— v" + offer.current_version' in page

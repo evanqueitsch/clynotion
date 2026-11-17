@@ -300,5 +300,5 @@ def test_contact_ui_uses_the_state_picker_and_phone_format() -> None:
     assert PHONE_HINT in script
     assert "input.type = \"tel\"" in script
     page = Path("app/static/index.html").read_text(encoding="utf-8")
-    assert 'src="/static/employee.js?v=0.24.3"' in page
+    assert 'src="/static/employee.js?v=0.24.4"' in page
     assert 'input[type="tel"]' in page
