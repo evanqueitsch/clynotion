@@ -697,25 +697,49 @@
     };
     settingsBox.appendChild(label);
     settingsBox.appendChild(saveDays);
+    const mailHead = document.createElement("h3");
+    mailHead.textContent = "Wizard emails";
+    settingsBox.appendChild(mailHead);
     const staffLabel = document.createElement("label");
-    staffLabel.textContent = "Staff handoff emails";
+    staffLabel.textContent = "Staff handoff emails — " + (settings.staff_handoff_emails_enabled ? "currently on" : "currently off");
     const staffOn = document.createElement("input");
     staffOn.type = "checkbox";
     staffOn.checked = !!settings.staff_handoff_emails_enabled;
     staffLabel.appendChild(staffOn);
     const candidateLabel = document.createElement("label");
-    candidateLabel.textContent = "Candidate emails";
+    candidateLabel.textContent = "Candidate emails — " + (settings.candidate_emails_enabled ? "currently on" : "currently off");
     const candidateOn = document.createElement("input");
     candidateOn.type = "checkbox";
     candidateOn.checked = !!settings.candidate_emails_enabled;
     candidateLabel.appendChild(candidateOn);
     const overrideLabel = document.createElement("label");
-    overrideLabel.textContent = "Test recipient override";
+    overrideLabel.textContent = "Test recipient override — " + (settings.wizard_email_override ? "currently " + settings.wizard_email_override : "currently unset");
     const override = document.createElement("input");
     override.type = "email";
     override.value = settings.wizard_email_override || "";
-    override.placeholder = "Unset";
+    override.placeholder = "operations@heart4change.org";
     overrideLabel.appendChild(override);
+    function templateField(title, key, rows) {
+      const fieldLabel = document.createElement("label");
+      fieldLabel.textContent = title;
+      const area = document.createElement("textarea");
+      area.rows = rows;
+      area.value = settings[key] || "";
+      fieldLabel.appendChild(area);
+      settingsBox.appendChild(fieldLabel);
+      return area;
+    }
+    const help = document.createElement("p");
+    help.className = "meta";
+    help.textContent = "Placeholders: {name}, {first_name}, {position}, {employment}, {start_date}, {link}";
+    settingsBox.appendChild(staffLabel);
+    settingsBox.appendChild(candidateLabel);
+    settingsBox.appendChild(overrideLabel);
+    settingsBox.appendChild(help);
+    const staffSubject = templateField("Staff handoff subject", "staff_handoff_subject", 2);
+    const staffBody = templateField("Staff handoff body", "staff_handoff_body", 6);
+    const candidateSubject = templateField("Candidate packet subject", "candidate_packet_subject", 2);
+    const candidateBody = templateField("Candidate packet body", "candidate_packet_body", 8);
     const saveMail = document.createElement("button");
     saveMail.type = "button";
     saveMail.className = "ghost";
@@ -728,6 +752,10 @@
             staff_handoff_emails_enabled: staffOn.checked,
             candidate_emails_enabled: candidateOn.checked,
             wizard_email_override: override.value.trim(),
+            staff_handoff_subject: staffSubject.value,
+            staff_handoff_body: staffBody.value,
+            candidate_packet_subject: candidateSubject.value,
+            candidate_packet_body: candidateBody.value,
           },
         });
         await window.clyHiring.open({ message: "Saved." });
@@ -735,10 +763,27 @@
         ui().setStatus($("hiring-status"), error.message, "error");
       }
     };
-    settingsBox.appendChild(staffLabel);
-    settingsBox.appendChild(candidateLabel);
-    settingsBox.appendChild(overrideLabel);
+    const testMail = document.createElement("button");
+    testMail.type = "button";
+    testMail.className = "ghost";
+    testMail.textContent = "Send test wizard emails";
+    testMail.onclick = async function () {
+      testMail.disabled = true;
+      try {
+        const result = await ui().api("/hiring/wizard-email-test", { method: "POST", json: {} });
+        ui().setStatus(
+          $("hiring-status"),
+          "Test emails: staff " + result.staff + ", candidate " + result.candidate + ".",
+          "ok"
+        );
+      } catch (error) {
+        ui().setStatus($("hiring-status"), error.message, "error");
+      } finally {
+        testMail.disabled = false;
+      }
+    };
     settingsBox.appendChild(saveMail);
+    settingsBox.appendChild(testMail);
     root.appendChild(settingsBox);
     const steps = document.createElement("p");
     steps.className = "meta";

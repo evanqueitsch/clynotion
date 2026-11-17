@@ -140,10 +140,10 @@ def test_saving_a_new_name_renames_the_same_drive_folder() -> None:
         )
         assert renamed.status_code == 200, renamed.text
         assert list(drive.folders) == ["fld-1"]
-        assert drive.folders["fld-1"] == "Example, Avery Jordan"
+        assert drive.folders["fld-1"] == "Example, Avery"
         resumes = [item for item in drive.files.values() if str(item.get("name") or "").endswith("_resume.txt")]
         assert len(resumes) == 1
-        assert resumes[0]["name"] == "Example_Avery_Jordan_resume.txt"
+        assert resumes[0]["name"] == "Example_Avery_resume.txt"
         assert drive.created == 2
     finally:
         clear_personnel_drive_for_tests()
@@ -556,7 +556,7 @@ def test_delete_hire_requires_the_exact_name_and_only_removes_that_hire() -> Non
         open_refs = [item.source_ref for item in due_engine.list_open("practice-a")]
         assert hire_id not in open_refs
         assert hire_id + ":packet" not in open_refs
-        parent = next(file_id for file_id, name in drive.folders.items() if name == "Sample, Delete Me")
+        parent = next(file_id for file_id, name in drive.folders.items() if name == "Sample, Delete")
         assert parent not in drive.trashed
         children = [file_id for file_id, meta in drive.files.items() if meta.get("folder")]
         assert children

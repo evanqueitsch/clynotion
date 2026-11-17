@@ -447,3 +447,73 @@ def test_delete_hire_keeps_the_personnel_folder(monkeypatch) -> None:
         assert "Folder trashed" not in (offer["drive_note"] or "")
     finally:
         clear_personnel_drive_for_tests()
+
+
+def test_wizard_email_test_sends_only_to_the_override_and_creates_nothing(monkeypatch) -> None:
+    sent: list[dict] = []
+
+    def spy(practice_id, to, subject, text, attachments=()):
+        sent.append({"to": to, "subject": subject, "text": text, "attachments": attachments})
+        return "sent"
+
+    monkeypatch.setattr("app.hiring.engine.deliver", spy)
+    before = client.get("/hiring/bootstrap", headers=_alice()).json()
+    refused = client.post("/hiring/wizard-email-test", headers=_alice())
+    assert refused.status_code == 400
+    client.put("/hiring/settings", headers=_alice(), json={"wizard_email_override": "qa.ops@example.com"})
+    assert client.post("/hiring/wizard-email-test", headers=_alice()).status_code == 400
+    client.put(
+        "/hiring/settings",
+        headers=_alice(),
+        json={"wizard_email_override": "operations@heart4change.org"},
+    )
+    sent_ok = client.post("/hiring/wizard-email-test", headers=_alice())
+    assert sent_ok.status_code == 200, sent_ok.text
+    assert {item["to"] for item in sent} == {"operations@heart4change.org"}
+    assert all(item["subject"].startswith("[TEST] ") for item in sent)
+    staff = next(item for item in sent if "payroll" in item["subject"])
+    assert staff["attachments"] == ()
+    assert "Riley Sample" in staff["text"]
+    assert "Sample position" in staff["text"]
+    candidate = next(item for item in sent if item is not staff)
+    assert candidate["attachments"]
+    assert all(name.endswith(".pdf") for name, _mime, _data in candidate["attachments"])
+    after = client.get("/hiring/bootstrap", headers=_alice()).json()
+    assert [item["id"] for item in after["offers"]] == [item["id"] for item in before["offers"]]
+    assert [item["id"] for item in after["hires"]] == [item["id"] for item in before["hires"]]
+    assert after["settings"]["staff_handoff_emails_enabled"] is False
+    assert after["settings"]["candidate_emails_enabled"] is False
+    client.put("/hiring/settings", headers=_alice(), json={"wizard_email_override": ""})
+
+
+def test_folder_normalization_renames_by_id_without_changing_the_offer() -> None:
+    from tests.test_hiring_onboarding import RecordingDrive
+    from app.hiring.engine import hiring
+
+    drive = RecordingDrive()
+    set_personnel_drive_for_tests(drive)
+    try:
+        created = client.post(
+            "/hiring/offers",
+            headers=_alice(),
+            json=_offer(
+                display_name="MICHAEL A. SAMPLE",
+                candidate_full_name="MICHAEL A. SAMPLE",
+                candidate_first_name="MICHAEL",
+            ),
+        )
+        assert created.status_code == 200, created.text
+        offer_id = created.json()["id"]
+        practice = hiring._memory["practices"]["practice-a"]
+        practice.pop("personnel_normalize", None)
+        offer = practice["offers"][offer_id]
+        offer["drive_folder_name"] = "SAMPLE, MICHAEL A."
+        before_status = offer["status"]
+        result = hiring.normalize_personnel_folders()
+        assert result["folders"] == 1
+        assert drive.folders[offer["drive_folder_id"]] == "Sample, Michael"
+        assert offer["status"] == before_status
+        assert offer["drive_folder_name"] == "SAMPLE, MICHAEL A."
+    finally:
+        clear_personnel_drive_for_tests()
+        hiring._memory["practices"]["practice-a"].pop("personnel_normalize", None)

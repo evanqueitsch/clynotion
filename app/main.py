@@ -134,6 +134,19 @@ def _migrate_access_roles() -> None:
 
 
 @app.on_event("startup")
+def _normalize_personnel_folders() -> None:
+    """Rename stored personnel folders once. Does not change offer fields or send mail."""
+    if os.environ.get("ATTUNE_MODE") != "real":
+        return
+    from app.hiring.engine import hiring
+
+    try:
+        hiring.normalize_personnel_folders()
+    except Exception as exc:
+        print(f"personnel_folder_normalize error={type(exc).__name__}", flush=True)
+
+
+@app.on_event("startup")
 def _hiring_scheduler() -> None:
     from app.hiring.engine import start_scheduler
 

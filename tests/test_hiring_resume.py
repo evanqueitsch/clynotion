@@ -397,6 +397,9 @@ def test_drive_calls_stay_on_one_shared_drive() -> None:
     assert post_call[2]["json"]["parents"] == ["personnel-drive"]
     assert folder_name("Jordan Example") == "Example, Jordan"
     assert folder_name("Jordan") == "Jordan"
+    assert folder_name("MICHAEL A. GUERTIN") == "Guertin, Michael"
+    assert folder_name("Jane Q. Public Jr.") == "Public Jr., Jane"
+    assert folder_name("Mary Ann McDonald") == "McDonald, Mary"
     assert resume_filename("Jordan Example", "application/pdf") == "Example_Jordan_resume.pdf"
     assert resume_filename("Jordan Example", "application/vnd.openxmlformats-officedocument.wordprocessingml.document") == "Example_Jordan_resume.docx"
 
