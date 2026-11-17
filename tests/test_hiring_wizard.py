@@ -148,8 +148,10 @@ def test_handoff_records_the_packet_and_does_not_send(monkeypatch) -> None:
 def test_override_redirects_both_messages_without_pay(monkeypatch) -> None:
     sent: list[dict] = []
 
-    def spy(practice_id, to, subject, text, attachments=()):
-        sent.append({"to": to, "subject": subject, "text": text, "attachments": attachments})
+    def spy(practice_id, to, subject, text, attachments=(), html="", reply_to=""):
+        sent.append(
+            {"to": to, "subject": subject, "text": text, "attachments": attachments, "html": html, "reply_to": reply_to}
+        )
         return "sent"
 
     monkeypatch.setattr("app.hiring.engine.deliver", spy)
@@ -182,19 +184,21 @@ def test_override_redirects_both_messages_without_pay(monkeypatch) -> None:
     )
     assert handed.status_code == 200, handed.text
     assert {item["to"] for item in sent} == {"qa.ops@example.com"}
-    staff = next(item for item in sent if item["subject"].startswith("New hire ready"))
+    staff = next(item for item in sent if item["subject"].startswith("New Hire Ready"))
     assert staff["attachments"] == ()
+    assert staff["reply_to"] == "operations@heart4change.org"
     assert "Jordan Example" in staff["text"]
-    assert "full-time" in staff["text"]
-    assert f"/#hiring?hire={hire_id}" in staff["text"]
-    assert "$45" not in staff["text"]
-    assert "$55" not in staff["text"]
+    assert "Hello Casey," in staff["text"]
+    assert "Full-time" in staff["text"]
+    assert f"/#hiring?hire={hire_id}" in staff["html"]
+    assert "$45" not in staff["text"] and "$45" not in staff["html"]
+    assert "$55" not in staff["text"] and "$55" not in staff["html"]
     assert "$250" not in staff["text"]
     assert "jordan.example@" not in staff["text"]
     candidate = next(item for item in sent if item is not staff)
     assert candidate["attachments"]
     assert all(name.endswith(".pdf") for name, _mime, _data in candidate["attachments"])
-    assert "$45" not in candidate["text"]
+    assert "$45" not in candidate["text"] and "$45" not in candidate["html"]
     client.put(
         "/hiring/settings",
         headers=_alice(),
@@ -452,8 +456,10 @@ def test_delete_hire_keeps_the_personnel_folder(monkeypatch) -> None:
 def test_wizard_email_test_sends_only_to_the_override_and_creates_nothing(monkeypatch) -> None:
     sent: list[dict] = []
 
-    def spy(practice_id, to, subject, text, attachments=()):
-        sent.append({"to": to, "subject": subject, "text": text, "attachments": attachments})
+    def spy(practice_id, to, subject, text, attachments=(), html="", reply_to=""):
+        sent.append(
+            {"to": to, "subject": subject, "text": text, "attachments": attachments, "html": html, "reply_to": reply_to}
+        )
         return "sent"
 
     monkeypatch.setattr("app.hiring.engine.deliver", spy)
@@ -471,13 +477,24 @@ def test_wizard_email_test_sends_only_to_the_override_and_creates_nothing(monkey
     assert sent_ok.status_code == 200, sent_ok.text
     assert {item["to"] for item in sent} == {"operations@heart4change.org"}
     assert all(item["subject"].startswith("[TEST] ") for item in sent)
-    staff = next(item for item in sent if "payroll" in item["subject"])
+    assert all(item["reply_to"] == "operations@heart4change.org" for item in sent)
+    staff = next(item for item in sent if "Payroll Setup" in item["subject"])
     assert staff["attachments"] == ()
     assert "Riley Sample" in staff["text"]
-    assert "Sample position" in staff["text"]
+    assert "Hello there," in staff["text"]
+    assert "Monday, December 8, 2026" in staff["html"]
+    assert "Open in Clynotion" in staff["html"]
+    assert staff["html"].count("max-width:600px") == 1
+    assert "#hiring?hire=" not in staff["html"]
+    assert "<img" not in staff["html"].lower()
     candidate = next(item for item in sent if item is not staff)
     assert candidate["attachments"]
     assert all(name.endswith(".pdf") for name, _mime, _data in candidate["attachments"])
+    assert "Dear Riley," in candidate["text"]
+    assert "Pennsylvania clearances" in candidate["text"]
+    assert "200 Willow Valley Sq, Suite 210, Lancaster, PA" in candidate["html"]
+    assert "<img" not in candidate["html"].lower()
+    assert "src=" not in candidate["html"].lower()
     after = client.get("/hiring/bootstrap", headers=_alice()).json()
     assert [item["id"] for item in after["offers"]] == [item["id"] for item in before["offers"]]
     assert [item["id"] for item in after["hires"]] == [item["id"] for item in before["hires"]]
@@ -578,3 +595,68 @@ def test_drive_status_aligns_without_calling_drive_or_changing_the_offer() -> No
     finally:
         clear_personnel_drive_for_tests()
         hiring._memory["practices"]["practice-a"].pop("personnel_normalize", None)
+
+
+def test_wizard_steps_follow_direct_client_access_and_escape_html() -> None:
+    from email import message_from_bytes, policy
+    import base64
+
+    from app.hiring.mailer import compose_wizard, sample_wizard_values
+    from app.hr.gmail_oauth import _raw_message
+    from app.hr.time_mail import OutboundMail
+
+    values = sample_wizard_values(link="https://clynotion.com/#hiring", supervisor="Jordan Example", packet_list="Form I-9")
+    _subject, office, _html = compose_wizard("candidate", {}, values, direct=False)
+    assert "Pennsylvania clearances" not in office
+    _subject, direct, html = compose_wizard("candidate", {}, values, direct=True)
+    assert "Pennsylvania clearances" in direct
+    assert "1. Review the attached new-hire packet (Form I-9)" in direct
+    _subject, staff_office, _html = compose_wizard("staff", {}, values, direct=False)
+    assert "Confirm exclusion screening is complete." in staff_office
+    assert "PA clearances and exclusion" not in staff_office
+    _subject, staff_direct, staff_html = compose_wizard(
+        "staff", {}, {**values, "name": "Riley <Sample>"}, direct=True
+    )
+    assert "Confirm PA clearances and exclusion screening" in staff_direct
+    assert "Riley &lt;Sample&gt;" in staff_html
+    assert "<img" not in staff_html.lower()
+    assert "src=" not in staff_html.lower()
+    message = OutboundMail(
+        to="operations@heart4change.org",
+        subject="[TEST] sample",
+        text=staff_direct,
+        html=staff_html,
+        reply_to="operations@heart4change.org",
+        attachments=(("packet.pdf", "application/pdf", b"%PDF-1.4"),),
+    )
+    parsed = message_from_bytes(
+        base64.urlsafe_b64decode(_raw_message(message, "operations@heart4change.org") + "==="),
+        policy=policy.default,
+    )
+    assert parsed["reply-to"] == "operations@heart4change.org"
+    kinds = {part.get_content_type() for part in parsed.walk()}
+    assert {"text/plain", "text/html", "application/pdf"} <= kinds
+
+
+def test_wizard_preview_renders_riley_without_sending_or_storing(monkeypatch) -> None:
+    def spy(*_args, **_kwargs):
+        raise AssertionError("preview must not send")
+
+    monkeypatch.setattr("app.hiring.engine.deliver", spy)
+    before = client.get("/hiring/bootstrap", headers=_alice()).json()
+    preview = client.post("/hiring/wizard-email-preview", headers=_alice(), json={"kind": "candidate"})
+    assert preview.status_code == 200, preview.text
+    body = preview.json()
+    assert body["subject"].startswith("Welcome to Heart for Change")
+    assert "Riley" in body["html"]
+    assert "max-width:600px" in body["html"]
+    assert "[TEST]" not in body["subject"]
+    staff = client.post("/hiring/wizard-email-preview", headers=_alice(), json={"kind": "staff"})
+    assert staff.status_code == 200, staff.text
+    assert "Open in Clynotion" in staff.json()["html"]
+    assert "</html>" in staff.json()["html"]
+    after = client.get("/hiring/bootstrap", headers=_alice()).json()
+    assert [item["id"] for item in after["offers"]] == [item["id"] for item in before["offers"]]
+    assert after["settings"]["staff_handoff_emails_enabled"] is False
+    assert after["settings"]["candidate_emails_enabled"] is False
+    assert after["settings"]["wizard_email_override"] == ""

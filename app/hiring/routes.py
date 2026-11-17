@@ -36,9 +36,15 @@ class SettingsBody(BaseModel):
     staff_handoff_emails_enabled: Optional[bool] = None
     wizard_email_override: Optional[str] = None
     staff_handoff_subject: Optional[str] = None
-    staff_handoff_body: Optional[str] = None
+    staff_handoff_intro: Optional[str] = None
+    staff_handoff_steps: Optional[str] = None
+    staff_handoff_closing: Optional[str] = None
+    staff_handoff_signature: Optional[str] = None
     candidate_packet_subject: Optional[str] = None
-    candidate_packet_body: Optional[str] = None
+    candidate_packet_intro: Optional[str] = None
+    candidate_packet_steps: Optional[str] = None
+    candidate_packet_closing: Optional[str] = None
+    candidate_packet_signature: Optional[str] = None
 
 
 class OfferBody(BaseModel):
@@ -147,6 +153,34 @@ def put_settings(body: SettingsBody, user: CurrentUser) -> dict[str, Any]:
     patch = body.model_dump(exclude_none=True)
     try:
         return hiring.update_settings(user.practice_id, patch, _actor(user))
+    except HiringError as exc:
+        _fail(exc)
+
+
+class WizardPreviewBody(BaseModel):
+    kind: str = "candidate"
+    subject: str = ""
+    intro: str = ""
+    steps: str = ""
+    closing: str = ""
+    signature: str = ""
+
+
+@router.post("/hiring/wizard-email-preview")
+def wizard_email_preview(body: WizardPreviewBody, user: CurrentUser) -> dict[str, Any]:
+    _require_admin(user)
+    try:
+        return hiring.preview_wizard_email(
+            user.practice_id,
+            body.kind,
+            {
+                "subject": body.subject,
+                "intro": body.intro,
+                "steps": body.steps,
+                "closing": body.closing,
+                "signature": body.signature,
+            },
+        )
     except HiringError as exc:
         _fail(exc)
 

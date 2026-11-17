@@ -67,6 +67,8 @@ class OutboundMail:
     csv_text: str = ""
     practice_id: str = ""
     attachments: tuple[tuple[str, str, bytes], ...] = ()
+    html: str = ""
+    reply_to: str = ""
 
 
 @dataclass(frozen=True)
@@ -327,7 +329,11 @@ def _raw_mime(message: OutboundMail, *, sender: str) -> str:
     mime["To"] = message.to
     mime["From"] = sender
     mime["Subject"] = message.subject
+    if message.reply_to:
+        mime["Reply-To"] = message.reply_to
     mime.set_content(message.text)
+    if message.html:
+        mime.add_alternative(message.html, subtype="html")
     if message.csv_text:
         mime.add_attachment(
             message.csv_text.encode("utf-8"),

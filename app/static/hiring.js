@@ -719,45 +719,89 @@
     override.value = settings.wizard_email_override || "";
     override.placeholder = "operations@heart4change.org";
     overrideLabel.appendChild(override);
-    function templateField(title, key, rows) {
-      const fieldLabel = document.createElement("label");
-      fieldLabel.textContent = title;
-      const area = document.createElement("textarea");
-      area.rows = rows;
-      area.value = settings[key] || "";
-      fieldLabel.appendChild(area);
-      settingsBox.appendChild(fieldLabel);
-      return area;
-    }
     const help = document.createElement("p");
     help.className = "meta";
-    help.textContent = "Placeholders: {name}, {first_name}, {position}, {employment}, {start_date}, {link}";
+    help.textContent = "Placeholders: {name} {first_name} {last_name} {position} {employment} {start_date} {start_date_long} {link} {supervisor_name} {packet_list} {billing_first_name}. A next-step line starting with [direct] is included only when the hire has direct client access. [office] is included only when they do not.";
     settingsBox.appendChild(staffLabel);
     settingsBox.appendChild(candidateLabel);
     settingsBox.appendChild(overrideLabel);
     settingsBox.appendChild(help);
-    const staffSubject = templateField("Staff handoff subject", "staff_handoff_subject", 2);
-    const staffBody = templateField("Staff handoff body", "staff_handoff_body", 6);
-    const candidateSubject = templateField("Candidate packet subject", "candidate_packet_subject", 2);
-    const candidateBody = templateField("Candidate packet body", "candidate_packet_body", 8);
+    const fields = {};
+    function section(title, prefix) {
+      const heading = document.createElement("h3");
+      heading.textContent = title;
+      settingsBox.appendChild(heading);
+      function add(label, key, rows, single) {
+        const fieldLabel = document.createElement("label");
+        fieldLabel.textContent = label;
+        const area = single ? document.createElement("input") : document.createElement("textarea");
+        if (!single) {
+          area.rows = rows;
+        }
+        area.value = settings[prefix + "_" + key] || "";
+        fieldLabel.appendChild(area);
+        settingsBox.appendChild(fieldLabel);
+        fields[prefix + "_" + key] = area;
+      }
+      add("Subject", "subject", 1, true);
+      add("Intro paragraph", "intro", 5, false);
+      add("Next steps (one per line)", "steps", 8, false);
+      add("Closing paragraph", "closing", 4, false);
+      add("Signature", "signature", 4, false);
+    }
+    section("Candidate email", "candidate_packet");
+    section("Staff handoff email", "staff_handoff");
+    const previewFrame = document.createElement("iframe");
+    previewFrame.title = "Wizard email preview";
+    previewFrame.setAttribute("sandbox", "");
+    previewFrame.style.width = "100%";
+    previewFrame.style.height = "720px";
+    previewFrame.style.border = "1px solid #d9ddd9";
+    previewFrame.style.background = "#f3f4f3";
+    const previewSubject = document.createElement("p");
+    previewSubject.className = "meta";
+    function showPreview(kind) {
+      const prefix = kind === "staff" ? "staff_handoff" : "candidate_packet";
+      ui().api("/hiring/wizard-email-preview", {
+        method: "POST",
+        json: {
+          kind: kind,
+          subject: fields[prefix + "_subject"].value,
+          intro: fields[prefix + "_intro"].value,
+          steps: fields[prefix + "_steps"].value,
+          closing: fields[prefix + "_closing"].value,
+          signature: fields[prefix + "_signature"].value,
+        },
+      }).then(function (result) {
+        previewSubject.textContent = "Preview for Riley Sample — " + result.subject;
+        previewFrame.srcdoc = result.html;
+      }).catch(function (error) {
+        ui().setStatus($("hiring-status"), error.message, "error");
+      });
+    }
+    const previewCandidate = document.createElement("button");
+    previewCandidate.type = "button";
+    previewCandidate.className = "ghost";
+    previewCandidate.textContent = "Preview candidate email";
+    previewCandidate.onclick = function () { showPreview("candidate"); };
+    const previewStaff = document.createElement("button");
+    previewStaff.type = "button";
+    previewStaff.className = "ghost";
+    previewStaff.textContent = "Preview staff email";
+    previewStaff.onclick = function () { showPreview("staff"); };
     const saveMail = document.createElement("button");
     saveMail.type = "button";
     saveMail.className = "ghost";
     saveMail.textContent = "Save email settings";
     saveMail.onclick = async function () {
+      const json = {
+        staff_handoff_emails_enabled: staffOn.checked,
+        candidate_emails_enabled: candidateOn.checked,
+        wizard_email_override: override.value.trim(),
+      };
+      Object.keys(fields).forEach(function (key) { json[key] = fields[key].value; });
       try {
-        await ui().api("/hiring/settings", {
-          method: "PUT",
-          json: {
-            staff_handoff_emails_enabled: staffOn.checked,
-            candidate_emails_enabled: candidateOn.checked,
-            wizard_email_override: override.value.trim(),
-            staff_handoff_subject: staffSubject.value,
-            staff_handoff_body: staffBody.value,
-            candidate_packet_subject: candidateSubject.value,
-            candidate_packet_body: candidateBody.value,
-          },
-        });
+        await ui().api("/hiring/settings", { method: "PUT", json: json });
         await window.clyHiring.open({ message: "Saved." });
       } catch (error) {
         ui().setStatus($("hiring-status"), error.message, "error");
@@ -783,7 +827,11 @@
       }
     };
     settingsBox.appendChild(saveMail);
+    settingsBox.appendChild(previewCandidate);
+    settingsBox.appendChild(previewStaff);
     settingsBox.appendChild(testMail);
+    settingsBox.appendChild(previewSubject);
+    settingsBox.appendChild(previewFrame);
     root.appendChild(settingsBox);
     const steps = document.createElement("p");
     steps.className = "meta";

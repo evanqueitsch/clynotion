@@ -209,7 +209,11 @@ def _raw_message(message: OutboundMail, sender: str) -> str:
     mime["To"] = message.to
     mime["From"] = sender
     mime["Subject"] = message.subject
+    if getattr(message, "reply_to", ""):
+        mime["Reply-To"] = message.reply_to
     mime.set_content(message.text)
+    if getattr(message, "html", ""):
+        mime.add_alternative(message.html, subtype="html")
     if message.csv_text:
         # Bytes need an explicit main type. subtype alone raises TypeError
         # before any network call.
