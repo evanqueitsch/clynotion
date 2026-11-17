@@ -61,6 +61,7 @@ from app.hiring.mailer import (
     compose_wizard,
     deliver,
     long_start_date,
+    migrate_wizard_steps,
     offer_body,
     public_queue_row,
     reminder_body,
@@ -1704,6 +1705,10 @@ class HiringEngine:
 
     def _hire_public(self, row: dict[str, Any], hire: dict[str, Any]) -> dict[str, Any]:
         candidate = row["candidates"].get(hire["candidate_id"]) or {}
+        offer = row["offers"].get(hire.get("offer_id") or "") or {}
+        version = row["offer_versions"].get(offer.get("current_version_id") or "") or {}
+        given = str(((version.get("field_values") or {}).get("candidate_first_name")) or "")
+        first_name, last_name = _person_names(str(candidate.get("display_name") or ""), given)
         items = [item for item in row["checklist_items"].values() if item.get("hire_id") == hire["id"]]
         items.sort(key=lambda item: (item.get("stage") or 0, item.get("template_key") or ""))
         return {
@@ -1724,6 +1729,11 @@ class HiringEngine:
             "stage": hire.get("stage") or "accepted",
             "owner": hire.get("owner") or "admin",
             "handoff_at": hire.get("handoff_at") or "",
+            "qb_invite_at": hire.get("qb_invite_at") or "",
+            "qb_invite_by": hire.get("qb_invite_by") or "",
+            "first_name": first_name,
+            "last_name": last_name,
+            "personal_email": candidate.get("personal_email") or "",
             "created_on": hire.get("created_on") or "",
             "packet_form_keys": list(hire.get("packet_form_keys") or []),
             "packet_choices": self._packet_choices(hire),
@@ -1843,6 +1853,7 @@ class HiringEngine:
                     "i9_completed_on",
                     "clearances_received_on",
                     "exclusion_received_on",
+                    "qb_onboarding_confirmed_on",
                 }
                 for name, value in dates.items():
                     if name not in allowed:
@@ -1856,10 +1867,12 @@ class HiringEngine:
                 if item["dates"].get("i9_completed_on"):
                     item["dates"]["i9_section2_completed_on"] = item["dates"]["i9_completed_on"]
             if key == "payroll_w4_dd":
-                recorded = bool(item["dates"].get("w4_received_on")) and bool(item["dates"].get("direct_deposit_received_on"))
-                if recorded and status == "open":
+                confirmed = bool(item["dates"].get("qb_onboarding_confirmed_on")) or (
+                    bool(item["dates"].get("w4_received_on")) and bool(item["dates"].get("direct_deposit_received_on"))
+                )
+                if confirmed:
                     status = "done"
-                elif not recorded and status == "done":
+                elif status == "done":
                     status = "open"
             item["status"] = status
             if note is not None:
@@ -1916,6 +1929,8 @@ class HiringEngine:
                 public = self._hire_public(row, hire)
                 public["notice"] = "already handed off"
                 return public
+            if not str(hire.get("qb_invite_at") or "").strip():
+                raise HiringError(409, "Mark Invite sent in QuickBooks before handing this hire to Billing.")
             choices = {str(item["form_key"]): item for item in self._packet_choices(hire)}
             selected: list[str] = []
             for key in form_keys:
@@ -1952,6 +1967,25 @@ class HiringEngine:
 
             due_engine.complete(practice_id=practice_id, source="hiring-payroll", source_ref=str(hire_id) + ":packet")
             self._history(row, "hire", hire_id, "handoff_recalled", actor, "Handoff recalled")
+            self._save(payload)
+            return self._hire_public(row, hire)
+
+    def mark_qb_invite(self, practice_id: str, hire_id: str, sent: bool, actor: str) -> dict[str, Any]:
+        """Record that Admin sent the QuickBooks Workforce self-onboard invite."""
+        with _lock:
+            payload = self._read()
+            row = self._practice(payload, practice_id)
+            hire = row["hires"].get(hire_id)
+            if not hire or hire.get("status") == "archived":
+                raise HiringError(404, "Hire not found.")
+            if sent:
+                if not hire.get("qb_invite_at"):
+                    hire["qb_invite_at"] = _iso()
+                    hire["qb_invite_by"] = actor
+            else:
+                hire["qb_invite_at"] = ""
+                hire["qb_invite_by"] = ""
+            self._history(row, "hire", hire_id, "qb_invite", actor, "QuickBooks invite recorded" if sent else "QuickBooks invite cleared")
             self._save(payload)
             return self._hire_public(row, hire)
 
@@ -2325,7 +2359,7 @@ class HiringEngine:
             practice_id=practice_id,
             domain="books",
             source="hiring-payroll",
-            title=f"{name}: W-4, direct deposit, and the PA new-hire report",
+            title=f"{name}: confirm QuickBooks onboarding and file the PA new-hire report",
             owner_user_id="billing",
             due_at=due_at,
             href=f"/#hiring?hire={hire.get('id') or ''}",
@@ -3235,6 +3269,12 @@ def _refresh_wizard_defaults(settings: dict[str, Any]) -> None:
         if str(settings.get(key) or "") == old:
             settings[key] = defaults[key]
     for key, value in defaults.items():
+        if key.endswith("_steps"):
+            kind = "staff" if key.startswith("staff_") else "candidate"
+            migrated, _changed = migrate_wizard_steps(kind, str(settings.get(key) or value))
+            if not str(settings.get(key) or "").strip() or migrated != settings.get(key):
+                settings[key] = migrated or value
+            continue
         if not str(settings.get(key) or "").strip():
             settings[key] = value
 

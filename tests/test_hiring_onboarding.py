@@ -293,7 +293,7 @@ def test_checklist_status_note_undo_and_billing_todo() -> None:
     packet = client.post(f"/hiring/hires/{hire_id}/packet-complete", headers=_alice())
     assert packet.status_code == 200, packet.text
     titles = [item.title for item in due_engine.list_open("practice-a")]
-    assert "Avery Sample: W-4, direct deposit, and the PA new-hire report" in titles
+    assert "Avery Sample: confirm QuickBooks onboarding and file the PA new-hire report" in titles
     todo = next(item for item in due_engine.list_open("practice-a") if item.source_ref == hire_id + ":packet")
     assert "T" in todo.due_at
     assert todo.due_at.endswith("23:59:59-05:00") or todo.due_at.endswith("23:59:59-04:00")

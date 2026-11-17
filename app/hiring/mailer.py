@@ -98,13 +98,21 @@ LEGACY_STAFF_INTRO = (
     "This hire is now assigned to you in Clynotion to complete payroll setup."
 )
 STAFF_HANDOFF_STEPS = (
-    "Set up the W-4 and direct deposit in QuickBooks Workforce and send the employee's invitation.\n"
+    "Confirm the hire completed QuickBooks Workforce self-onboarding (W-4 and direct deposit).\n"
     "File the Pennsylvania new-hire report.\n"
     "Schedule the in-person Form I-9 and record the appointment and completion dates.\n"
     "[direct] Confirm PA clearances and exclusion screening are received before the start date.\n"
     "[office] Confirm exclusion screening is complete.\n"
     "Activate the hire in Clynotion once everything above is done."
 )
+OLD_STAFF_SETUP_STEP = "Set up the W-4 and direct deposit in QuickBooks Workforce and send the employee's invitation."
+NEW_STAFF_SETUP_STEP = "Confirm the hire completed QuickBooks Workforce self-onboarding (W-4 and direct deposit)."
+OLD_CANDIDATE_INVITE_STEP = "Our payroll team will send you a separate secure invitation to set up your W-4 and direct deposit."
+NEW_CANDIDATE_INVITE_STEP = (
+    "You will receive a secure email from QuickBooks Workforce (do_not_reply@intuit.com) "
+    "to enter your W-4 tax withholding and direct deposit details. Please complete it before your start date."
+)
+PACKET_REVIEW_STEP = "Review the attached new-hire packet ({packet_list}) and complete each form."
 STAFF_HANDOFF_CLOSING = (
     "Each step is tracked in Clynotion and appears on your Home page until it is complete. "
     "No personal identifiers are included in this email."
@@ -123,7 +131,8 @@ CANDIDATE_PACKET_STEPS = (
     "Please do not email any form that contains your Social Security number or banking information.\n"
     "[direct] Complete your Pennsylvania clearances (PA Child Abuse History, PA State Police Criminal Record Check, "
     "and FBI fingerprinting) and provide the results before your start date.\n"
-    "Our payroll team will send you a separate secure invitation to set up your W-4 and direct deposit.\n"
+    "You will receive a secure email from QuickBooks Workforce (do_not_reply@intuit.com) "
+    "to enter your W-4 tax withholding and direct deposit details. Please complete it before your start date.\n"
     "On your first day, bring original, unexpired documents of your choice that establish your identity and "
     "work eligibility for Form I-9. The list of acceptable documents is in the I-9 instructions attached."
 )
@@ -150,6 +159,47 @@ WIZARD_FIELDS = (
     "candidate_packet_closing",
     "candidate_packet_signature",
 )
+
+
+def migrate_wizard_steps(kind: str, raw: str) -> tuple[str, list[str]]:
+    """Replace one outdated step line. Returns the text and the old lines replaced."""
+    changed: list[str] = []
+    lines: list[str] = []
+    for line in (raw or "").splitlines():
+        stripped = line.strip()
+        prefix = ""
+        body = stripped
+        if stripped.lower().startswith("[direct]"):
+            prefix = "[direct] "
+            body = stripped.split("]", 1)[1].strip()
+        elif stripped.lower().startswith("[office]"):
+            prefix = "[office] "
+            body = stripped.split("]", 1)[1].strip()
+        folded = body.casefold()
+        replacement = ""
+        if kind == "candidate" and body == OLD_CANDIDATE_INVITE_STEP:
+            replacement = NEW_CANDIDATE_INVITE_STEP
+        elif kind == "candidate" and "w-4" in folded and "packet" in folded and body != PACKET_REVIEW_STEP:
+            replacement = PACKET_REVIEW_STEP
+        elif kind == "candidate" and "w-4" in folded and "quickbooks workforce" not in folded and any(
+            word in folded for word in ("payroll", "invitation", "direct deposit")
+        ):
+            replacement = NEW_CANDIDATE_INVITE_STEP
+        elif kind == "staff" and (
+            body == OLD_STAFF_SETUP_STEP
+            or (
+                "w-4" in folded
+                and "confirm the hire completed" not in folded
+                and any(word in folded for word in ("set up", "invitation", "send the employee"))
+            )
+        ):
+            replacement = NEW_STAFF_SETUP_STEP
+        if replacement and replacement != body:
+            lines.append(prefix + replacement)
+            changed.append(body)
+        else:
+            lines.append(line)
+    return "\n".join(lines), changed
 
 
 def wizard_defaults() -> dict[str, str]:

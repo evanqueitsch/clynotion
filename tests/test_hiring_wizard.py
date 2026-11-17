@@ -77,6 +77,11 @@ def _hire(monkeypatch, **extra: object) -> str:
     return accepted.json()["hire"]["id"]
 
 
+def _invite(hire_id: str) -> None:
+    marked = client.post(f"/hiring/hires/{hire_id}/qb-invite", headers=_alice(), json={"sent": True})
+    assert marked.status_code == 200, marked.text
+
+
 def test_packet_defaults_follow_schedule_and_role() -> None:
     full = {row["form_key"]: row for row in packet_catalog("full-time", True, "Clinician")}
     assert full["h4c_qsehra"]["available"] is False
@@ -87,7 +92,7 @@ def test_packet_defaults_follow_schedule_and_role() -> None:
     assert full["h4c_supervision_agreement"]["available"] is False
     assert full["pa_standard_application"]["available"] is False
     assert full["pa_clearances_info"]["available"] is False
-    assert full["irs_w4"]["default"] is True
+    assert "irs_w4" not in full
     part = packet_catalog("part-time", False, "Coordinator")
     keys = [row["form_key"] for row in part]
     assert "h4c_qsehra" not in keys
@@ -98,23 +103,27 @@ def test_packet_defaults_follow_schedule_and_role() -> None:
 
 def test_handoff_records_the_packet_and_does_not_send(monkeypatch) -> None:
     hire_id = _hire(monkeypatch)
+    blocked = client.post(f"/hiring/hires/{hire_id}/handoff", headers=_alice(), json={"form_keys": ["h4c_hipaa_nda"]})
+    assert blocked.status_code == 409
+    _invite(hire_id)
     missing = client.post(
         f"/hiring/hires/{hire_id}/handoff",
         headers=_alice(),
         json={"form_keys": ["h4c_employment_agreement"]},
     )
     assert missing.status_code == 400
+    _invite(hire_id)
     handed = client.post(
         f"/hiring/hires/{hire_id}/handoff",
         headers=_alice(),
-        json={"form_keys": ["irs_w4", "h4c_hipaa_nda"]},
+        json={"form_keys": ["h4c_hipaa_nda"]},
     )
     assert handed.status_code == 200, handed.text
     body = handed.json()
     assert body["stage"] == "payroll"
     assert body["owner"] == "billing"
     assert body["handoff_at"]
-    assert body["packet_form_keys"] == ["irs_w4", "h4c_hipaa_nda"]
+    assert body["packet_form_keys"] == ["h4c_hipaa_nda"]
     assert body["staff_email_status"] == "suppressed"
     assert body["candidate_email_status"] == "suppressed"
     todo = next(item for item in due_engine.list_open("practice-a") if item.source_ref == hire_id + ":packet")
@@ -123,11 +132,11 @@ def test_handoff_records_the_packet_and_does_not_send(monkeypatch) -> None:
     again = client.post(
         f"/hiring/hires/{hire_id}/handoff",
         headers=_alice(),
-        json={"form_keys": ["irs_w4"]},
+        json={"form_keys": ["h4c_hipaa_nda"]},
     )
     assert again.status_code == 200, again.text
     assert again.json()["notice"] == "already handed off"
-    assert again.json()["packet_form_keys"] == ["irs_w4", "h4c_hipaa_nda"]
+    assert again.json()["packet_form_keys"] == ["h4c_hipaa_nda"]
     assert len([item for item in due_engine.list_open("practice-a") if item.source_ref == hire_id + ":packet"]) == 1
     history = client.get("/hiring/bootstrap", headers=_alice()).json()["history"]
     summaries = [item["summary"] for item in history if item.get("entity_id") == hire_id]
@@ -137,7 +146,7 @@ def test_handoff_records_the_packet_and_does_not_send(monkeypatch) -> None:
     packed = client.post(
         f"/hiring/hires/{hire_id}/packet.zip",
         headers=_alice(),
-        json={"form_keys": ["irs_w4", "h4c_welcome_template"]},
+        json={"form_keys": ["h4c_hipaa_nda", "h4c_welcome_template"]},
     )
     assert packed.status_code == 200, packed.text
     names = zipfile.ZipFile(io.BytesIO(packed.content)).namelist()
@@ -177,10 +186,11 @@ def test_override_redirects_both_messages_without_pay(monkeypatch) -> None:
             "wizard_email_override": "qa.ops@example.com",
         },
     )
+    _invite(hire_id)
     handed = client.post(
         f"/hiring/hires/{hire_id}/handoff",
         headers=_alice(),
-        json={"form_keys": ["irs_w4"]},
+        json={"form_keys": ["h4c_hipaa_nda"]},
     )
     assert handed.status_code == 200, handed.text
     assert {item["to"] for item in sent} == {"qa.ops@example.com"}
@@ -212,7 +222,8 @@ def test_billing_sees_only_the_handoff_and_cannot_open_pay_or_i9(monkeypatch) ->
     hidden = client.get("/hiring/bootstrap", headers=_bill())
     assert hidden.status_code == 200
     assert hidden.json()["hires"] == []
-    client.post(f"/hiring/hires/{hire_id}/handoff", headers=_alice(), json={"form_keys": ["irs_w4"]})
+    _invite(hire_id)
+    client.post(f"/hiring/hires/{hire_id}/handoff", headers=_alice(), json={"form_keys": ["h4c_hipaa_nda"]})
     visible = client.get("/hiring/bootstrap", headers=_bill())
     assert visible.status_code == 200, visible.text
     payload = visible.text
@@ -255,10 +266,13 @@ def test_billing_sees_only_the_handoff_and_cannot_open_pay_or_i9(monkeypatch) ->
     assert activated.json()["status"] == "active"
     assert "hourly_rate" not in activated.text
     recalled_setup = _hire(monkeypatch, personal_email="riley.sample@example.com")
-    client.post(f"/hiring/hires/{recalled_setup}/handoff", headers=_alice(), json={"form_keys": ["irs_w4"]})
+    _invite(recalled_setup)
+    client.post(f"/hiring/hires/{recalled_setup}/handoff", headers=_alice(), json={"form_keys": ["h4c_hipaa_nda"]})
     recalled = client.post(f"/hiring/hires/{recalled_setup}/recall", headers=_alice())
     assert recalled.status_code == 200, recalled.text
     assert recalled.json()["owner"] == "admin"
+    assert recalled.json()["qb_invite_at"]
+    assert recalled.json()["qb_invite_by"] == "alice@example.com"
     assert recalled.json()["stage"] == "accepted"
     assert recalled.json()["staff_email_status"] == "suppressed"
     ids = [item["id"] for item in client.get("/hiring/bootstrap", headers=_bill()).json()["hires"]]
@@ -360,13 +374,14 @@ def test_handoff_todo_shows_on_home_and_billing_and_recall_removes_it(monkeypatc
         direct_client_access=False,
         candidate_credentials="",
     )
-    handed = client.post(f"/hiring/hires/{hire_id}/handoff", headers=_alice(), json={"form_keys": ["irs_w4"]})
+    _invite(hire_id)
+    handed = client.post(f"/hiring/hires/{hire_id}/handoff", headers=_alice(), json={"form_keys": ["h4c_hipaa_nda"]})
     assert handed.status_code == 200, handed.text
     home = client.get("/home", headers=_alice()).json()
     titles = [item["title"] for band in ("overdue", "this_week") for item in home["bands"][band]]
-    assert "Riley Sample: W-4, direct deposit, and the PA new-hire report" in titles
+    assert "Riley Sample: confirm QuickBooks onboarding and file the PA new-hire report" in titles
     overdue = [item["title"] for item in home["bands"]["overdue"]]
-    assert "Riley Sample: W-4, direct deposit, and the PA new-hire report" not in overdue
+    assert "Riley Sample: confirm QuickBooks onboarding and file the PA new-hire report" not in overdue
     match = next(item for band in ("overdue", "this_week") for item in home["bands"][band] if hire_id in item["href"])
     assert match["href"] == f"/#hiring?hire={hire_id}"
     assert match["owner_user_id"] == "billing"
@@ -395,7 +410,7 @@ def test_handoff_todo_shows_on_home_and_billing_and_recall_removes_it(monkeypatc
     recalled = client.post(f"/hiring/hires/{hire_id}/recall", headers=_alice())
     assert recalled.status_code == 200
     assert all(item.source_ref != hire_id + ":packet" for item in due_engine.list_open("practice-a"))
-    again = client.post(f"/hiring/hires/{hire_id}/handoff", headers=_alice(), json={"form_keys": ["irs_w4"]})
+    again = client.post(f"/hiring/hires/{hire_id}/handoff", headers=_alice(), json={"form_keys": ["h4c_hipaa_nda"]})
     assert again.status_code == 200
     assert again.json().get("notice") != "already handed off"
     assert len([item for item in due_engine.list_open("practice-a") if item.source_ref == hire_id + ":packet"]) == 1
@@ -796,3 +811,28 @@ def test_saved_billing_contact_name_wins_over_the_mailbox(monkeypatch) -> None:
     preview = client.post("/hiring/wizard-email-preview", headers=_alice(), json={"kind": "staff"})
     assert "Hi Christine," in preview.json()["html"]
     assert preview.json()["greeting_source"] == "setting"
+
+
+def test_saved_w4_steps_are_rewritten_without_replacing_other_lines() -> None:
+    from app.hiring.mailer import OLD_CANDIDATE_INVITE_STEP, OLD_STAFF_SETUP_STEP, migrate_wizard_steps
+
+    candidate = "\n".join(
+        [
+            "Review the attached new-hire packet, including the W-4, and complete each form.",
+            "Bring your completed forms with you.",
+            OLD_CANDIDATE_INVITE_STEP,
+            "Keep this custom closing step.",
+        ]
+    )
+    migrated, changed = migrate_wizard_steps("candidate", candidate)
+    assert changed == [
+        "Review the attached new-hire packet, including the W-4, and complete each form.",
+        OLD_CANDIDATE_INVITE_STEP,
+    ]
+    assert "do_not_reply@intuit.com" in migrated
+    assert "Keep this custom closing step." in migrated
+    assert "{packet_list}" in migrated
+    staff, staff_changed = migrate_wizard_steps("staff", OLD_STAFF_SETUP_STEP + "\nFile the Pennsylvania new-hire report.")
+    assert staff_changed == [OLD_STAFF_SETUP_STEP]
+    assert staff.startswith("Confirm the hire completed QuickBooks Workforce self-onboarding")
+    assert "File the Pennsylvania new-hire report." in staff
