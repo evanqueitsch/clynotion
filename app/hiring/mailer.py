@@ -88,6 +88,11 @@ LEGACY_CANDIDATE_SUBJECT = "Welcome to Heart for Change, {name}"
 
 STAFF_HANDOFF_SUBJECT = "New Hire Ready for Payroll Setup: {name} (starts {start_date})"
 STAFF_HANDOFF_INTRO = (
+    "Hi {billing_first_name},\n\n"
+    "{name} has accepted an offer and the onboarding packet has been sent. "
+    "This hire is now assigned to you in Clynotion to complete payroll setup."
+)
+LEGACY_STAFF_INTRO = (
     "Hello {billing_first_name},\n\n"
     "{name} has accepted an offer and the onboarding packet has been sent. "
     "This hire is now assigned to you in Clynotion to complete payroll setup."
@@ -251,7 +256,7 @@ def compose_wizard(
         return text or defaults[f"{prefix}_{name}"]
 
     subject = render_template(section("subject"), filled).replace("\r", " ").replace("\n", " ").strip()
-    intro = render_template(section("intro"), filled)
+    intro = render_template(_greeting(section("intro"), filled.get("billing_first_name") or ""), filled)
     closing = render_template(section("closing"), filled)
     signature = render_template(section("signature"), filled)
     steps = [render_template(step, filled) for step in wizard_steps(section("steps"), direct=direct)]
@@ -340,7 +345,14 @@ def _wizard_html(
     )
 
 
-def sample_wizard_values(*, link: str, supervisor: str, packet_list: str) -> dict[str, str]:
+def _greeting(intro: str, billing_first: str) -> str:
+    """Use Hi Name, and Hello, when no Billing user has a directory name."""
+    if billing_first.strip():
+        return intro
+    return re.sub(r"^(?:Hi|Hello)\s*\{billing_first_name\}\s*,", "Hello,", intro, count=1)
+
+
+def sample_wizard_values(*, link: str, supervisor: str, packet_list: str, billing_first_name: str = "") -> dict[str, str]:
     """Fake Riley used by the settings preview and the test send. No real hire."""
     return {
         "name": "Riley Sample",
@@ -353,7 +365,7 @@ def sample_wizard_values(*, link: str, supervisor: str, packet_list: str) -> dic
         "link": link,
         "supervisor_name": supervisor or "Jordan Example",
         "packet_list": packet_list,
-        "billing_first_name": "there",
+        "billing_first_name": billing_first_name,
     }
 
 
@@ -368,7 +380,7 @@ def payroll_handoff_body(name: str, position: str, employment: str, start: str, 
             "start_date": start or "—",
             "start_date_long": long_start_date(start) or "—",
             "link": link,
-            "billing_first_name": "there",
+            "billing_first_name": "",
         },
         direct=False,
     )
