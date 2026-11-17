@@ -33,6 +33,7 @@ from app.hiring.checklist import (
     build_items,
     clearance_state,
     packet_due,
+    supervision_required,
     clinician_title,
     closed_set,
     add_business_days,
@@ -644,10 +645,9 @@ class HiringEngine:
         except PdfRenderError as exc:
             raise HiringError(500, "The letter could not be rendered.") from exc
         candidate = self._candidate(row, email, name)
+        if offer is None and _open_offer_for_person(row, email, name, except_id=None):
+            raise HiringError(409, "This name and email already have an offer that is still open.")
         if offer is None:
-            for other in row["offers"].values():
-                if other.get("candidate_id") == candidate["id"] and other.get("status") in OPEN:
-                    raise HiringError(409, "This candidate already has an open offer.")
             offer = {
                 "id": _new_id("off-"),
                 "candidate_id": candidate["id"],
@@ -1037,7 +1037,7 @@ class HiringEngine:
         accepted = accepted or _today()
         hire_id = _new_id("hire-")
         closed = closed_set(row["settings"].get("business_closed_days") or [])
-        needs_supervision = bool(row["settings"].get("supervision_agreement_approved")) and "lsw" in str(values.get("position_title") or "").casefold()
+        needs_supervision = supervision_required(str(values.get("candidate_credentials") or ""))
         items = build_items(
             hire_id=hire_id,
             employment_type=values["employment_type"],
@@ -1796,6 +1796,14 @@ class HiringEngine:
                         item["dates"][name] = date.fromisoformat(str(value)[:10]).isoformat()
                     else:
                         item["dates"][name] = ""
+                if item["dates"].get("i9_completed_on"):
+                    item["dates"]["i9_section2_completed_on"] = item["dates"]["i9_completed_on"]
+            if key == "payroll_w4_dd":
+                recorded = bool(item["dates"].get("w4_received_on")) and bool(item["dates"].get("direct_deposit_received_on"))
+                if recorded and status == "open":
+                    status = "done"
+                elif not recorded and status == "done":
+                    status = "open"
             item["status"] = status
             if note is not None:
                 item["note"] = str(note)[:300]
@@ -1847,6 +1855,10 @@ class HiringEngine:
             hire = row["hires"].get(hire_id)
             if not hire or hire.get("status") == "archived":
                 raise HiringError(404, "Hire not found.")
+            if hire.get("handoff_at") and hire.get("owner") == "billing" and hire.get("stage") in {"payroll", "active"}:
+                public = self._hire_public(row, hire)
+                public["notice"] = "already handed off"
+                return public
             choices = {str(item["form_key"]): item for item in self._packet_choices(hire)}
             selected: list[str] = []
             for key in form_keys:
@@ -1861,12 +1873,12 @@ class HiringEngine:
             hire["stage"] = "payroll"
             hire["owner"] = "billing"
             self._payroll_todo(practice_id, row, hire)
-            if not hire.get("handoff_at"):
+            first = not hire.get("handoff_at")
+            if first:
                 hire["handoff_at"] = _iso()
-                self._history(row, "hire", hire_id, "handoff", actor, "Handed off to billing")
+            self._history(row, "hire", hire_id, "handoff", actor, "Handed off to billing")
+            if first:
                 self._send_handoff_mail(practice_id, row, hire, actor)
-            else:
-                self._history(row, "hire", hire_id, "handoff", actor, "Handoff already recorded")
             self._save(payload)
             return self._hire_public(row, hire)
 
@@ -1879,6 +1891,9 @@ class HiringEngine:
                 raise HiringError(409, "That hire has not been handed off.")
             hire["stage"] = "accepted"
             hire["owner"] = "admin"
+            from app.platform.due import due_engine
+
+            due_engine.complete(practice_id=practice_id, source="hiring-payroll", source_ref=str(hire_id) + ":packet")
             self._history(row, "hire", hire_id, "handoff_recalled", actor, "Handoff recalled")
             self._save(payload)
             return self._hire_public(row, hire)
@@ -1994,6 +2009,8 @@ class HiringEngine:
         closed = closed_set(row["settings"].get("business_closed_days") or [])
         start = parse_iso(str(hire.get("start_date") or _today().isoformat()))
         due_day = packet_due(start, _today(), closed)
+        if due_day < _today():
+            due_day = _today()
         due_at = datetime(due_day.year, due_day.month, due_day.day, 23, 59, 59, tzinfo=EASTERN).isoformat()
         due_engine.upsert(
             practice_id=practice_id,
@@ -2140,12 +2157,14 @@ class HiringEngine:
             confirm_name = str(confirm or "").strip()
             if not confirm_name or confirm_name not in {name for name in (expected, legal) if name}:
                 raise HiringError(400, "Type the candidate's name to confirm.")
-            self._trash_drive_ids([str(offer.get("drive_folder_id") or "")])
-            for key in _DRIVE_OFFER_KEYS:
-                if key == "drive_status" or key not in offer:
-                    continue
-                offer[key] = ""
-            offer["drive_status"] = "trashed"
+            trash_ids = [str(item) for item in (hire.get("drive_subfolders") or {}).values() if item]
+            signed = str(offer.get("drive_signed_file_id") or "")
+            if signed:
+                trash_ids.append(signed)
+            self._trash_drive_ids(trash_ids)
+            if signed:
+                offer["drive_signed_file_id"] = ""
+                offer["drive_signed_name"] = ""
             for ref_id, ref in list((row.get("document_refs") or {}).items()):
                 if ref.get("hire_id") != hire_id:
                     continue
@@ -2722,6 +2741,23 @@ def _acceptance_day(value: str) -> date:
     if not normalized:
         raise HiringError(400, "Acceptance date must be a real date.", "accepted_on")
     return datetime.strptime(normalized, "%m/%d/%Y").date()
+
+
+def _open_offer_for_person(row: dict[str, Any], email: str, name: str, except_id: str | None) -> bool:
+    """True when this name and email already have a draft, sent, or viewed offer."""
+    wanted_email = email.strip().lower()
+    wanted_name = name.strip().casefold()
+    for other in row["offers"].values():
+        if except_id and other.get("id") == except_id:
+            continue
+        if other.get("status") not in OPEN:
+            continue
+        candidate = row["candidates"].get(other.get("candidate_id") or "") or {}
+        other_email = str(candidate.get("personal_email") or "").strip().lower()
+        other_name = str(candidate.get("display_name") or "").strip().casefold()
+        if other_email == wanted_email and other_name == wanted_name:
+            return True
+    return False
 
 
 def _billing_contact(practice_id: str) -> tuple[str, str]:

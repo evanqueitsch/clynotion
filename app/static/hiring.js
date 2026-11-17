@@ -225,6 +225,8 @@
           node.disabled = true;
         });
       }
+      const submit = form.querySelector("button[type=submit]");
+      if (submit && !locked) submit.textContent = offer && offer.id ? "Update offer" : "Save offer";
     }
     let lockedNote = document.getElementById("hire-locked-note");
     if (locked) {
@@ -294,6 +296,55 @@
     } catch (ignore) {
       root.textContent = "";
     }
+  }
+
+  function easternToday() {
+    return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+  }
+
+  function shortDate(iso) {
+    if (!iso) return "";
+    const parsed = new Date(iso);
+    if (Number.isNaN(parsed.getTime())) return String(iso).slice(0, 10);
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone: "America/New_York",
+      month: "short",
+      day: "numeric",
+      year: "numeric",
+    }).format(parsed);
+  }
+
+  function stepper(steps) {
+    const list = document.createElement("ol");
+    list.className = "hire-stepper";
+    steps.forEach(function (step, index) {
+      const item = document.createElement("li");
+      item.className = "hire-step " + step.state;
+      if (step.state === "current") item.setAttribute("aria-current", "step");
+      item.textContent = String(index + 1) + ". " + step.label;
+      list.appendChild(item);
+    });
+    return list;
+  }
+
+  function stepState(done, current) {
+    if (done) return "done";
+    if (current) return "current";
+    return "todo";
+  }
+
+  function wizardSteps(offer, hire) {
+    const sent = !!(offer && (offer.status === "sent" || offer.status === "viewed" || offer.status === "accepted"));
+    const accepted = !!(offer && offer.status === "accepted") || !!(hire && hire.id);
+    const chosen = !!(hire && (hire.packet_form_keys || []).length);
+    const handed = !!(hire && hire.handoff_at && hire.owner === "billing");
+    return [
+      { label: "Create the offer", state: stepState(!!(offer && offer.id), !(offer && offer.id)) },
+      { label: "Mark sent", state: stepState(sent || accepted, !!(offer && offer.id) && !sent && !accepted) },
+      { label: "Record acceptance", state: stepState(accepted, sent && !accepted) },
+      { label: "Choose packet documents", state: stepState(handed || chosen, accepted && !chosen && !handed) },
+      { label: "Review and hand off", state: stepState(handed, accepted && chosen && !handed) },
+    ];
   }
 
   function stageBar(stage, owner, label) {
@@ -400,18 +451,24 @@
       hire.start_date || "",
     ].filter(Boolean).join(" · ");
     block.appendChild(summary);
+    const handedOff = hire.owner === "billing" && !!hire.handoff_at;
     const hand = document.createElement("button");
     hand.type = "button";
     hand.className = "primary";
-    hand.textContent = "Hand off to " + (billingLabel || "Billing");
+    hand.textContent = handedOff
+      ? "Handed off to " + (billingLabel || "Billing") + " on " + shortDate(hire.handoff_at)
+      : "Hand off to " + (billingLabel || "Billing");
+    hand.disabled = handedOff;
     hand.onclick = function () {
+      if (hand.disabled) return;
       ui()
         .api("/hiring/hires/" + hire.id + "/handoff", {
           method: "POST",
           json: { form_keys: checkedPacketKeys(packetRoot) },
         })
-        .then(function () {
-          return window.clyHiring.open({ message: "Handed off.", hireId: hire.id });
+        .then(function (saved) {
+          const note = saved && saved.notice === "already handed off" ? "Already handed off." : "Handed off.";
+          return window.clyHiring.open({ message: note, hireId: hire.id });
         })
         .catch(function (error) {
           showStatus((error && error.message) || "Could not hand off.", "error");
@@ -448,11 +505,11 @@
     return (hire.items || []).filter(function (item) { return item.template_key === key; })[0] || {};
   }
 
-  function postItem(hire, key, body) {
+  function postItem(hire, key, body, message) {
     ui()
       .api("/hiring/hires/" + hire.id + "/items/" + key, { method: "POST", json: body })
       .then(function () {
-        return window.clyHiring.open({ message: "Saved.", hireId: hire.id });
+        return window.clyHiring.open({ message: message || "Saved.", hireId: hire.id });
       })
       .catch(function (error) {
         showStatus((error && error.message) || "Could not save.", "error");
@@ -462,8 +519,9 @@
   function dateStep(card, hire, item, label, dateKey, doneWhenSet) {
     const row = document.createElement("div");
     row.className = "hire-item" + (item.warning ? " late" : "");
+    const recorded = !!(item.dates && item.dates[dateKey]);
     const text = document.createElement("div");
-    text.textContent = label + " — " + (item.status || "open");
+    text.textContent = label + " — " + (recorded ? "done" : "open");
     row.appendChild(text);
     if (item.badge) {
       const badge = document.createElement("span");
@@ -471,9 +529,17 @@
       badge.textContent = item.badge;
       row.appendChild(badge);
     }
+    const fieldId = "hire-date-" + hire.id + "-" + dateKey;
+    const fieldLabel = document.createElement("label");
+    fieldLabel.htmlFor = fieldId;
+    fieldLabel.className = "meta";
+    fieldLabel.textContent = label + " date";
     const input = document.createElement("input");
+    input.id = fieldId;
     input.type = "date";
+    input.setAttribute("aria-label", label + " date");
     input.value = (item.dates && item.dates[dateKey]) || "";
+    row.appendChild(fieldLabel);
     row.appendChild(input);
     const save = document.createElement("button");
     save.type = "button";
@@ -482,8 +548,14 @@
     save.onclick = function () {
       const dates = Object.assign({}, item.dates || {});
       dates[dateKey] = input.value;
-      const ready = doneWhenSet ? !!input.value : item.status === "done";
-      postItem(hire, item.template_key, { status: ready ? "done" : "open", dates: dates, note: item.note || "" });
+      let status = "open";
+      if (item.template_key === "payroll_w4_dd") {
+        status = dates.w4_received_on && dates.direct_deposit_received_on ? "done" : "open";
+      } else if (doneWhenSet) {
+        status = input.value ? "done" : "open";
+      }
+      text.textContent = label + " — " + (input.value ? "done" : "open");
+      postItem(hire, item.template_key, { status: status, dates: dates, note: item.note || "" }, label + " saved.");
     };
     const undo = document.createElement("button");
     undo.type = "button";
@@ -492,7 +564,8 @@
     undo.onclick = function () {
       const dates = Object.assign({}, item.dates || {});
       dates[dateKey] = "";
-      postItem(hire, item.template_key, { status: "open", dates: dates, note: "" });
+      text.textContent = label + " — open";
+      postItem(hire, item.template_key, { status: "open", dates: dates, note: "" }, label + " undone.");
     };
     row.appendChild(save);
     row.appendChild(undo);
@@ -511,18 +584,8 @@
     const dates = payroll.dates || {};
     both.textContent = dates.w4_received_on && dates.direct_deposit_received_on
       ? "W-4 and direct deposit are both recorded."
-      : "Both dates are required before this checklist item is done.";
+      : "Saving a date records that step. Both dates mark the checklist item done.";
     card.appendChild(both);
-    if (dates.w4_received_on && dates.direct_deposit_received_on && payroll.status !== "done") {
-      const finish = document.createElement("button");
-      finish.type = "button";
-      finish.className = "ghost";
-      finish.textContent = "Mark W-4 and direct deposit done";
-      finish.onclick = function () {
-        postItem(hire, "payroll_w4_dd", { status: "done", dates: dates, note: payroll.note || "" });
-      };
-      card.appendChild(finish);
-    }
     dateStep(card, hire, itemByKey(hire, "pa_new_hire_report"), "PA new-hire report filed", "pa_new_hire_filed_on", true);
     dateStep(card, hire, itemByKey(hire, "i9_section2"), "I-9 in-person appointment", "i9_appointment_on", false);
     dateStep(card, hire, itemByKey(hire, "i9_section2"), "I-9 completed", "i9_completed_on", true);
@@ -613,7 +676,7 @@
     root.appendChild(settingsBox);
     const steps = document.createElement("p");
     steps.className = "meta";
-    steps.textContent = "1 Create the offer · 2 Mark sent · 3 Record acceptance · 4 Choose packet documents · 5 Review and hand off";
+    steps.textContent = "Each offer shows its own step.";
     root.appendChild(steps);
 
     const form = document.createElement("form");
@@ -747,6 +810,8 @@
       left.appendChild(driveLine);
       const offerStage = offer.hire_id ? "accepted" : (offer.status === "draft" ? "offer" : offer.status);
       left.appendChild(stageBar(offerStage, "admin", data.billing_label));
+      const linkedHire = (data.hires || []).filter(function (hire) { return hire.offer_id === offer.id; })[0];
+      left.appendChild(stepper(wizardSteps(offer, linkedHire)));
       const buttons = document.createElement("div");
       buttons.className = "row hire-actions";
       function button(text, className, action) {
@@ -757,10 +822,14 @@
         node.onclick = action;
         buttons.appendChild(node);
       }
-      button("Edit", "ghost", function () {
+      button(offer.status === "accepted" ? "View" : "Edit", "ghost", function () {
         editing.value = offer.id;
         fillForm(offer);
-        ui().setStatus($("hiring-status"), "Editing this draft or starting a new version.", "ok");
+        ui().setStatus(
+          $("hiring-status"),
+          offer.status === "accepted" ? "Accepted offers can't be edited." : "Editing this draft or starting a new version.",
+          "ok"
+        );
       });
       button("PDF", "ghost", function () {
         download(offer.id, "pdf");
@@ -891,11 +960,18 @@
       if (hire.status === "onboarding") {
         const clearances = itemByKey(hire, "clearances");
         const needsClearance = hire.direct_client_access && clearances.status !== "done" && clearances.status !== "n/a";
+        const beforeStart = !!(hire.start_date && hire.start_date > easternToday());
         const activate = document.createElement("button");
         activate.type = "button";
         activate.className = "primary";
         activate.textContent = "Activate";
-        activate.disabled = !!needsClearance;
+        activate.disabled = !!needsClearance || beforeStart;
+        if (beforeStart) {
+          const why = document.createElement("p");
+          why.className = "meta";
+          why.textContent = "Available on or after " + hire.start_date;
+          card.appendChild(why);
+        }
         if (needsClearance) {
           const why = document.createElement("p");
           why.className = "meta";
@@ -1076,6 +1152,8 @@
       title.textContent = (hire.display_name || "Hire") + " — " + (hire.status || "");
       card.appendChild(title);
       card.appendChild(stageBar(hire.stage, hire.owner, data.billing_label));
+      const linkedOffer = (data.offers || []).filter(function (offer) { return offer.id === hire.offer_id; })[0];
+      card.appendChild(stepper(wizardSteps(linkedOffer || { id: hire.offer_id, status: "accepted" }, hire)));
       const packetRoot = renderPacketStep(card, hire);
       renderHandoff(card, hire, packetRoot, data.billing_label);
       renderBillingSteps(card, hire);
@@ -1117,7 +1195,11 @@
           item.status,
         ];
         if (item.done_by) bits.push(item.done_by);
-        if (item.done_at) bits.push(String(item.done_at).slice(0, 10));
+        const enteredDate = item.template_key === "i9_section2"
+          ? ((item.dates && (item.dates.i9_completed_on || item.dates.i9_section2_completed_on)) || "")
+          : "";
+        if (enteredDate) bits.push(enteredDate);
+        else if (item.done_at) bits.push(String(item.done_at).slice(0, 10));
         if (item.note) bits.push(item.note);
         label.textContent = bits.filter(Boolean).join(" — ");
         row.appendChild(label);
@@ -1176,11 +1258,18 @@
       if (hire.status === "onboarding") {
         const clearances = (hire.items || []).filter(function (item) { return item.template_key === "clearances"; })[0];
         const needsClearance = hire.direct_client_access && clearances && clearances.status !== "done" && clearances.status !== "n/a";
+        const beforeStart = !!(hire.start_date && hire.start_date > easternToday());
         const activate = document.createElement("button");
         activate.type = "button";
         activate.className = "primary";
         activate.textContent = "Activate";
-        activate.disabled = !!needsClearance;
+        activate.disabled = !!needsClearance || beforeStart;
+        if (beforeStart) {
+          const why = document.createElement("p");
+          why.className = "meta";
+          why.textContent = "Available on or after " + hire.start_date;
+          card.appendChild(why);
+        }
         if (needsClearance) {
           const why = document.createElement("p");
           why.className = "meta";
@@ -1259,12 +1348,16 @@
           confirmText: "Delete hire",
           anchor: removeWrap,
           onConfirm: function (typed) {
+            remove.disabled = true;
+            remove.textContent = "Deleting…";
             ui()
               .api("/hiring/hires/" + hire.id + "/delete", { method: "POST", json: { confirm: typed } })
               .then(function () {
                 return window.clyHiring.open({ message: "Hire deleted." });
               })
               .catch(function (error) {
+                remove.disabled = false;
+                remove.textContent = "Delete hire";
                 showStatus((error && error.message) || "Could not delete.", "error");
               });
           },

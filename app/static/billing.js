@@ -37,7 +37,7 @@
         row.className = "due-row";
         const badge = document.createElement("span");
         badge.className = "meta";
-        badge.textContent = item.band === "overdue" ? "Overdue" : "This week";
+        badge.textContent = item.band === "overdue" ? "Overdue" : item.band === "upcoming" ? "Upcoming" : "This week";
         const label = document.createElement("button");
         label.type = "button";
         label.className = "ghost";

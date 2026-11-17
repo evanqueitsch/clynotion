@@ -12,7 +12,9 @@ from fastapi.testclient import TestClient
 from app.access.store import access_store
 from app.auth import User, issue_token
 from app.clinicians import clinician_store
+from app.hiring.checklist import supervision_required
 from app.hiring.forms_catalog import packet_catalog
+from app.hiring.personnel_drive import clear_personnel_drive_for_tests, set_personnel_drive_for_tests
 from app.main import app
 from app.platform.due import due_engine
 
@@ -123,6 +125,9 @@ def test_handoff_records_the_packet_and_does_not_send(monkeypatch) -> None:
         json={"form_keys": ["irs_w4"]},
     )
     assert again.status_code == 200, again.text
+    assert again.json()["notice"] == "already handed off"
+    assert again.json()["packet_form_keys"] == ["irs_w4", "h4c_hipaa_nda"]
+    assert len([item for item in due_engine.list_open("practice-a") if item.source_ref == hire_id + ":packet"]) == 1
     history = client.get("/hiring/bootstrap", headers=_alice()).json()["history"]
     summaries = [item["summary"] for item in history if item.get("entity_id") == hire_id]
     assert summaries.count("Email not sent (setting off)") == 2
@@ -257,3 +262,114 @@ def test_billing_sees_only_the_handoff_and_cannot_open_pay_or_i9(monkeypatch) ->
     tools = [tool["id"] for unit in home["units"] for tool in unit["tools"]]
     assert "hiring_onboarding" in tools
     assert access_store.role_id_for("practice-a", "casey.example@example.com") == "billing"
+
+
+def test_supervision_applies_until_a_full_license() -> None:
+    assert supervision_required("") is True
+    assert supervision_required("LSW") is True
+    assert supervision_required("LPC-Candidate") is True
+    assert supervision_required("LCSW") is False
+    assert supervision_required("LPC") is False
+    assert supervision_required("LMFT") is False
+    assert supervision_required("Licensed psychologist") is False
+
+
+def test_handoff_todo_shows_on_home_and_billing_and_recall_removes_it(monkeypatch) -> None:
+    hire_id = _hire(
+        monkeypatch,
+        start_date="12/31/2026",
+        response_deadline="12/17/2026",
+        direct_client_access=False,
+        candidate_credentials="",
+    )
+    handed = client.post(f"/hiring/hires/{hire_id}/handoff", headers=_alice(), json={"form_keys": ["irs_w4"]})
+    assert handed.status_code == 200, handed.text
+    home = client.get("/home", headers=_alice()).json()
+    titles = [item["title"] for band in ("overdue", "this_week") for item in home["bands"][band]]
+    assert "Riley Sample: W-4, direct deposit, and the PA new-hire report" in titles
+    overdue = [item["title"] for item in home["bands"]["overdue"]]
+    assert "Riley Sample: W-4, direct deposit, and the PA new-hire report" not in overdue
+    match = next(item for band in ("overdue", "this_week") for item in home["bands"][band] if hire_id in item["href"])
+    assert match["href"] == f"/#hiring?hire={hire_id}"
+    assert match["owner_user_id"] == "billing"
+    billing = client.get("/billing", headers=_alice()).json()
+    assert any(hire_id in item["href"] for item in billing["action_items"])
+    hire = next(item for item in client.get("/hiring/bootstrap", headers=_alice()).json()["hires"] if item["id"] == hire_id)
+    agreement = next(item for item in hire["items"] if item["template_key"] == "supervision_agreement")
+    assert agreement["status"] == "open"
+    dated = client.post(
+        f"/hiring/hires/{hire_id}/items/i9_section2",
+        headers=_alice(),
+        json={"status": "done", "dates": {"i9_completed_on": "2026-12-01"}},
+    )
+    assert dated.status_code == 200, dated.text
+    section = next(item for item in dated.json()["items"] if item["template_key"] == "i9_section2")
+    assert section["dates"]["i9_completed_on"] == "2026-12-01"
+    assert section["dates"]["i9_section2_completed_on"] == "2026-12-01"
+    payroll = client.post(
+        f"/hiring/hires/{hire_id}/items/payroll_w4_dd",
+        headers=_alice(),
+        json={"status": "open", "dates": {"w4_received_on": "2026-12-02", "direct_deposit_received_on": "2026-12-03"}},
+    )
+    assert payroll.json()["items"]
+    item = next(row for row in payroll.json()["items"] if row["template_key"] == "payroll_w4_dd")
+    assert item["status"] == "done"
+    recalled = client.post(f"/hiring/hires/{hire_id}/recall", headers=_alice())
+    assert recalled.status_code == 200
+    assert all(item.source_ref != hire_id + ":packet" for item in due_engine.list_open("practice-a"))
+    again = client.post(f"/hiring/hires/{hire_id}/handoff", headers=_alice(), json={"form_keys": ["irs_w4"]})
+    assert again.status_code == 200
+    assert again.json().get("notice") != "already handed off"
+    assert len([item for item in due_engine.list_open("practice-a") if item.source_ref == hire_id + ":packet"]) == 1
+    client.post(f"/hiring/hires/{hire_id}/delete", headers=_alice(), json={"confirm": "Riley Sample"})
+    assert all(item.source_ref != hire_id + ":packet" for item in due_engine.list_open("practice-a"))
+
+
+def test_second_save_updates_and_a_duplicate_name_is_rejected() -> None:
+    created = client.post("/hiring/offers", headers=_alice(), json=_offer(candidate_credentials="LCSW"))
+    assert created.status_code == 200, created.text
+    updated = client.put(f"/hiring/offers/{created.json()['id']}", headers=_alice(), json=_offer(candidate_credentials="LCSW", caseload_range="20-25"))
+    assert updated.status_code == 200, updated.text
+    assert updated.json()["id"] == created.json()["id"]
+    duplicate = client.post("/hiring/offers", headers=_alice(), json=_offer(candidate_credentials="LCSW"))
+    assert duplicate.status_code == 409
+    hire_id = _accept(created.json()["id"])
+    hire = next(item for item in client.get("/hiring/bootstrap", headers=_alice()).json()["hires"] if item["id"] == hire_id)
+    agreement = next(item for item in hire["items"] if item["template_key"] == "supervision_agreement")
+    assert agreement["status"] == "n/a"
+
+
+def _accept(offer_id: str) -> str:
+    client.post(f"/hiring/offers/{offer_id}/send", headers=_alice(), json={"channel": "outside"})
+    accepted = client.post(f"/hiring/offers/{offer_id}/accept", headers=_alice(), json={"typed_name": "Riley Sample"})
+    assert accepted.status_code == 200, accepted.text
+    return accepted.json()["hire"]["id"]
+
+
+def test_delete_hire_keeps_the_personnel_folder(monkeypatch) -> None:
+    from tests.test_hiring_onboarding import RecordingDrive
+
+    monkeypatch.setattr("app.hiring.engine.deliver", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("sent")))
+    drive = RecordingDrive()
+    set_personnel_drive_for_tests(drive)
+    try:
+        created = client.post("/hiring/offers", headers=_alice(), json=_offer(personal_email="folder.sample@example.com"))
+        offer_id = created.json()["id"]
+        client.post(f"/hiring/offers/{offer_id}/send", headers=_alice(), json={"channel": "outside"})
+        accepted = client.post(
+            f"/hiring/offers/{offer_id}/accept-paper",
+            headers=_alice(),
+            data={"accepted_on": "11/17/2026"},
+            files={"upload": ("signed.pdf", b"%PDF-1.4 synthetic", "application/pdf")},
+        )
+        assert accepted.status_code == 200, accepted.text
+        hire_id = accepted.json()["hire"]["id"]
+        parent = next(file_id for file_id, name in drive.folders.items() if name == "Sample, Riley")
+        removed = client.post(f"/hiring/hires/{hire_id}/delete", headers=_alice(), json={"confirm": "Riley Sample"})
+        assert removed.status_code == 200, removed.text
+        assert parent not in drive.trashed
+        offer = client.get(f"/hiring/offers/{offer_id}", headers=_alice()).json()
+        assert offer["drive_status"] != "trashed"
+        assert "Folder trashed" not in (offer["drive_note"] or "")
+    finally:
+        clear_personnel_drive_for_tests()
