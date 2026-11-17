@@ -352,6 +352,23 @@
     ];
   }
 
+  function hireWord(hire) {
+    if (!hire) return "";
+    if (hire.status === "active" || hire.stage === "active") return "active";
+    if (hire.owner === "billing" && hire.stage === "payroll") return "handed off";
+    return hire.stage || "";
+  }
+
+  function offerHeading(offer, hire) {
+    const version = offer && offer.current_version ? " — v" + offer.current_version : "";
+    const name = (offer && offer.display_name) || (hire && hire.display_name) || "Offer";
+    if (hire) {
+      const word = hireWord(hire);
+      return name + (word ? " — " + word : "") + version;
+    }
+    return name + " — " + ((offer && offer.status) || "") + version;
+  }
+
   function stageBar(stage, owner, label) {
     const line = document.createElement("div");
     line.className = "due-meta hire-stage";
@@ -482,13 +499,7 @@
         })
         .then(function (saved) {
           const note = saved && saved.notice === "already handed off" ? "Already handed off." : "Handed off.";
-          if (saved && saved.owner === "billing") {
-            hand.disabled = true;
-            hand.textContent = "Handed off to " + (billingLabel || "Billing") + (saved.handoff_at ? " on " + shortDate(saved.handoff_at) : "");
-            const bar = card.querySelector(".hire-stage");
-            if (bar) bar.textContent = "Stage: " + (saved.stage || "payroll") + " · Owner: " + (billingLabel || "Billing");
-          }
-          return window.clyHiring.open({ message: note, hireId: hire.id });
+          refreshHire(saved, note);
         })
         .catch(function (error) {
           showStatus((error && error.message) || "Could not hand off.", "error");
@@ -504,11 +515,7 @@
         ui()
           .api("/hiring/hires/" + hire.id + "/recall", { method: "POST", json: {} })
           .then(function (saved) {
-            const bar = card.querySelector(".hire-stage");
-            if (bar && saved) bar.textContent = "Stage: " + (saved.stage || "accepted") + " · Owner: Admin";
-            hand.disabled = false;
-            hand.textContent = "Hand off to " + (billingLabel || "Billing");
-            return window.clyHiring.open({ message: "Handoff recalled.", hireId: hire.id });
+            refreshHire(saved, "Handoff recalled.");
           })
           .catch(function (error) {
             showStatus((error && error.message) || "Could not recall.", "error");
@@ -567,8 +574,7 @@
     ui()
       .api("/hiring/hires/" + hire.id + "/items/" + key, { method: "POST", json: body })
       .then(function (saved) {
-        paintChecklist(card, saved);
-        showStatus(message || "Saved.", "ok");
+        refreshHire(saved, message || "Saved.");
       })
       .catch(function (error) {
         showStatus((error && error.message) || "Could not save.", "error");
@@ -582,7 +588,7 @@
     const text = document.createElement("div");
     text.textContent = label + " — " + (recorded ? "done" : "open");
     row.appendChild(text);
-    if (item.badge) {
+    if (item.badge && item.status === "open") {
       const badge = document.createElement("span");
       badge.className = "badge-due";
       badge.textContent = item.badge;
@@ -653,6 +659,7 @@
   }
 
   function render(data, options) {
+    lastHiring = data;
     const opts = typeof options === "string" ? { editId: options } : (options || {});
     const root = $("hiring-root");
     if (!root) return;
@@ -853,7 +860,6 @@
       const left = document.createElement("div");
       const title = document.createElement("div");
       title.className = "due-title";
-      title.textContent = (offer.display_name || "Offer") + " — " + offer.status + (offer.current_version ? " — v" + offer.current_version : "");
       const meta = document.createElement("div");
       meta.className = "due-meta";
       meta.textContent =
@@ -868,7 +874,9 @@
       driveLine.textContent = offer.drive_note || "\u00a0";
       left.appendChild(driveLine);
       row.dataset.offerId = offer.id;
+      row.dataset.version = offer.current_version ? String(offer.current_version) : "";
       const linkedHire = (data.hires || []).filter(function (hire) { return hire.offer_id === offer.id; })[0];
+      title.textContent = offerHeading(offer, linkedHire);
       if (linkedHire) left.appendChild(stageBar(linkedHire.stage, linkedHire.owner, data.billing_label));
       else {
         const offerStage = offer.status === "draft" ? "offer" : offer.status;
@@ -1041,6 +1049,12 @@
       return;
     }
     hires.forEach(function (hire) {
+      root.appendChild(renderBillingCard(hire));
+    });
+    focusHire(opts.hireId);
+  }
+
+  function renderBillingCard(hire) {
       const card = document.createElement("article");
       card.className = "hire-card";
       card.id = "hire-" + hire.id;
@@ -1065,13 +1079,13 @@
         activate.disabled = !!needsClearance || beforeStart;
         if (beforeStart) {
           const why = document.createElement("p");
-          why.className = "meta";
+          why.className = "meta hire-activate-reason";
           why.textContent = "Available on or after " + hire.start_date;
           card.appendChild(why);
         }
         if (needsClearance) {
           const why = document.createElement("p");
-          why.className = "meta";
+          why.className = "meta hire-activate-reason";
           why.textContent = "Mark PA clearances received first";
           card.appendChild(why);
         }
@@ -1084,8 +1098,8 @@
             onConfirm: function (email) {
               ui()
                 .api("/hiring/hires/" + hire.id + "/activate", { method: "POST", json: { work_email: email } })
-                .then(function () {
-                  return window.clyHiring.open({ message: "Hire activated.", hireId: hire.id });
+                .then(function (saved) {
+                  refreshHire(saved, "Hire activated.");
                 })
                 .catch(function (error) {
                   showStatus((error && error.message) || "Could not activate.", "error");
@@ -1095,9 +1109,7 @@
         };
         card.appendChild(activate);
       }
-      root.appendChild(card);
-    });
-    focusHire(opts.hireId);
+      return card;
   }
 
   function showDecision(offer, kind, anchor) {
@@ -1241,6 +1253,52 @@
       return;
     }
     hires.forEach(function (hire) {
+      box.appendChild(renderHireCard(hire, data));
+    });
+    root.appendChild(box);
+  }
+
+  function refreshHire(saved, message) {
+    if (!saved || !saved.id) return;
+    if (lastHiring && lastHiring.hires) {
+      let found = false;
+      lastHiring.hires = lastHiring.hires.map(function (item) {
+        if (item.id === saved.id) {
+          found = true;
+          return saved;
+        }
+        return item;
+      });
+      if (!found) lastHiring.hires.push(saved);
+    }
+    const existing = document.getElementById("hire-" + saved.id);
+    const data = lastHiring || { offers: [], billing_label: "Billing", viewer: "admin" };
+    const card = data.viewer === "billing" ? renderBillingCard(saved) : renderHireCard(saved, data);
+    if (existing) existing.replaceWith(card);
+    syncOfferCard(saved);
+    if (message) showStatus(message, "ok");
+  }
+
+  function syncOfferCard(hire) {
+    const row = document.querySelector('.due-row[data-offer-id="' + hire.offer_id + '"]');
+    if (!row) return;
+    const title = row.querySelector(".due-title");
+    if (title) {
+      title.textContent = offerHeading({
+        display_name: hire.display_name,
+        current_version: row.dataset.version || "",
+        status: "accepted",
+      }, hire);
+    }
+    const bar = row.querySelector(".hire-stage");
+    if (bar) {
+      const label = (lastHiring && lastHiring.billing_label) || "Billing";
+      const who = hire.owner === "billing" ? label : "Admin";
+      bar.textContent = "Stage: " + (hire.stage || "accepted") + " · Owner: " + who;
+    }
+  }
+
+  function renderHireCard(hire, data) {
       const card = document.createElement("article");
       card.className = "hire-card";
       card.id = "hire-" + hire.id;
@@ -1289,7 +1347,7 @@
         label.className = "hire-item-text";
         label.textContent = itemLine(item);
         row.appendChild(label);
-        if (item.badge) {
+        if (item.badge && item.status === "open") {
           const badge = document.createElement("span");
           badge.className = item.badge === "due now" ? "badge-due" : "badge-due";
           badge.textContent = item.badge;
@@ -1307,8 +1365,8 @@
                 method: "POST",
                 json: { status: status, note: note.value },
               })
-              .then(function () {
-                return window.clyHiring.open({ message: "Checklist updated." });
+              .then(function (saved) {
+                refreshHire(saved, "Checklist updated.");
               })
               .catch(function (error) {
                 showStatus((error && error.message) || "Could not save.", "error");
@@ -1371,8 +1429,8 @@
             onConfirm: function (email) {
               ui()
                 .api("/hiring/hires/" + hire.id + "/activate", { method: "POST", json: { work_email: email } })
-                .then(function () {
-                  return window.clyHiring.open({ message: "Hire activated." });
+                .then(function (saved) {
+                  refreshHire(saved, "Hire activated.");
                 })
                 .catch(function (error) {
                   showStatus((error && error.message) || "Could not activate.", "error");
@@ -1389,8 +1447,8 @@
         packet.onclick = function () {
           ui()
             .api("/hiring/hires/" + hire.id + "/packet-complete", { method: "POST", json: {} })
-            .then(function () {
-              return window.clyHiring.open({ message: "Packet marked complete." });
+            .then(function (saved) {
+              refreshHire(saved, "Packet marked complete.");
             })
             .catch(function (error) {
               showStatus((error && error.message) || "Could not save.", "error");
@@ -1409,8 +1467,8 @@
           undoPacket.onclick = function () {
             ui()
               .api("/hiring/hires/" + hire.id + "/packet-undo", { method: "POST", json: {} })
-              .then(function () {
-                return window.clyHiring.open({ message: "Packet completion undone." });
+              .then(function (saved) {
+                refreshHire(saved, "Packet completion undone.");
               })
               .catch(function (error) {
                 showStatus((error && error.message) || "Could not save.", "error");
@@ -1451,9 +1509,7 @@
       };
       removeWrap.appendChild(remove);
       card.appendChild(removeWrap);
-      box.appendChild(card);
-    });
-    root.appendChild(box);
+      return card;
   }
 
   function downloadForm(key) {
@@ -1542,6 +1598,7 @@
   let keptEditId = "";
   let keptOffer = null;
   let watchingId = "";
+  let lastHiring = null;
 
   async function saveOffer() {
     if (saving) return;
