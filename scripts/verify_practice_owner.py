@@ -90,6 +90,8 @@ def _personnel_normalize() -> dict:
         "done": bool(record.get("done")),
         "folders": int(record.get("folders") or 0),
         "files": int(record.get("files") or 0),
+        "status_aligned": bool(record.get("status_aligned")),
+        "status_fields": [str(item) for item in (record.get("status_fields") or [])],
     }
 
 
@@ -166,7 +168,7 @@ def main() -> None:
     report["files_unchanged"] = before == after_stats
     print("VERIFY " + json.dumps(report, sort_keys=True))
     ok = (
-        report["version"] == "0.24.5"
+        report["version"] == "0.24.6"
         and report["role_name"] == "Practice Owner"
         and role_permissions == YES
         and report["assigned"] is True
