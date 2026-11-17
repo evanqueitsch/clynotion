@@ -70,6 +70,29 @@ def _health_version() -> str:
     return str(body.get("version") or "")
 
 
+def _personnel_normalize() -> dict:
+    """Counts only. No names."""
+    path = Path((os.environ.get("ATTUNE_ONBOARDING_DATA_PATH") or "/data/onboarding.enc").strip())
+    if not path.is_file():
+        return {"present": False}
+    try:
+        from app.crypto import decrypt_utf8
+
+        payload = json.loads(decrypt_utf8(path.read_bytes()))
+    except Exception:
+        return {"present": True, "readable": False}
+    practice_id = (os.environ.get("ATTUNE_DEFAULT_PRACTICE_ID") or "practice-hfc").strip()
+    row = ((payload.get("practices") or {}).get(practice_id) or {}) if isinstance(payload, dict) else {}
+    record = row.get("personnel_normalize") if isinstance(row.get("personnel_normalize"), dict) else {}
+    return {
+        "present": True,
+        "readable": True,
+        "done": bool(record.get("done")),
+        "folders": int(record.get("folders") or 0),
+        "files": int(record.get("files") or 0),
+    }
+
+
 def _rollout(practice_id: str) -> bool | None:
     from app.employees.store import employees_store
 
@@ -137,12 +160,13 @@ def main() -> None:
         "billing_count_expected": billing_count == expected_billing,
         "rollout_enabled": rollout,
         "credentialing_present": cred_path.is_file(),
+        "personnel_normalize": _personnel_normalize(),
     }
     after_stats = {str(path): _stat(path) for path in (access_path, cred_path, employees_path)}
     report["files_unchanged"] = before == after_stats
     print("VERIFY " + json.dumps(report, sort_keys=True))
     ok = (
-        report["version"] == "0.24.4"
+        report["version"] == "0.24.5"
         and report["role_name"] == "Practice Owner"
         and role_permissions == YES
         and report["assigned"] is True

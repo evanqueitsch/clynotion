@@ -58,13 +58,44 @@ def reminder_body(link: str, deadline: str) -> str:
     )
 
 
+STAFF_HANDOFF_SUBJECT = "New hire ready for payroll: {name}"
+STAFF_HANDOFF_BODY = (
+    "{name}\n"
+    "Position: {position}\n"
+    "Schedule: {employment}\n"
+    "Start date: {start_date}\n"
+    "Open the hire: {link}\n"
+)
+CANDIDATE_PACKET_SUBJECT = "Welcome to Heart for Change, {name}"
+CANDIDATE_PACKET_BODY = (
+    "Hello {name},\n\n"
+    "Welcome. Your start date is {start_date} and your position is {position}.\n"
+    "The new-hire packet is attached for you to complete and return. "
+    "Payroll will send a separate invite for the W-4 and direct deposit.\n"
+    "Bring the identity documents you choose for the Form I-9. "
+    "We will not tell you which documents to bring.\n"
+    "Heart for Change will never ask for a Social Security number or bank details by email."
+)
+_PLACEHOLDERS = ("name", "first_name", "position", "employment", "start_date", "link")
+
+
+def render_template(template: str, values: dict[str, str]) -> str:
+    text = template or ""
+    for key in _PLACEHOLDERS:
+        text = text.replace("{" + key + "}", values.get(key) or "")
+    return text
+
+
 def payroll_handoff_body(name: str, position: str, employment: str, start: str, link: str) -> str:
-    return (
-        f"{name}\n"
-        f"Position: {position or '—'}\n"
-        f"Schedule: {employment or '—'}\n"
-        f"Start date: {start or '—'}\n"
-        f"Open the hire: {link}\n"
+    return render_template(
+        STAFF_HANDOFF_BODY,
+        {
+            "name": name,
+            "position": position or "—",
+            "employment": employment or "—",
+            "start_date": start or "—",
+            "link": link,
+        },
     )
 
 

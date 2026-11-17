@@ -37,16 +37,52 @@ class DriveClient(Protocol):
     def move(self, file_id: str, folder_id: str, name: str = "") -> None: ...
 
 
+_SUFFIXES = {"jr", "sr", "ii", "iii", "iv", "v", "2nd", "3rd", "4th"}
+
+
+def _title_token(token: str) -> str:
+    letters = [char for char in token if char.isalpha()]
+    if letters and (all(char.isupper() for char in letters) or all(char.islower() for char in letters)):
+        return token.title()
+    return token
+
+
+def _suffix_label(token: str) -> str:
+    key = token.strip(",").casefold().rstrip(".")
+    if key in {"jr", "sr"}:
+        return key.title() + "."
+    if key in {"ii", "iii", "iv", "v"}:
+        return key.upper()
+    return token.strip(",")
+
+
 def folder_name(full_name: str) -> str:
-    """Last, First. A single token is used as-is. Slashes are removed."""
-    parts = [part for part in re.split(r"\s+", (full_name or "").replace("/", " ").strip()) if part]
-    if len(parts) >= 2:
-        label = f"{parts[-1]}, {' '.join(parts[:-1])}"
-    elif parts:
-        label = parts[0]
-    else:
-        label = "Candidate"
-    return label[:180]
+    """Last, First. Title-cased. Middle names and initials are dropped.
+
+    A suffix such as Jr. or III stays with the last name.
+    """
+    cleaned = (full_name or "").replace("/", " ")
+    raw = [part.strip(",") for part in re.split(r"\s+", cleaned.strip()) if part.strip(",")]
+    suffixes: list[str] = []
+    while raw:
+        key = raw[-1].casefold().rstrip(".")
+        if key in _SUFFIXES:
+            suffixes.insert(0, _suffix_label(raw[-1]))
+            raw.pop()
+            continue
+        break
+    names = [part for part in raw if not re.fullmatch(r"[A-Za-z]\.?", part)]
+    if not names:
+        return "Candidate"
+    first = _title_token(names[0])
+    if len(names) == 1 and not suffixes:
+        return first[:180]
+    last = _title_token(names[-1])
+    if suffixes:
+        last = f"{last} {' '.join(suffixes)}"
+    if len(names) == 1:
+        return last[:180]
+    return f"{last}, {first}"[:180]
 
 
 def folder_link(folder_id: str) -> str:

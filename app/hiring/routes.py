@@ -35,6 +35,10 @@ class SettingsBody(BaseModel):
     supervision_agreement_approved: Optional[bool] = None
     staff_handoff_emails_enabled: Optional[bool] = None
     wizard_email_override: Optional[str] = None
+    staff_handoff_subject: Optional[str] = None
+    staff_handoff_body: Optional[str] = None
+    candidate_packet_subject: Optional[str] = None
+    candidate_packet_body: Optional[str] = None
 
 
 class OfferBody(BaseModel):
@@ -143,6 +147,15 @@ def put_settings(body: SettingsBody, user: CurrentUser) -> dict[str, Any]:
     patch = body.model_dump(exclude_none=True)
     try:
         return hiring.update_settings(user.practice_id, patch, _actor(user))
+    except HiringError as exc:
+        _fail(exc)
+
+
+@router.post("/hiring/wizard-email-test")
+def wizard_email_test(user: CurrentUser) -> dict[str, Any]:
+    _require_admin(user)
+    try:
+        return hiring.send_test_wizard_emails(user.practice_id, _actor(user))
     except HiringError as exc:
         _fail(exc)
 

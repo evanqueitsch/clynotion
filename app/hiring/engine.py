@@ -53,6 +53,10 @@ from app.hiring.fill import (
 )
 from app.hiring.forms_catalog import FORMS, form_path, packet_catalog
 from app.hiring.mailer import (
+    CANDIDATE_PACKET_BODY,
+    CANDIDATE_PACKET_SUBJECT,
+    STAFF_HANDOFF_BODY,
+    STAFF_HANDOFF_SUBJECT,
     candidate_packet_body,
     code_body,
     deliver,
@@ -60,6 +64,7 @@ from app.hiring.mailer import (
     payroll_handoff_body,
     public_queue_row,
     reminder_body,
+    render_template,
 )
 
 logger = logging.getLogger("app.hiring.engine")
@@ -260,6 +265,10 @@ def _default_settings() -> dict[str, Any]:
         "supervision_agreement_approved": False,
         "staff_handoff_emails_enabled": False,
         "wizard_email_override": "",
+        "staff_handoff_subject": STAFF_HANDOFF_SUBJECT,
+        "staff_handoff_body": STAFF_HANDOFF_BODY,
+        "candidate_packet_subject": CANDIDATE_PACKET_SUBJECT,
+        "candidate_packet_body": CANDIDATE_PACKET_BODY,
     }
 
 
@@ -509,6 +518,16 @@ class HiringEngine:
                     if text and not EMAIL_RX.match(text):
                         raise HiringError(400, "The test recipient must be an email address.")
                     settings[key] = text
+                elif key in {
+                    "staff_handoff_subject",
+                    "candidate_packet_subject",
+                }:
+                    settings[key] = str(value or "").strip()[:200] or (
+                        STAFF_HANDOFF_SUBJECT if key == "staff_handoff_subject" else CANDIDATE_PACKET_SUBJECT
+                    )
+                elif key in {"staff_handoff_body", "candidate_packet_body"}:
+                    fallback = STAFF_HANDOFF_BODY if key == "staff_handoff_body" else CANDIDATE_PACKET_BODY
+                    settings[key] = str(value or "").strip()[:4000] or fallback
                 elif key == "qa_email_allowlist":
                     if not isinstance(value, list):
                         raise HiringError(400, "The allowlist must be a list.")
@@ -1958,13 +1977,10 @@ class HiringEngine:
             status = deliver(
                 practice_id,
                 staff_to,
-                f"New hire ready for payroll: {name}",
-                payroll_handoff_body(
-                    name,
-                    str(hire.get("position") or ""),
-                    str(hire.get("employment_type") or ""),
-                    str(hire.get("start_date") or ""),
-                    link,
+                _template(settings, "staff_handoff_subject", STAFF_HANDOFF_SUBJECT),
+                render_template(
+                    _template(settings, "staff_handoff_body", STAFF_HANDOFF_BODY),
+                    _mail_values(name, candidate, hire, link),
                 ),
             )
             hire["staff_email_status"] = "sent" if status == "sent" else "failed"
@@ -1985,8 +2001,11 @@ class HiringEngine:
         status = deliver(
             practice_id,
             candidate_to,
-            f"Welcome to Heart for Change, {name}",
-            candidate_packet_body(_welcome_text(name, hire)),
+            _template(settings, "candidate_packet_subject", CANDIDATE_PACKET_SUBJECT),
+            render_template(
+                _template(settings, "candidate_packet_body", CANDIDATE_PACKET_BODY),
+                _mail_values(name, candidate, hire, link),
+            ),
             self._packet_attachments(row, hire),
         )
         hire["candidate_email_status"] = "sent" if status == "sent" else "failed"
@@ -1999,6 +2018,142 @@ class HiringEngine:
             actor,
             "Candidate packet email sent" if status == "sent" else "Candidate packet email failed",
         )
+
+    def send_test_wizard_emails(self, practice_id: str, actor: str) -> dict[str, Any]:
+        """Send both wizard messages for a fake hire. No offer or hire is stored."""
+        with _lock:
+            payload = self._read()
+            row = self._practice(payload, practice_id)
+            before_offers = len(row.get("offers") or {})
+            before_hires = len(row.get("hires") or {})
+            settings = row["settings"]
+            override = str(settings.get("wizard_email_override") or "").strip().lower()
+            if not override.endswith("@heart4change.org") or override.count("@") != 1:
+                raise HiringError(400, "Set the test recipient to an @heart4change.org address first.")
+            base = (os.environ.get("ATTUNE_PUBLIC_BASE_URL") or "https://clynotion.com").rstrip("/")
+            values = {
+                "name": "Riley Sample",
+                "first_name": "Riley",
+                "position": "Sample position",
+                "employment": "full-time",
+                "start_date": "11/17/2026",
+                "link": f"{base}/#hiring",
+            }
+            staff_subject = "[TEST] " + render_template(
+                _template(settings, "staff_handoff_subject", STAFF_HANDOFF_SUBJECT), values
+            )
+            candidate_subject = "[TEST] " + render_template(
+                _template(settings, "candidate_packet_subject", CANDIDATE_PACKET_SUBJECT), values
+            )
+            staff_body = render_template(_template(settings, "staff_handoff_body", STAFF_HANDOFF_BODY), values)
+            candidate_body = render_template(
+                _template(settings, "candidate_packet_body", CANDIDATE_PACKET_BODY), values
+            )
+            attachments = self._sample_packet_attachments(row)
+            staff_status = deliver(practice_id, override, staff_subject, staff_body)
+            candidate_status = deliver(practice_id, override, candidate_subject, candidate_body, attachments)
+            self._history(row, "settings", practice_id, "wizard_email_test", actor, "Test wizard emails attempted")
+            if len(row.get("offers") or {}) != before_offers or len(row.get("hires") or {}) != before_hires:
+                raise HiringError(500, "The test must not create a hire.")
+            self._save(payload)
+            return {
+                "to_override": True,
+                "staff": staff_status,
+                "candidate": candidate_status,
+                "attachments": len(attachments),
+            }
+
+    def _sample_packet_attachments(self, row: dict[str, Any]) -> tuple[tuple[str, str, bytes], ...]:
+        from app.hiring.forms_catalog import packet_catalog
+
+        library = {str(item.get("form_key") or ""): item for item in row["forms_library"].values()}
+        files: list[tuple[str, str, bytes]] = []
+        for choice in packet_catalog("full-time", False, "Sample position"):
+            if not choice.get("default") or not choice.get("available"):
+                continue
+            spec = library.get(str(choice.get("form_key") or "")) or {}
+            filename = str(spec.get("filename") or "")
+            if not filename.lower().endswith(".pdf"):
+                continue
+            path = form_path(filename)
+            if path.is_file():
+                files.append((path.name, "application/pdf", path.read_bytes()))
+        return tuple(files)
+
+    def normalize_personnel_folders(self) -> dict[str, int | bool]:
+        """Rename stored personnel folders by id. Does not change offer fields."""
+        from app.hiring.personnel_drive import (
+            folder_name,
+            offer_letter_filename,
+            personnel_client,
+            resume_filename,
+            signed_offer_filename,
+        )
+
+        client = personnel_client()
+        if client is None or not hasattr(client, "rename"):
+            return {"done": False, "folders": 0, "files": 0}
+        with _lock:
+            payload = self._read()
+            folders = 0
+            files = 0
+            changed = False
+            for row in (payload.get("practices") or {}).values():
+                if not isinstance(row, dict) or not row.get("offers"):
+                    continue
+                if (row.get("personnel_normalize") or {}).get("done"):
+                    continue
+                failed = False
+                practice_folders = 0
+                practice_files = 0
+                for offer in row["offers"].values():
+                    folder_id = str(offer.get("drive_folder_id") or "")
+                    if not folder_id:
+                        continue
+                    before = dict(offer)
+                    candidate = (row.get("candidates") or {}).get(offer.get("candidate_id") or "") or {}
+                    display = str(candidate.get("display_name") or "")
+                    try:
+                        client.rename(folder_id, folder_name(display))
+                        practice_folders += 1
+                        resume = (row.get("resumes") or {}).get(offer.get("resume_id") or "")
+                        renames: list[tuple[str, str]] = []
+                        if offer.get("drive_resume_file_id") and resume:
+                            renames.append(
+                                (
+                                    str(offer["drive_resume_file_id"]),
+                                    resume_filename(display, str(resume.get("mime") or "")),
+                                )
+                            )
+                        if offer.get("drive_pdf_file_id"):
+                            renames.append((str(offer["drive_pdf_file_id"]), offer_letter_filename(display)))
+                        if offer.get("drive_signed_file_id"):
+                            renames.append((str(offer["drive_signed_file_id"]), signed_offer_filename(display)))
+                        for file_id, filename in renames:
+                            client.rename(file_id, filename)
+                            practice_files += 1
+                        self._history(row, "drive", folder_id, "normalized", "clynotion", "Personnel folder name normalized")
+                    except Exception as exc:
+                        failed = True
+                        logger.warning("personnel_folder_normalize_failed exception=%s", type(exc).__name__)
+                    if dict(offer) != before:
+                        offer.clear()
+                        offer.update(before)
+                if not failed:
+                    row["personnel_normalize"] = {
+                        "done": True,
+                        "folders": practice_folders,
+                        "files": practice_files,
+                        "at": _iso(),
+                    }
+                    folders += practice_folders
+                    files += practice_files
+                    changed = True
+            if changed:
+                self._save(payload)
+            logger.info("personnel_folder_normalize folders=%s files=%s", folders, files)
+            print(f"personnel_folder_normalize folders={folders} files={files}", flush=True)
+            return {"done": changed, "folders": folders, "files": files}
 
     def _packet_attachments(self, row: dict[str, Any], hire: dict[str, Any]) -> tuple[tuple[str, str, bytes], ...]:
         library = {str(item.get("form_key") or ""): item for item in row["forms_library"].values()}
@@ -2822,6 +2977,25 @@ def _billing_contact(practice_id: str) -> tuple[str, str]:
     name = names.get(email) or ""
     first = name.split(" ", 1)[0] if name else ""
     return first or "Billing", email
+
+
+def _template(settings: dict[str, Any], key: str, default: str) -> str:
+    text = str(settings.get(key) or "").strip()
+    return text or default
+
+
+def _mail_values(name: str, candidate: dict[str, Any], hire: dict[str, Any], link: str) -> dict[str, str]:
+    first = str(candidate.get("first_name") or "").strip()
+    if not first and name:
+        first = name.split(" ", 1)[0]
+    return {
+        "name": name,
+        "first_name": first,
+        "position": str(hire.get("position") or ""),
+        "employment": str(hire.get("employment_type") or ""),
+        "start_date": str(hire.get("start_date") or ""),
+        "link": link,
+    }
 
 
 def _welcome_text(name: str, hire: dict[str, Any]) -> str:
