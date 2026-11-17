@@ -529,10 +529,45 @@
     return (hire.items || []).filter(function (item) { return item.template_key === key; })[0] || {};
   }
 
-  function postItem(hire, key, body, message) {
+  function itemLine(item) {
+    const bits = [
+      item.title,
+      item.owner_role || "",
+      "due " + (item.due_date || "—"),
+      item.status,
+    ];
+    if (item.done_by) bits.push(item.done_by);
+    const enteredDate = item.template_key === "i9_section2"
+      ? ((item.dates && (item.dates.i9_completed_on || item.dates.i9_section2_completed_on)) || "")
+      : "";
+    if (enteredDate) bits.push(enteredDate);
+    else if (item.done_at) bits.push(String(item.done_at).slice(0, 10));
+    if (item.note) bits.push(item.note);
+    return bits.filter(Boolean).join(" — ");
+  }
+
+  function paintChecklist(card, hire) {
+    if (!card || !hire) return;
+    (hire.items || []).forEach(function (item) {
+      const row = card.querySelector('[data-item="' + item.template_key + '"]');
+      if (!row) return;
+      row.classList.toggle("late", !!item.warning);
+      const label = row.querySelector(".hire-item-text");
+      if (label) label.textContent = itemLine(item);
+      const badge = row.querySelector(".badge-due");
+      if (item.badge) {
+        if (badge) badge.textContent = item.badge;
+      } else if (badge) {
+        badge.remove();
+      }
+    });
+  }
+
+  function postItem(card, hire, key, body, message) {
     ui()
       .api("/hiring/hires/" + hire.id + "/items/" + key, { method: "POST", json: body })
-      .then(function () {
+      .then(function (saved) {
+        paintChecklist(card, saved);
         showStatus(message || "Saved.", "ok");
       })
       .catch(function (error) {
@@ -579,7 +614,7 @@
         status = input.value ? "done" : "open";
       }
       text.textContent = label + " — " + (input.value ? "done" : "open");
-      postItem(hire, item.template_key, { status: status, dates: dates, note: item.note || "" }, label + " saved.");
+      postItem(card, hire, item.template_key, { status: status, dates: dates, note: item.note || "" }, label + " saved.");
     };
     const undo = document.createElement("button");
     undo.type = "button";
@@ -589,7 +624,7 @@
       const dates = Object.assign({}, item.dates || {});
       dates[dateKey] = "";
       text.textContent = label + " — open";
-      postItem(hire, item.template_key, { status: "open", dates: dates, note: "" }, label + " undone.");
+      postItem(card, hire, item.template_key, { status: "open", dates: dates, note: "" }, label + " undone.");
     };
     row.appendChild(save);
     row.appendChild(undo);
@@ -818,7 +853,7 @@
       const left = document.createElement("div");
       const title = document.createElement("div");
       title.className = "due-title";
-      title.textContent = (offer.display_name || "Offer") + " — " + offer.status;
+      title.textContent = (offer.display_name || "Offer") + " — " + offer.status + (offer.current_version ? " — v" + offer.current_version : "");
       const meta = document.createElement("div");
       meta.className = "due-meta";
       meta.textContent =
@@ -832,9 +867,13 @@
       driveLine.className = "due-meta hire-drive-note";
       driveLine.textContent = offer.drive_note || "\u00a0";
       left.appendChild(driveLine);
-      const offerStage = offer.hire_id ? "accepted" : (offer.status === "draft" ? "offer" : offer.status);
-      left.appendChild(stageBar(offerStage, "admin", data.billing_label));
+      row.dataset.offerId = offer.id;
       const linkedHire = (data.hires || []).filter(function (hire) { return hire.offer_id === offer.id; })[0];
+      if (linkedHire) left.appendChild(stageBar(linkedHire.stage, linkedHire.owner, data.billing_label));
+      else {
+        const offerStage = offer.status === "draft" ? "offer" : offer.status;
+        left.appendChild(stageBar(offerStage, "admin", data.billing_label));
+      }
       left.appendChild(stepper(wizardSteps(offer, linkedHire)));
       const buttons = document.createElement("div");
       buttons.className = "row hire-actions";
@@ -918,7 +957,25 @@
           confirmText: "Delete offer",
           anchor: row,
           onConfirm: function (typed) {
-            post(offer.id, "/delete", { confirm: typed }, "Deleted.");
+            showStatus("Deleting…", "ok");
+            ui()
+              .api("/hiring/offers/" + offer.id + "/delete", { method: "POST", json: { confirm: typed } })
+              .then(function () {
+                document.querySelectorAll('[data-offer-id="' + offer.id + '"]').forEach(function (node) {
+                  node.remove();
+                });
+                const editingNow = document.getElementById("hire-editing");
+                if (editingNow && editingNow.value === offer.id) {
+                  editingNow.value = "";
+                  fillForm(null);
+                }
+                const decision = document.getElementById("hire-decision");
+                if (decision) decision.remove();
+                showStatus("Offer deleted.", "ok");
+              })
+              .catch(function (error) {
+                showStatus((error && error.message) || "Could not delete.", "error");
+              });
           },
         });
       });
@@ -1187,6 +1244,7 @@
       const card = document.createElement("article");
       card.className = "hire-card";
       card.id = "hire-" + hire.id;
+      card.dataset.offerId = hire.offer_id;
       const title = document.createElement("div");
       title.className = "due-title";
       title.textContent = (hire.display_name || "Hire") + " — " + (hire.status || "");
@@ -1226,22 +1284,10 @@
       (hire.items || []).forEach(function (item) {
         const row = document.createElement("div");
         row.className = "hire-item" + (item.warning ? " late" : "");
+        row.dataset.item = item.template_key;
         const label = document.createElement("div");
         label.className = "hire-item-text";
-        const bits = [
-          item.title,
-          item.owner_role || "",
-          "due " + (item.due_date || "—"),
-          item.status,
-        ];
-        if (item.done_by) bits.push(item.done_by);
-        const enteredDate = item.template_key === "i9_section2"
-          ? ((item.dates && (item.dates.i9_completed_on || item.dates.i9_section2_completed_on)) || "")
-          : "";
-        if (enteredDate) bits.push(enteredDate);
-        else if (item.done_at) bits.push(String(item.done_at).slice(0, 10));
-        if (item.note) bits.push(item.note);
-        label.textContent = bits.filter(Boolean).join(" — ");
+        label.textContent = itemLine(item);
         row.appendChild(label);
         if (item.badge) {
           const badge = document.createElement("span");

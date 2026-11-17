@@ -730,9 +730,20 @@
       const box = $("employees-rollout");
       wrap.classList.toggle("hidden", !data.can_rollout);
       box.checked = !!data.rollout_enabled;
+      const note = $("employees-rollout-note");
+      if (note) {
+        note.textContent = data.rollout_enabled
+          ? "On. Staff can open Employee View."
+          : "Off until an Admin turns it on. Staff do not see Employee View while this is off.";
+      }
       box.onchange = async () => {
         try {
           await ui().api("/employee/rollout", { method: "PUT", json: { enabled: box.checked } });
+          if (note) {
+            note.textContent = box.checked
+              ? "On. Staff can open Employee View."
+              : "Off until an Admin turns it on. Staff do not see Employee View while this is off.";
+          }
           ui().setStatus(status, "Saved", "ok");
         } catch (error) {
           box.checked = !box.checked;

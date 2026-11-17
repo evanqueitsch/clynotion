@@ -327,6 +327,15 @@ def test_revise_sent_offer_starts_a_new_draft_and_activation_is_not_manual(monke
     assert "downloadSelected.disabled = true" in page
 
 
+def test_hiring_screen_updates_rows_without_a_full_reload() -> None:
+    page = open("app/static/hiring.js", encoding="utf-8").read()
+    assert "function paintChecklist" in page
+    assert "paintChecklist(card, saved)" in page
+    assert "Offer deleted." in page
+    assert "linkedHire.stage" in page
+    assert '— v" + offer.current_version' in page
+
+
 def test_supervision_applies_until_a_full_license() -> None:
     assert supervision_required("") is True
     assert supervision_required("LSW") is True
