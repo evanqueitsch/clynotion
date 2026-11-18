@@ -97,10 +97,10 @@ def test_packet_defaults_follow_schedule_and_role() -> None:
     assert full["h4c_qsehra"]["available"] is False
     assert full["h4c_qsehra"]["note"] == "not in the library yet"
     assert full["h4c_employment_agreement"]["note"] == "not in the library yet"
-    assert full["h4c_confidentiality"]["available"] is False
+    assert full["h4c_confidentiality"]["available"] is True
     assert full["h4c_confidentiality"]["title"] == "Confidentiality, non-competition and non-solicitation"
     assert full["h4c_handbook"]["available"] is False
-    assert full["h4c_supervision_agreement"]["available"] is False
+    assert full["h4c_supervision"]["available"] is True
     assert full["h4c_employment_agreement"]["available"] is False
     assert full["h4c_qsehra"]["note"] == "not in the library yet"
     assert full["h4c_simple_ira"]["note"] == "not in the library yet"
@@ -110,9 +110,11 @@ def test_packet_defaults_follow_schedule_and_role() -> None:
     assert "irs_w4" not in full
     assert "h4c_welcome_template" not in full
     licensed = packet_catalog("full-time", True, "Clinician", "LCSW")
-    assert all(row["form_key"] != "h4c_supervision_agreement" for row in licensed)
+    assert all(row["form_key"] != "h4c_supervision" for row in licensed)
     part = packet_catalog("part-time", False, "Coordinator")
     keys = [row["form_key"] for row in part]
+    assert "h4c_confidentiality" in keys
+    assert "h4c_supervision" not in keys
     assert "h4c_qsehra" not in keys
     assert "h4c_simple_ira" not in keys
     assert "h4c_pa_clearances" not in keys
@@ -306,6 +308,27 @@ def test_library_pdfs_round_trip_form_fields() -> None:
         "h4c_hipaa.pdf": {"employee_signature", "printed_name"},
         "h4c_packet.pdf": {"employee_signature", "hipaa_signature", "before_day_forms"},
         "h4c_pa_clearances.pdf": {"employee_name", "date_received"},
+        "h4c_supervision.pdf": {
+            "supervisee_name",
+            "credential_lsw",
+            "credential_sw",
+            "supervisee_email",
+            "effective_date",
+            "supervisor_signature",
+            "supervisor_date",
+            "supervisee_signature",
+            "supervisee_date",
+        },
+        "h4c_confidentiality.pdf": {
+            "employee_name",
+            "sign_day",
+            "sign_month",
+            "sign_year",
+            "employee_signature",
+            "printed_name",
+            "company_by",
+            "company_title",
+        },
     }
     for name, needed in expected.items():
         reader = PdfReader(f"{base}/{name}")
@@ -329,6 +352,45 @@ def test_library_pdfs_round_trip_form_fields() -> None:
     again = PdfReader(io.BytesIO(buffer.getvalue())).get_fields() or {}
     assert str(again["employee_name"].get("/V")) == "Riley Sample"
     assert str(again["date_received"].get("/V")) == "12/08/2026"
+    supervision = PdfReader(f"{base}/h4c_supervision.pdf")
+    writer = PdfWriter()
+    writer.append(supervision)
+    writer.update_page_form_field_values(
+        writer.pages[0],
+        {
+            "supervisee_name": "Riley Sample",
+            "supervisee_email": "riley",
+            "credential_lsw": "/Yes",
+        },
+        auto_regenerate=False,
+    )
+    writer.update_page_form_field_values(
+        writer.pages[1],
+        {"effective_date": "12/08/2026", "supervisor_signature": "Melissa Smith", "supervisee_signature": "Riley Sample"},
+        auto_regenerate=False,
+    )
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    filled = PdfReader(io.BytesIO(buffer.getvalue())).get_fields() or {}
+    assert str(filled["supervisee_name"].get("/V")) == "Riley Sample"
+    assert str(filled["effective_date"].get("/V")) == "12/08/2026"
+    assert str(filled["credential_lsw"].get("/V")) == "/Yes"
+    agreement = PdfReader(f"{base}/h4c_confidentiality.pdf")
+    writer = PdfWriter()
+    writer.append(agreement)
+    writer.update_page_form_field_values(writer.pages[0], {"employee_name": "Riley Sample"}, auto_regenerate=False)
+    writer.update_page_form_field_values(
+        writer.pages[2],
+        {"sign_day": "8", "sign_month": "December", "sign_year": "2026", "company_by": "Melissa Smith", "company_title": "Owner"},
+        auto_regenerate=False,
+    )
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    filled = PdfReader(io.BytesIO(buffer.getvalue())).get_fields() or {}
+    assert str(filled["employee_name"].get("/V")) == "Riley Sample"
+    assert str(filled["sign_year"].get("/V")) == "2026"
+    assert str(filled["company_title"].get("/V")) == "Owner"
+    assert "OPPORTUN1TY" not in agreement.pages[2].extract_text()
 
 
 def test_billing_sees_only_the_handoff_and_cannot_open_pay_or_i9(monkeypatch) -> None:
