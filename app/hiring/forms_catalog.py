@@ -99,14 +99,14 @@ FORMS: tuple[dict[str, str], ...] = (
         "applies_to": "every hire",
     },
     {
-        "form_key": "h4c_supervision_agreement",
+        "form_key": "h4c_supervision",
         "title": "Clinical supervision agreement",
         "publisher": "H4C",
-        "edition": "draft",
+        "edition": "2026-11",
         "expires_on": "",
         "source_url": "",
-        "filename": "",
-        "applies_to": "LSW hires after counsel review",
+        "filename": "h4c_supervision.pdf",
+        "applies_to": "hires who are not fully licensed",
     },
     {
         "form_key": "pa_standard_application",
@@ -135,8 +135,8 @@ FORMS: tuple[dict[str, str], ...] = (
         "edition": "",
         "expires_on": "",
         "source_url": "",
-        "filename": "",
-        "applies_to": "every hire, file not shipped",
+        "filename": "h4c_confidentiality.pdf",
+        "applies_to": "every hire",
     },
     {
         "form_key": "h4c_handbook",
@@ -205,7 +205,7 @@ def packet_catalog(
             continue
         if key in CLIENT_KEYS and not direct_client_access:
             continue
-        if key == "h4c_supervision_agreement" and not supervised:
+        if key == "h4c_supervision" and not supervised:
             continue
         available = bool(spec.get("filename"))
         rows.append(
