@@ -393,6 +393,134 @@ def test_library_pdfs_round_trip_form_fields() -> None:
     assert "OPPORTUN1TY" not in agreement.pages[2].extract_text()
 
 
+def test_additional_documents_go_to_the_override_and_the_personnel_folder(monkeypatch) -> None:
+    from app.hiring.personnel_drive import clear_personnel_drive_for_tests, set_personnel_drive_for_tests
+
+    class FolderDrive:
+        def __init__(self) -> None:
+            self.uploads: list[tuple[str, str, str]] = []
+            self.n = 0
+
+        def ensure_folder(self, folder_id: str, name: str) -> tuple[str, str]:
+            self.n += 1
+            new_id = folder_id or f"fld-{self.n}"
+            return new_id, "https://drive.example/" + new_id
+
+        def ensure_child(self, parent_id: str, name: str) -> str:
+            self.n += 1
+            return f"child-{name}-{self.n}"
+
+        def upload(self, folder_id: str, filename: str, data: bytes, mime: str) -> str:
+            self.uploads.append((folder_id, filename, mime))
+            self.n += 1
+            return f"file-{self.n}"
+
+        def rename(self, file_id: str, name: str) -> None:
+            return None
+
+        def move(self, file_id: str, folder_id: str, name: str = "") -> None:
+            return None
+
+        def trash(self, file_id: str) -> None:
+            return None
+
+    sent: list[dict] = []
+
+    def spy(practice_id, to, subject, text, attachments=(), html="", reply_to=""):
+        sent.append(
+            {"to": to, "subject": subject, "text": text, "attachments": attachments, "html": html, "reply_to": reply_to}
+        )
+        return "sent"
+
+    drive = FolderDrive()
+    set_personnel_drive_for_tests(drive)
+    try:
+        hire_id = _hire(
+            monkeypatch,
+            personal_email="riley.sample@example.com",
+            display_name="Riley Sample",
+            candidate_full_name="Riley Sample",
+            candidate_first_name="Riley",
+            position_title="Coordinator",
+            direct_client_access=False,
+        )
+        early = client.post(
+            f"/hiring/hires/{hire_id}/additional-documents/preview",
+            headers=_alice(),
+            json={"form_keys": ["h4c_packet"]},
+        )
+        assert early.status_code == 409
+        handed = client.post(
+            f"/hiring/hires/{hire_id}/handoff",
+            headers=_alice(),
+            json={"form_keys": ["h4c_hipaa_nda", "h4c_employee_info"]},
+        )
+        assert handed.status_code == 200, handed.text
+        sends = {item["form_key"]: item["sent_at"] for item in handed.json()["document_sends"]}
+        assert set(sends) == {"h4c_hipaa_nda", "h4c_employee_info"}
+        assert client.post(
+            f"/hiring/hires/{hire_id}/additional-documents",
+            headers=_alice(),
+            json={"form_keys": ["h4c_packet"]},
+        ).status_code == 409
+        client.put(
+            "/hiring/settings",
+            headers=_alice(),
+            json={"candidate_emails_enabled": True, "wizard_email_override": "operations@heart4change.org"},
+        )
+        monkeypatch.setattr("app.hiring.engine.deliver", spy)
+        preview = client.post(
+            f"/hiring/hires/{hire_id}/additional-documents/preview",
+            headers=_alice(),
+            json={"form_keys": ["h4c_packet", "pa_clgs_32_6"]},
+        )
+        assert preview.status_code == 200, preview.text
+        assert preview.json()["subject"] == "Additional Onboarding Documents — Heart for Change"
+        assert "Dear Riley," in preview.json()["text"]
+        assert "fillable PDF" in preview.json()["text"]
+        assert preview.json()["from"] == "operations@heart4change.org"
+        assert "New hire packet" in preview.json()["html"]
+        access_store.set_assignment("practice-a", "casey.example@example.com", "billing")
+        assert client.post(
+            f"/hiring/hires/{hire_id}/additional-documents",
+            headers=_bill(),
+            json={"form_keys": ["h4c_packet"]},
+        ).status_code == 403
+        sent.clear()
+        before = len(drive.uploads)
+        mailed = client.post(
+            f"/hiring/hires/{hire_id}/additional-documents",
+            headers=_alice(),
+            json={"form_keys": ["h4c_packet", "pa_clgs_32_6"]},
+        )
+        assert mailed.status_code == 200, mailed.text
+        body = mailed.json()
+        assert body["packet_form_keys"] == ["h4c_hipaa_nda", "h4c_employee_info", "h4c_packet", "pa_clgs_32_6"]
+        later = {item["form_key"]: item for item in body["document_sends"]}
+        assert later["h4c_packet"]["sent_by"] == "alice@example.com"
+        assert later["h4c_packet"]["sent_at"] != sends["h4c_hipaa_nda"]
+        assert body["drive_copy"] == "copied"
+        assert len(sent) == 1
+        message = sent[0]
+        assert message["to"] == "operations@heart4change.org"
+        assert message["reply_to"] == "operations@heart4change.org"
+        assert message["subject"] == "Additional Onboarding Documents — Heart for Change"
+        assert [name for name, _mime, _data in message["attachments"]] == ["h4c_packet.pdf", "pa_clgs_32_6.pdf"]
+        assert "Dear Riley," in message["text"]
+        added = [item for item in drive.uploads[before:] if item[1] in {"h4c_packet.pdf", "pa_clgs_32_6.pdf"}]
+        assert len(added) == 2
+        page = open("app/static/hiring.js", encoding="utf-8").read()
+        assert "Send additional documents" in page
+        assert 'if (!hire.handoff_at) return;' in page
+        client.put(
+            "/hiring/settings",
+            headers=_alice(),
+            json={"candidate_emails_enabled": False, "wizard_email_override": ""},
+        )
+    finally:
+        clear_personnel_drive_for_tests()
+
+
 def test_billing_sees_only_the_handoff_and_cannot_open_pay_or_i9(monkeypatch) -> None:
     hire_id = _hire(monkeypatch, personal_email="jordan.example@example.com", display_name="Jordan Example", candidate_full_name="Jordan Example", candidate_first_name="Jordan")
     access_store.set_assignment("practice-a", "casey.example@example.com", "billing")

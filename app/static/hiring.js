@@ -852,6 +852,19 @@
     }
     section("Candidate email", "candidate_packet");
     section("Staff handoff email", "staff_handoff");
+    const extraHeading = document.createElement("h3");
+    extraHeading.textContent = "Additional documents email";
+    settingsBox.appendChild(extraHeading);
+    ["subject", "intro", "closing"].forEach(function (key) {
+      const fieldLabel = document.createElement("label");
+      fieldLabel.textContent = key === "subject" ? "Subject" : (key === "intro" ? "Intro paragraph" : "Closing paragraph");
+      const area = key === "subject" ? document.createElement("input") : document.createElement("textarea");
+      if (key !== "subject") area.rows = key === "intro" ? 5 : 4;
+      area.value = settings["additional_documents_" + key] || "";
+      fieldLabel.appendChild(area);
+      settingsBox.appendChild(fieldLabel);
+      fields["additional_documents_" + key] = area;
+    });
     const previewFrame = document.createElement("iframe");
     previewFrame.title = "Wizard email preview";
     previewFrame.setAttribute("sandbox", "");
@@ -862,10 +875,15 @@
     const previewSubject = document.createElement("p");
     previewSubject.className = "meta";
     function showPreview(kind) {
-      const prefix = kind === "staff" ? "staff_handoff" : "candidate_packet";
-      ui().api("/hiring/wizard-email-preview", {
-        method: "POST",
-        json: {
+      const prefix = kind === "staff" ? "staff_handoff" : (kind === "additional" ? "additional_documents" : "candidate_packet");
+      const payload = kind === "additional"
+        ? {
+          kind: "additional",
+          subject: fields.additional_documents_subject.value,
+          intro: fields.additional_documents_intro.value,
+          closing: fields.additional_documents_closing.value,
+        }
+        : {
           kind: kind,
           subject: fields[prefix + "_subject"].value,
           intro: fields[prefix + "_intro"].value,
@@ -873,7 +891,10 @@
           closing: fields[prefix + "_closing"].value,
           signature: fields[prefix + "_signature"].value,
           staff_greeting_name: greetingName.value.trim(),
-        },
+        };
+      ui().api("/hiring/wizard-email-preview", {
+        method: "POST",
+        json: payload,
       }).then(function (result) {
         previewSubject.textContent = "Preview for Riley Sample — " + result.subject;
         previewFrame.srcdoc = result.html;
@@ -891,6 +912,11 @@
     previewStaff.className = "ghost";
     previewStaff.textContent = "Preview staff email";
     previewStaff.onclick = function () { showPreview("staff"); };
+    const previewAdditional = document.createElement("button");
+    previewAdditional.type = "button";
+    previewAdditional.className = "ghost";
+    previewAdditional.textContent = "Preview additional documents email";
+    previewAdditional.onclick = function () { showPreview("additional"); };
     const saveMail = document.createElement("button");
     saveMail.type = "button";
     saveMail.className = "ghost";
@@ -932,6 +958,7 @@
     settingsBox.appendChild(saveMail);
     settingsBox.appendChild(previewCandidate);
     settingsBox.appendChild(previewStaff);
+    settingsBox.appendChild(previewAdditional);
     settingsBox.appendChild(testMail);
     settingsBox.appendChild(previewSubject);
     settingsBox.appendChild(previewFrame);
@@ -1503,6 +1530,105 @@
     }
   }
 
+  function sentOn(hire, key) {
+    const row = (hire.document_sends || []).filter(function (item) { return item.form_key === key; })[0];
+    return row && row.sent_at ? String(row.sent_at).slice(0, 10) : "";
+  }
+
+  function renderAdditionalDocuments(card, hire) {
+    if (!hire.handoff_at) return;
+    const open = document.createElement("button");
+    open.type = "button";
+    open.className = "ghost";
+    open.textContent = "Send additional documents";
+    const panel = document.createElement("div");
+    panel.hidden = true;
+    const note = document.createElement("p");
+    note.className = "meta";
+    note.textContent = "From operations@heart4change.org. Reply-To operations@heart4change.org. Candidate email and the test recipient override apply.";
+    panel.appendChild(note);
+    const choices = hire.packet_choices || [];
+    choices.forEach(function (choice) {
+      const row = document.createElement("label");
+      row.className = "packet-row";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.className = "additional-key";
+      box.value = choice.form_key;
+      const sent = sentOn(hire, choice.form_key);
+      box.disabled = !choice.available;
+      box.checked = !!choice.available && !sent;
+      row.appendChild(box);
+      const text = document.createElement("span");
+      const title = choice.title + (choice.available ? "" : " — not in the library yet");
+      text.textContent = sent ? title + " — Sent " + monthDayYear(sent) : title;
+      row.appendChild(text);
+      panel.appendChild(row);
+    });
+    const previewSubject = document.createElement("p");
+    previewSubject.className = "meta";
+    const frame = document.createElement("iframe");
+    frame.title = "Additional documents email preview";
+    frame.setAttribute("sandbox", "");
+    frame.style.width = "100%";
+    frame.style.height = "420px";
+    frame.style.border = "1px solid #d9ddd9";
+    frame.style.background = "#f3f4f3";
+    function checkedKeys() {
+      return Array.prototype.map.call(panel.querySelectorAll("input.additional-key:checked"), function (box) {
+        return box.value;
+      });
+    }
+    function loadPreview() {
+      const keys = checkedKeys();
+      if (!keys.length) {
+        previewSubject.textContent = "Choose at least one document to preview the email.";
+        frame.srcdoc = "";
+        return;
+      }
+      ui().api("/hiring/hires/" + hire.id + "/additional-documents/preview", {
+        method: "POST",
+        json: { form_keys: keys },
+      }).then(function (result) {
+        previewSubject.textContent = "From " + (result.from || "operations@heart4change.org") + " — " + result.subject;
+        frame.srcdoc = result.html;
+      }).catch(function (error) {
+        previewSubject.textContent = (error && error.message) || "Could not preview the email.";
+      });
+    }
+    panel.addEventListener("change", loadPreview);
+    const send = document.createElement("button");
+    send.type = "button";
+    send.className = "primary";
+    send.textContent = "Send";
+    send.onclick = function () {
+      const keys = checkedKeys();
+      if (!keys.length || send.disabled) return;
+      send.disabled = true;
+      send.textContent = "Sending…";
+      ui().api("/hiring/hires/" + hire.id + "/additional-documents", {
+        method: "POST",
+        json: { form_keys: keys },
+      }).then(function (saved) {
+        send.textContent = "Sent";
+        refreshHire(saved, "Additional documents sent.");
+      }).catch(function (error) {
+        send.disabled = false;
+        send.textContent = "Send";
+        showStatus((error && error.message) || "Could not send the documents.", "error");
+      });
+    };
+    open.onclick = function () {
+      panel.hidden = !panel.hidden;
+      if (!panel.hidden) loadPreview();
+    };
+    panel.appendChild(send);
+    panel.appendChild(previewSubject);
+    panel.appendChild(frame);
+    card.appendChild(open);
+    card.appendChild(panel);
+  }
+
   function renderHireCard(hire, data) {
       const card = document.createElement("article");
       card.className = "hire-card";
@@ -1517,6 +1643,7 @@
       card.appendChild(stepper(wizardSteps(linkedOffer || { id: hire.offer_id, status: "accepted" }, hire)));
       const packetRoot = renderPacketStep(card, hire);
       renderHandoff(card, hire, packetRoot, data.billing_label);
+      renderAdditionalDocuments(card, hire);
       renderQuickBooksTask(card, hire);
       renderBillingSteps(card, hire);
       if (hire.i9_drive !== "ready") {

@@ -58,6 +58,7 @@ from app.hiring.mailer import (
     LEGACY_STAFF_SUBJECT,
     REPLY_TO,
     code_body,
+    compose_additional,
     compose_wizard,
     deliver,
     long_start_date,
@@ -232,6 +233,25 @@ def qb_invite_window(start: date, today: date | None = None) -> tuple[date, bool
     """QuickBooks accepts a new hire only within 90 days of the start date."""
     available = start - timedelta(days=90)
     return available, (today or _today()) >= available
+
+
+def _document_sends(hire: dict[str, Any]) -> list[dict[str, str]]:
+    """Sent dates for the picker. Original packet keys use the handoff time. Nothing is written."""
+    latest: dict[str, dict[str, str]] = {}
+    handoff = str(hire.get("handoff_at") or "")
+    if handoff:
+        for key in hire.get("packet_form_keys") or []:
+            latest[str(key)] = {"form_key": str(key), "sent_at": handoff, "sent_by": ""}
+    for item in hire.get("documents_sent") or []:
+        key = str(item.get("form_key") or "")
+        if not key:
+            continue
+        latest[key] = {
+            "form_key": key,
+            "sent_at": str(item.get("sent_at") or ""),
+            "sent_by": str(item.get("sent_by") or ""),
+        }
+    return [latest[key] for key in latest]
 
 
 def _qb_public(hire: dict[str, Any]) -> tuple[str, bool]:
@@ -1769,6 +1789,7 @@ class HiringEngine:
             "created_on": hire.get("created_on") or "",
             "packet_form_keys": list(hire.get("packet_form_keys") or []),
             "packet_choices": self._packet_choices(row, hire),
+            "document_sends": _document_sends(hire),
             "staff_email_status": hire.get("staff_email_status") or "",
             "candidate_email_status": hire.get("candidate_email_status") or "",
             "welcome": _welcome_text(candidate.get("display_name") or "", hire),
@@ -2125,7 +2146,7 @@ class HiringEngine:
 
     def preview_wizard_email(self, practice_id: str, kind: str, sections: dict[str, str]) -> dict[str, str]:
         """Render Riley's email. Does not send mail or store a hire."""
-        if kind not in {"staff", "candidate"}:
+        if kind not in {"staff", "candidate", "additional"}:
             raise HiringError(400, "Choose the staff email or the candidate email.")
         with _lock:
             row = self._practice(self._read(), practice_id)
@@ -2142,9 +2163,20 @@ class HiringEngine:
             packet_list=packet_list,
             billing_first_name=billing_first,
         )
-        stored = _wizard_sections(row["settings"], kind)
-        stored.update({key: value for key, value in sections.items() if str(value or "").strip()})
-        subject, text, html = compose_wizard(kind, stored, values, direct=True)
+        if kind == "additional":
+            titles = ["Employee information and acknowledgment", "HIPAA confidentiality agreement"]
+            values["packet_list"] = ", ".join(titles)
+            stored = {
+                "subject": str(row["settings"].get("additional_documents_subject") or ""),
+                "intro": str(row["settings"].get("additional_documents_intro") or ""),
+                "closing": str(row["settings"].get("additional_documents_closing") or ""),
+            }
+            stored.update({key: value for key, value in sections.items() if str(value or "").strip() and key in stored})
+            subject, text, html = compose_additional(stored, values, titles)
+        else:
+            stored = _wizard_sections(row["settings"], kind)
+            stored.update({key: value for key, value in sections.items() if str(value or "").strip()})
+            subject, text, html = compose_wizard(kind, stored, values, direct=True)
         if len(row.get("offers") or {}) != before_offers:
             raise HiringError(500, "The preview must not create a hire.")
         return {"kind": kind, "subject": subject, "text": text, "html": html, "greeting_source": greeting_source}
@@ -2394,6 +2426,158 @@ class HiringEngine:
                 archive.writestr(stored, data)
         safe = "".join(ch if ch.isalnum() else "_" for ch in label).strip("_") or "packet"
         return buffer.getvalue(), f"{safe}_packet.zip"
+
+    def preview_additional_documents(self, practice_id: str, hire_id: str, form_keys: list[str]) -> dict[str, Any]:
+        with _lock:
+            row = self._practice(self._read(), practice_id)
+            hire = row["hires"].get(hire_id)
+            if not hire or hire.get("status") == "archived":
+                raise HiringError(404, "Hire not found.")
+            if not hire.get("handoff_at"):
+                raise HiringError(409, "Hand this hire off before sending more documents.")
+            titles, _files = self._additional_files(row, hire, form_keys)
+            candidate = row["candidates"].get(hire.get("candidate_id") or "") or {}
+            subject, text, html = self._compose_additional(row, hire, candidate, titles)
+            return {"subject": subject, "text": text, "html": html, "documents": titles, "from": REPLY_TO, "reply_to": REPLY_TO}
+
+    def send_additional_documents(self, practice_id: str, hire_id: str, form_keys: list[str], actor: str) -> dict[str, Any]:
+        with _lock:
+            payload = self._read()
+            row = self._practice(payload, practice_id)
+            hire = row["hires"].get(hire_id)
+            if not hire or hire.get("status") == "archived":
+                raise HiringError(404, "Hire not found.")
+            if not hire.get("handoff_at"):
+                raise HiringError(409, "Hand this hire off before sending more documents.")
+            titles, files = self._additional_files(row, hire, form_keys)
+            if not titles:
+                raise HiringError(400, "Choose at least one document.")
+            settings = row["settings"]
+            candidate = row["candidates"].get(hire.get("candidate_id") or "") or {}
+            override = str(settings.get("wizard_email_override") or "").strip().lower()
+            candidate_to = override or str(candidate.get("personal_email") or "").strip().lower()
+            if not settings.get("candidate_emails_enabled") or not candidate_to:
+                raise HiringError(409, "Candidate email is off.")
+            subject, text, html = self._compose_additional(row, hire, candidate, titles)
+            status = deliver(
+                practice_id,
+                candidate_to,
+                subject,
+                text,
+                tuple((name, "application/pdf", data) for name, data in files),
+                html=html,
+                reply_to=REPLY_TO,
+            )
+            if status != "sent":
+                self._history(row, "hire", hire_id, "additional_documents", actor, "Additional documents email failed")
+                self._save(payload)
+                raise HiringError(502, "The email was not sent.")
+            now = _iso()
+            sent = list(hire.get("documents_sent") or [])
+            keys = list(hire.get("packet_form_keys") or [])
+            for key, title in zip(self._selected_form_keys(form_keys), titles):
+                sent.append({"form_key": key, "sent_at": now, "sent_by": actor, "title": title})
+                if key not in keys:
+                    keys.append(key)
+            hire["documents_sent"] = sent
+            hire["packet_form_keys"] = keys
+            copied = self._copy_forms_to_drive(row, hire, files)
+            self._history(
+                row,
+                "hire",
+                hire_id,
+                "additional_documents",
+                actor,
+                "Additional documents sent" if copied != "copied" else "Additional documents sent and filed",
+            )
+            self._save(payload)
+            public = self._hire_public(row, hire)
+            public["additional_email"] = "sent"
+            public["drive_copy"] = copied
+            return public
+
+    def _selected_form_keys(self, form_keys: list[str]) -> list[str]:
+        selected: list[str] = []
+        for key in form_keys:
+            text = str(key or "").strip()
+            if text and text not in selected:
+                selected.append(text)
+        return selected
+
+    def _additional_files(
+        self,
+        row: dict[str, Any],
+        hire: dict[str, Any],
+        form_keys: list[str],
+    ) -> tuple[list[str], list[tuple[str, bytes]]]:
+        choices = {str(item["form_key"]): item for item in self._packet_choices(row, hire)}
+        library = {str(item.get("form_key") or ""): item for item in row["forms_library"].values()}
+        titles: list[str] = []
+        files: list[tuple[str, bytes]] = []
+        for key in self._selected_form_keys(form_keys):
+            choice = choices.get(key)
+            spec = library.get(key) or {}
+            filename = str(spec.get("filename") or "")
+            if not choice or not choice.get("available") or not filename.lower().endswith(".pdf"):
+                raise HiringError(400, "That form is not in the library yet.")
+            path = form_path(filename)
+            if not path.is_file():
+                raise HiringError(404, "That form is not on file.")
+            titles.append(str(choice.get("title") or spec.get("title") or key))
+            files.append((path.name, path.read_bytes()))
+        return titles, files
+
+    def _compose_additional(
+        self,
+        row: dict[str, Any],
+        hire: dict[str, Any],
+        candidate: dict[str, Any],
+        titles: list[str],
+    ) -> tuple[str, str, str]:
+        offer = row["offers"].get(hire.get("offer_id") or "") or {}
+        version = row["offer_versions"].get(offer.get("current_version_id") or "") or {}
+        fields = version.get("field_values") or {}
+        name = str(candidate.get("display_name") or "New hire")
+        first, last = _person_names(name, str(candidate.get("first_name") or fields.get("candidate_first_name") or ""))
+        values = {
+            "name": name,
+            "first_name": first,
+            "last_name": last,
+            "position": str(hire.get("position") or ""),
+            "employment": _schedule_label(str(hire.get("employment_type") or "")),
+            "start_date": short_start_date(str(hire.get("start_date") or "")),
+            "start_date_long": long_start_date(str(hire.get("start_date") or "")),
+            "packet_list": ", ".join(titles),
+        }
+        sections = {
+            "subject": str(row["settings"].get("additional_documents_subject") or ""),
+            "intro": str(row["settings"].get("additional_documents_intro") or ""),
+            "closing": str(row["settings"].get("additional_documents_closing") or ""),
+        }
+        return compose_additional(sections, values, titles)
+
+    def _copy_forms_to_drive(self, row: dict[str, Any], hire: dict[str, Any], files: list[tuple[str, bytes]]) -> str:
+        from app.hiring.personnel_drive import personnel_client
+
+        client = personnel_client()
+        if client is None or not hasattr(client, "upload") or not hasattr(client, "ensure_child"):
+            return "not_connected"
+        offer = row["offers"].get(hire.get("offer_id") or "") or {}
+        parent = str(offer.get("drive_folder_id") or "")
+        if not parent:
+            return "not_connected"
+        try:
+            children = dict(hire.get("drive_subfolders") or {})
+            onboarding = str(children.get("01 Onboarding") or "")
+            if not onboarding:
+                onboarding = client.ensure_child(parent, "01 Onboarding")
+                children["01 Onboarding"] = onboarding
+                hire["drive_subfolders"] = children
+            for filename, data in files:
+                client.upload(onboarding, filename, data, "application/pdf")
+            return "copied"
+        except Exception:
+            return "error"
 
     def _sync_qb_todo(self, practice_id: str, row: dict[str, Any], hire: dict[str, Any]) -> None:
         from app.platform.due import due_engine

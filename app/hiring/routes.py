@@ -46,6 +46,9 @@ class SettingsBody(BaseModel):
     candidate_packet_steps: Optional[str] = None
     candidate_packet_closing: Optional[str] = None
     candidate_packet_signature: Optional[str] = None
+    additional_documents_subject: Optional[str] = None
+    additional_documents_intro: Optional[str] = None
+    additional_documents_closing: Optional[str] = None
 
 
 class OfferBody(BaseModel):
@@ -488,6 +491,24 @@ def qb_invite(hire_id: str, body: QbInviteBody, user: CurrentUser) -> dict[str, 
     _require_admin(user)
     try:
         return hiring.mark_qb_invite(user.practice_id, hire_id, body.sent, _actor(user))
+    except HiringError as exc:
+        _fail(exc)
+
+
+@router.post("/hiring/hires/{hire_id}/additional-documents/preview")
+def additional_preview(hire_id: str, body: HandoffBody, user: CurrentUser) -> dict[str, Any]:
+    _require_admin(user)
+    try:
+        return hiring.preview_additional_documents(user.practice_id, hire_id, body.form_keys)
+    except HiringError as exc:
+        _fail(exc)
+
+
+@router.post("/hiring/hires/{hire_id}/additional-documents")
+def additional_documents(hire_id: str, body: HandoffBody, user: CurrentUser) -> dict[str, Any]:
+    _require_admin(user)
+    try:
+        return hiring.send_additional_documents(user.practice_id, hire_id, body.form_keys, _actor(user))
     except HiringError as exc:
         _fail(exc)
 

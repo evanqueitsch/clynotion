@@ -151,6 +151,15 @@ CANDIDATE_PACKET_SIGNATURE = (
     "Operations\n"
     "717-478-3411 · operations@heart4change.org"
 )
+ADDITIONAL_DOCUMENTS_SUBJECT = "Additional Onboarding Documents — Heart for Change"
+ADDITIONAL_DOCUMENTS_INTRO = (
+    "Dear {first_name},\n\n"
+    "A few more onboarding forms are attached. Each one is a fillable PDF you can complete and sign on your computer. "
+    "Please bring or return the completed forms by your start date, {start_date_long}."
+)
+ADDITIONAL_DOCUMENTS_CLOSING = (
+    "If you have any questions before your start date, reply to this email or call our office at 717-478-3411."
+)
 
 WIZARD_FIELDS = (
     "staff_handoff_subject",
@@ -163,6 +172,9 @@ WIZARD_FIELDS = (
     "candidate_packet_steps",
     "candidate_packet_closing",
     "candidate_packet_signature",
+    "additional_documents_subject",
+    "additional_documents_intro",
+    "additional_documents_closing",
 )
 
 
@@ -221,6 +233,9 @@ def wizard_defaults() -> dict[str, str]:
         "candidate_packet_steps": CANDIDATE_PACKET_STEPS,
         "candidate_packet_closing": CANDIDATE_PACKET_CLOSING,
         "candidate_packet_signature": CANDIDATE_PACKET_SIGNATURE,
+        "additional_documents_subject": ADDITIONAL_DOCUMENTS_SUBJECT,
+        "additional_documents_intro": ADDITIONAL_DOCUMENTS_INTRO,
+        "additional_documents_closing": ADDITIONAL_DOCUMENTS_CLOSING,
     }
 
 
@@ -313,6 +328,36 @@ def _summary_rows(kind: str, values: dict[str, str]) -> list[tuple[str, str]]:
     ]
 
 
+def compose_additional(
+    sections: dict[str, str],
+    values: dict[str, str],
+    titles: list[str],
+) -> tuple[str, str, str]:
+    """Subject, plain text, and HTML for documents sent after the first packet."""
+    defaults = wizard_defaults()
+    filled = {key: values.get(key) or "" for key in _PLACEHOLDERS}
+    filled["packet_list"] = ", ".join(titles)
+
+    def section(name: str) -> str:
+        text = str(sections.get(name) or "").strip()
+        return text or defaults[f"additional_documents_{name}"]
+
+    subject = render_template(section("subject"), filled).replace("\r", " ").replace("\n", " ").strip()
+    intro = render_template(section("intro"), filled)
+    closing = render_template(section("closing"), filled)
+    signature = render_template(CANDIDATE_PACKET_SIGNATURE, filled)
+    rows = [("Start date", filled.get("start_date_long") or filled.get("start_date") or "")]
+    text_lines = [HEADER_TEXT, "", intro, ""]
+    for label, value in rows:
+        text_lines.append(f"{label}: {value}")
+    text_lines.extend(["", "Documents:"])
+    text_lines.extend(f"{index}. {title}" for index, title in enumerate(titles, start=1))
+    text_lines.extend(["", closing, "", signature, "", WIZARD_FOOTER])
+    plain = "\n".join(text_lines).strip() + "\n"
+    html = _wizard_html("candidate", intro, rows, list(titles), closing, signature, "", steps_heading="DOCUMENTS")
+    return subject, plain, html
+
+
 def compose_wizard(
     kind: str,
     sections: dict[str, str],
@@ -359,6 +404,7 @@ def _wizard_html(
     closing: str,
     signature: str,
     link: str,
+    steps_heading: str = "NEXT STEPS",
 ) -> str:
     summary = [
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 18px;border-collapse:collapse;">'
@@ -382,7 +428,9 @@ def _wizard_html(
             "</td></tr></table>"
         )
     numbered = [
-        '<p style="margin:0 0 8px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:18px;color:#3d4742;font-weight:bold;letter-spacing:0.04em;">NEXT STEPS</p>',
+        '<p style="margin:0 0 8px;font-family:Arial,Helvetica,sans-serif;font-size:13px;line-height:18px;color:#3d4742;font-weight:bold;letter-spacing:0.04em;">'
+        + escape(steps_heading)
+        + "</p>",
         '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:0 0 8px;">',
     ]
     for index, step in enumerate(steps, start=1):
