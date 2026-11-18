@@ -46,7 +46,7 @@ Track each new hire's onboarding progress and each employee's ongoing compliance
 ## 5. Business rules
 
 - LSW `licenseType` → `supervisionAgreement` step and SupervisionLog become required/visible; LCSW → hidden/NA.
-- `w4_quickbooks` and `directDeposit_quickbooks` are **status-only mirrors** of QuickBooks Workforce self-onboarding. Admin sends the Employee self-onboard invite. Billing confirms completion. Clynotion never stores the underlying SSN or bank data, and QuickBooks does not accept those fields through an API.
+- `w4_quickbooks` and `directDeposit_quickbooks` are entered by the hire in QuickBooks Workforce after Admin sends the Employee self-onboard invite. QuickBooks accepts the hire only within 90 days of the start date, so the invite is a separate Admin task and does not block handoff. Billing cannot send it and sees activation waiting on Admin until it is recorded. Billing files the PA new-hire report, schedules the I-9, and confirms clearances. Clynotion never stores the underlying SSN or bank data.
 - PA clearances auto-set `expiryDate` = `issueDate` + 60 months on entry.
 - Completing all applicable steps flips `overallStatus` to Complete and timestamps it.
 

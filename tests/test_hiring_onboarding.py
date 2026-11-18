@@ -293,7 +293,7 @@ def test_checklist_status_note_undo_and_billing_todo() -> None:
     packet = client.post(f"/hiring/hires/{hire_id}/packet-complete", headers=_alice())
     assert packet.status_code == 200, packet.text
     titles = [item.title for item in due_engine.list_open("practice-a")]
-    assert "Avery Sample: confirm QuickBooks onboarding and file the PA new-hire report" in titles
+    assert "Avery Sample: file the PA new-hire report and schedule the I-9" in titles
     todo = next(item for item in due_engine.list_open("practice-a") if item.source_ref == hire_id + ":packet")
     assert "T" in todo.due_at
     assert todo.due_at.endswith("23:59:59-05:00") or todo.due_at.endswith("23:59:59-04:00")
@@ -347,6 +347,8 @@ def test_activate_adds_credentialing_cells_without_overwriting() -> None:
             json={"work_email": "early.sample@example.com"},
         )
         assert too_soon.status_code == 409
+    invited = client.post(f"/hiring/hires/{hire_id}/qb-invite", headers=_alice(), json={"sent": True})
+    assert invited.status_code == 200, invited.text
     activated = client.post(
         f"/hiring/hires/{hire_id}/activate",
         headers=_alice(),
@@ -376,8 +378,10 @@ def test_activate_adds_credentialing_cells_without_overwriting() -> None:
         headers=_alice(),
         json={"typed_name": "Casey Sample"},
     )
+    second_hire_id = second_hire.json()["hire"]["id"]
+    assert client.post(f"/hiring/hires/{second_hire_id}/qb-invite", headers=_alice(), json={"sent": True}).status_code == 200
     again = client.post(
-        f"/hiring/hires/{second_hire.json()['hire']['id']}/activate",
+        f"/hiring/hires/{second_hire_id}/activate",
         headers=_alice(),
         json={"work_email": "casey.work@example.com"},
     )
@@ -528,6 +532,7 @@ def test_delete_hire_requires_the_exact_name_and_only_removes_that_hire() -> Non
             headers=_alice(),
             json={"status": "done"},
         )
+        assert client.post(f"/hiring/hires/{hire_id}/qb-invite", headers=_alice(), json={"sent": True}).status_code == 200
         activated = client.post(
             f"/hiring/hires/{hire_id}/activate",
             headers=_alice(),

@@ -398,6 +398,9 @@ def _home_payload(user: CurrentUser) -> HomeOut:
         owner_user_id=user.user_id,
         sessions=store.list_for_practice(user.practice_id),
     )
+    from app.hiring.engine import hiring
+
+    hiring.sync_qb_invites(user.practice_id)
     bands_raw = _with_payroll_todos(user.practice_id, due_engine.bands(user.practice_id))
     bands = HomeBandsOut(
         overdue=[_obligation_out(o) for o in bands_raw["overdue"]],
@@ -440,6 +443,9 @@ def due_bands(user: CurrentUser) -> HomeBandsOut:
         owner_user_id=user.user_id,
         sessions=store.list_for_practice(user.practice_id),
     )
+    from app.hiring.engine import hiring
+
+    hiring.sync_qb_invites(user.practice_id)
     bands_raw = _with_payroll_todos(user.practice_id, due_engine.bands(user.practice_id))
     return _visible_due(user, bands_raw)
 

@@ -53,7 +53,7 @@ def _offer(**extra: object) -> dict:
         "qsehra_wait_days": "60",
         "offer_date": "11/17/2026",
         "start_date": "11/17/2026",
-        "response_deadline": "11/17/2026",
+        "response_deadline": "12/18/2026",
         "direct_client_access": True,
         "position_title": "Clinician",
     }
@@ -98,32 +98,37 @@ def test_packet_defaults_follow_schedule_and_role() -> None:
     assert full["h4c_qsehra"]["note"] == "not in the library yet"
     assert full["h4c_employment_agreement"]["note"] == "not in the library yet"
     assert full["h4c_confidentiality"]["available"] is False
+    assert full["h4c_confidentiality"]["title"] == "Confidentiality, non-competition and non-solicitation"
     assert full["h4c_handbook"]["available"] is False
     assert full["h4c_supervision_agreement"]["available"] is False
-    assert full["pa_standard_application"]["available"] is False
-    assert full["pa_clearances_info"]["available"] is False
+    assert full["h4c_employment_agreement"]["available"] is False
+    assert full["h4c_qsehra"]["note"] == "not in the library yet"
+    assert full["h4c_simple_ira"]["note"] == "not in the library yet"
+    assert full["pa_standard_application"]["available"] is True
+    assert full["h4c_pa_clearances"]["available"] is True
+    assert "pa_clearances_info" not in full
     assert "irs_w4" not in full
     assert "h4c_welcome_template" not in full
+    licensed = packet_catalog("full-time", True, "Clinician", "LCSW")
+    assert all(row["form_key"] != "h4c_supervision_agreement" for row in licensed)
     part = packet_catalog("part-time", False, "Coordinator")
     keys = [row["form_key"] for row in part]
     assert "h4c_qsehra" not in keys
     assert "h4c_simple_ira" not in keys
-    assert "pa_clearances_info" not in keys
+    assert "h4c_pa_clearances" not in keys
     assert "pa_standard_application" not in keys
 
 
 def test_handoff_records_the_packet_and_does_not_send(monkeypatch) -> None:
     hire_id = _hire(monkeypatch)
-    blocked = client.post(f"/hiring/hires/{hire_id}/handoff", headers=_alice(), json={"form_keys": ["h4c_hipaa_nda"]})
-    assert blocked.status_code == 409
-    _invite(hire_id)
+    empty = client.post(f"/hiring/hires/{hire_id}/handoff", headers=_alice(), json={"form_keys": []})
+    assert empty.status_code == 400
     missing = client.post(
         f"/hiring/hires/{hire_id}/handoff",
         headers=_alice(),
         json={"form_keys": ["h4c_employment_agreement"]},
     )
     assert missing.status_code == 400
-    _invite(hire_id)
     handed = client.post(
         f"/hiring/hires/{hire_id}/handoff",
         headers=_alice(),
@@ -217,7 +222,9 @@ def test_override_redirects_both_messages_without_pay(monkeypatch) -> None:
     assert "$55" not in staff["text"] and "$55" not in staff["html"]
     assert "$250" not in staff["text"]
     assert "jordan.example@" not in staff["text"]
+    assert "QuickBooks" not in staff["text"]
     candidate = next(item for item in sent if item is not staff)
+    assert "within 90 days" in candidate["text"]
     assert candidate["attachments"]
     assert all(name.endswith(".pdf") for name, _mime, _data in candidate["attachments"])
     assert "$45" not in candidate["text"] and "$45" not in candidate["html"]
@@ -226,6 +233,102 @@ def test_override_redirects_both_messages_without_pay(monkeypatch) -> None:
         headers=_alice(),
         json={"staff_handoff_emails_enabled": False, "candidate_emails_enabled": False, "wizard_email_override": ""},
     )
+
+
+def test_quickbooks_invite_is_separate_from_handoff(monkeypatch) -> None:
+    far_id = _hire(
+        monkeypatch,
+        personal_email="far.sample@example.com",
+        display_name="Far Sample",
+        candidate_full_name="Far Sample",
+        candidate_first_name="Far",
+        start_date="06/01/2027",
+        response_deadline="06/01/2027",
+        direct_client_access=False,
+    )
+    near_id = _hire(
+        monkeypatch,
+        personal_email="near.sample@example.com",
+        display_name="Near Sample",
+        candidate_full_name="Near Sample",
+        candidate_first_name="Near",
+        start_date="11/18/2026",
+        response_deadline="12/01/2026",
+        direct_client_access=False,
+    )
+    access_store.set_assignment("practice-a", "casey.example@example.com", "billing")
+    hires = {item["id"]: item for item in client.get("/hiring/bootstrap", headers=_alice()).json()["hires"]}
+    assert hires[far_id]["qb_invite_ready"] is False
+    assert hires[far_id]["qb_invite_available_on"] == "2027-03-03"
+    assert hires[near_id]["qb_invite_ready"] is True
+    too_soon = client.post(f"/hiring/hires/{far_id}/qb-invite", headers=_alice(), json={"sent": True})
+    assert too_soon.status_code == 409
+    assert "90 days" in too_soon.json()["detail"]
+    handed = client.post(f"/hiring/hires/{far_id}/handoff", headers=_alice(), json={"form_keys": ["h4c_hipaa_nda"]})
+    assert handed.status_code == 200, handed.text
+    assert handed.json()["owner"] == "billing"
+    assert not handed.json()["qb_invite_at"]
+    waiting = client.post(
+        f"/hiring/hires/{near_id}/activate",
+        headers=_alice(),
+        json={"work_email": "near.sample@example.com"},
+    )
+    assert waiting.status_code == 409
+    assert waiting.json()["detail"] == "Waiting on Admin: QuickBooks invite"
+    home = client.get("/home", headers=_alice()).json()
+    titles = [item["title"] for band in ("overdue", "this_week") for item in home["bands"][band]]
+    assert "Near Sample: send the QuickBooks Workforce invite" in titles
+    assert "Far Sample: send the QuickBooks Workforce invite" not in titles
+    billing_home = client.get("/home", headers=_bill()).json()
+    billing_titles = [item["title"] for band in ("overdue", "this_week") for item in billing_home["bands"][band]]
+    assert all("QuickBooks" not in title for title in billing_titles)
+    billing_items = client.get("/billing", headers=_bill()).json()["action_items"]
+    assert all("QuickBooks" not in item["title"] for item in billing_items)
+    assert client.post(f"/hiring/hires/{near_id}/qb-invite", headers=_bill(), json={"sent": True}).status_code == 403
+    marked = client.post(f"/hiring/hires/{near_id}/qb-invite", headers=_alice(), json={"sent": True})
+    assert marked.status_code == 200, marked.text
+    cleared = client.get("/home", headers=_alice()).json()
+    cleared_titles = [item["title"] for band in ("overdue", "this_week") for item in cleared["bands"][band]]
+    assert "Near Sample: send the QuickBooks Workforce invite" not in cleared_titles
+    page = open("app/static/hiring.js", encoding="utf-8").read()
+    assert page.index('if (data.viewer === "billing")') < page.index("renderQuickBooksTask(card, hire);")
+    assert "Waiting on Admin: QuickBooks invite" in page
+    client.post(f"/hiring/hires/{far_id}/delete", headers=_alice(), json={"confirm": "Far Sample"})
+    client.post(f"/hiring/hires/{near_id}/delete", headers=_alice(), json={"confirm": "Near Sample"})
+
+
+def test_library_pdfs_round_trip_form_fields() -> None:
+    from pypdf import PdfReader, PdfWriter
+
+    base = "app/hiring/assets/forms"
+    expected = {
+        "h4c_employee_info.pdf": {"employee_signature", "signature_date", "attach_resume"},
+        "h4c_hipaa.pdf": {"employee_signature", "printed_name"},
+        "h4c_packet.pdf": {"employee_signature", "hipaa_signature", "before_day_forms"},
+        "h4c_pa_clearances.pdf": {"employee_name", "date_received"},
+    }
+    for name, needed in expected.items():
+        reader = PdfReader(f"{base}/{name}")
+        fields = reader.get_fields() or {}
+        assert needed <= set(fields), name
+    standard = PdfReader(f"{base}/pa_standard_application.pdf")
+    assert len(standard.pages) == 10
+    assert len(standard.get_fields() or {}) > 50
+    reader = PdfReader(f"{base}/h4c_pa_clearances.pdf")
+    writer = PdfWriter()
+    writer.append(reader)
+    writer.update_page_form_field_values(
+        writer.pages[0],
+        {"employee_name": "Riley Sample", "date_received": "12/08/2026"},
+        auto_regenerate=False,
+    )
+    import io
+
+    buffer = io.BytesIO()
+    writer.write(buffer)
+    again = PdfReader(io.BytesIO(buffer.getvalue())).get_fields() or {}
+    assert str(again["employee_name"].get("/V")) == "Riley Sample"
+    assert str(again["date_received"].get("/V")) == "12/08/2026"
 
 
 def test_billing_sees_only_the_handoff_and_cannot_open_pay_or_i9(monkeypatch) -> None:
@@ -396,9 +499,9 @@ def test_handoff_todo_shows_on_home_and_billing_and_recall_removes_it(monkeypatc
     assert handed.status_code == 200, handed.text
     home = client.get("/home", headers=_alice()).json()
     titles = [item["title"] for band in ("overdue", "this_week") for item in home["bands"][band]]
-    assert "Riley Sample: confirm QuickBooks onboarding and file the PA new-hire report" in titles
+    assert "Riley Sample: file the PA new-hire report and schedule the I-9" in titles
     overdue = [item["title"] for item in home["bands"]["overdue"]]
-    assert "Riley Sample: confirm QuickBooks onboarding and file the PA new-hire report" not in overdue
+    assert "Riley Sample: file the PA new-hire report and schedule the I-9" not in overdue
     match = next(item for band in ("overdue", "this_week") for item in home["bands"][band] if hire_id in item["href"])
     assert match["href"] == f"/#hiring?hire={hire_id}"
     assert match["owner_user_id"] == "billing"
@@ -416,14 +519,15 @@ def test_handoff_todo_shows_on_home_and_billing_and_recall_removes_it(monkeypatc
     section = next(item for item in dated.json()["items"] if item["template_key"] == "i9_section2")
     assert section["dates"]["i9_completed_on"] == "2026-12-01"
     assert section["dates"]["i9_section2_completed_on"] == "2026-12-01"
-    payroll = client.post(
-        f"/hiring/hires/{hire_id}/items/payroll_w4_dd",
+    report = client.post(
+        f"/hiring/hires/{hire_id}/items/pa_new_hire_report",
         headers=_alice(),
-        json={"status": "open", "dates": {"w4_received_on": "2026-12-02", "direct_deposit_received_on": "2026-12-03"}},
+        json={"status": "done", "dates": {"pa_new_hire_filed_on": "2026-12-02"}},
     )
-    assert payroll.json()["items"]
-    item = next(row for row in payroll.json()["items"] if row["template_key"] == "payroll_w4_dd")
+    assert report.status_code == 200, report.text
+    item = next(row for row in report.json()["items"] if row["template_key"] == "pa_new_hire_report")
     assert item["status"] == "done"
+    assert all(row["template_key"] != "payroll_w4_dd" for row in report.json()["items"])
     recalled = client.post(f"/hiring/hires/{hire_id}/recall", headers=_alice())
     assert recalled.status_code == 200
     assert all(item.source_ref != hire_id + ":packet" for item in due_engine.list_open("practice-a"))
@@ -847,10 +951,18 @@ def test_saved_w4_steps_are_rewritten_without_replacing_other_lines() -> None:
         "Review the attached new-hire packet, including the W-4, and complete each form.",
         OLD_CANDIDATE_INVITE_STEP,
     ]
+    assert "within 90 days" in migrated
     assert "do_not_reply@intuit.com" in migrated
     assert "Keep this custom closing step." in migrated
     assert "{packet_list}" in migrated
     staff, staff_changed = migrate_wizard_steps("staff", OLD_STAFF_SETUP_STEP + "\nFile the Pennsylvania new-hire report.")
     assert staff_changed == [OLD_STAFF_SETUP_STEP]
-    assert staff.startswith("Confirm the hire completed QuickBooks Workforce self-onboarding")
-    assert "File the Pennsylvania new-hire report." in staff
+    assert staff.startswith("File the Pennsylvania new-hire report.")
+    assert "QuickBooks" not in staff
+    dropped, removed = migrate_wizard_steps(
+        "staff",
+        "Confirm the hire completed QuickBooks Workforce self-onboarding (W-4 and direct deposit).\nFile the Pennsylvania new-hire report.",
+    )
+    assert removed == ["Confirm the hire completed QuickBooks Workforce self-onboarding (W-4 and direct deposit)."]
+    assert dropped.startswith("File the Pennsylvania new-hire report.")
+    assert "QuickBooks" not in dropped

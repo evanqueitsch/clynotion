@@ -468,6 +468,88 @@
     return block;
   }
 
+  function monthDayYear(iso) {
+    const day = String(iso || "").slice(0, 10);
+    const parts = day.split("-");
+    if (parts.length !== 3) return day;
+    return parts[1] + "/" + parts[2] + "/" + parts[0];
+  }
+
+  function renderQuickBooksTask(card, hire) {
+    const block = document.createElement("div");
+    block.className = "qb-invite";
+    const heading = document.createElement("h4");
+    heading.textContent = "QuickBooks Workforce invite";
+    block.appendChild(heading);
+    const note = document.createElement("p");
+    note.className = "meta";
+    note.textContent = "Admin only. QuickBooks can add the hire once the start date is within 90 days. Billing does not see this task.";
+    block.appendChild(note);
+    const copies = [
+      ["First name", hire.first_name || ""],
+      ["Last name", hire.last_name || ""],
+      ["Hire date", hire.start_date || ""],
+      ["Email", hire.personal_email || ""],
+    ];
+    copies.forEach(function (pair) {
+      const row = document.createElement("div");
+      row.className = "row";
+      const label = document.createElement("span");
+      label.textContent = pair[0] + ": " + (pair[1] || "—");
+      const copy = document.createElement("button");
+      copy.type = "button";
+      copy.className = "ghost";
+      copy.textContent = "Copy " + pair[0].toLowerCase();
+      copy.onclick = function () {
+        const value = pair[1] || "";
+        const original = copy.textContent;
+        const showCopied = function () {
+          copy.textContent = "Copied";
+          window.setTimeout(function () { copy.textContent = original; }, 1200);
+        };
+        if (navigator.clipboard && navigator.clipboard.writeText) {
+          navigator.clipboard.writeText(value).then(showCopied).catch(showCopied);
+          return;
+        }
+        showCopied();
+      };
+      row.appendChild(label);
+      row.appendChild(copy);
+      block.appendChild(row);
+    });
+    const ready = !!hire.qb_invite_ready;
+    const inviteLabel = document.createElement("label");
+    const invite = document.createElement("input");
+    invite.type = "checkbox";
+    invite.className = "qb-invite-sent";
+    invite.checked = !!hire.qb_invite_at;
+    invite.disabled = !ready;
+    inviteLabel.appendChild(invite);
+    inviteLabel.appendChild(document.createTextNode(" Invite sent in QuickBooks"));
+    block.appendChild(inviteLabel);
+    const inviteNote = document.createElement("p");
+    inviteNote.className = "meta qb-invite-note";
+    if (!ready) {
+      inviteNote.textContent = "Available on " + monthDayYear(hire.qb_invite_available_on) + " (90 days before start)";
+    } else if (hire.qb_invite_at) {
+      inviteNote.textContent = "Recorded by " + (hire.qb_invite_by || "admin") + " on " + shortDate(hire.qb_invite_at) + ".";
+    } else {
+      inviteNote.textContent = "Send the Employee self-onboard invite in QuickBooks, then check this box.";
+    }
+    block.appendChild(inviteNote);
+    invite.onchange = function () {
+      if (invite.disabled) return;
+      ui()
+        .api("/hiring/hires/" + hire.id + "/qb-invite", { method: "POST", json: { sent: invite.checked } })
+        .then(function (saved) { refreshHire(saved, invite.checked ? "Invite recorded." : "Invite cleared."); })
+        .catch(function (error) {
+          invite.checked = !!hire.qb_invite_at;
+          showStatus((error && error.message) || "Could not record the invite.", "error");
+        });
+    };
+    card.appendChild(block);
+  }
+
   function renderHandoff(card, hire, packetRoot, billingLabel) {
     const block = document.createElement("div");
     const heading = document.createElement("h4");
@@ -483,70 +565,20 @@
     ].filter(Boolean).join(" · ");
     block.appendChild(summary);
     const task = document.createElement("p");
-    task.textContent = "Add to QuickBooks Workforce with Employee self onboard on (name, hire date, email). QuickBooks emails the hire to enter their own W-4 and direct deposit.";
+    task.textContent = "Billing files the PA new-hire report, schedules the I-9, and confirms clearances. The QuickBooks Workforce invite is a separate Admin task and does not block this handoff.";
     block.appendChild(task);
-    const copies = [
-      ["First name", hire.first_name || ""],
-      ["Last name", hire.last_name || ""],
-      ["Hire date", hire.start_date || ""],
-      ["Email", hire.personal_email || ""],
-    ];
-    copies.forEach(function (pair) {
-      const row = document.createElement("div");
-      row.className = "row";
-      const label = document.createElement("span");
-      label.textContent = pair[0] + ": " + (pair[1] || "—");
-      const copy = document.createElement("button");
-      copy.type = "button";
-      copy.className = "ghost";
-        copy.textContent = "Copy " + pair[0].toLowerCase();
-        copy.onclick = function () {
-          const value = pair[1] || "";
-          const label = copy.textContent;
-          const showCopied = function () {
-            copy.textContent = "Copied";
-            window.setTimeout(function () { copy.textContent = label; }, 1200);
-          };
-          if (navigator.clipboard && navigator.clipboard.writeText) {
-            navigator.clipboard.writeText(value).then(showCopied).catch(showCopied);
-            return;
-          }
-          showCopied();
-        };
-      row.appendChild(label);
-      row.appendChild(copy);
-      block.appendChild(row);
-    });
-    const inviteLabel = document.createElement("label");
-    const invite = document.createElement("input");
-    invite.type = "checkbox";
-    invite.checked = !!hire.qb_invite_at;
-    inviteLabel.appendChild(invite);
-    inviteLabel.appendChild(document.createTextNode(" Invite sent in QuickBooks"));
-    block.appendChild(inviteLabel);
-    const inviteNote = document.createElement("p");
-    inviteNote.className = "meta";
-    inviteNote.textContent = hire.qb_invite_at
-      ? "Recorded by " + (hire.qb_invite_by || "admin") + " on " + shortDate(hire.qb_invite_at) + "."
-      : "";
-    block.appendChild(inviteNote);
     const handedOff = hire.owner === "billing" && (hire.stage === "payroll" || hire.stage === "active");
-    const reason = document.createElement("p");
-    reason.className = "meta";
-    reason.textContent = hire.qb_invite_at || handedOff ? "" : "Mark Invite sent in QuickBooks before handing this hire to Billing.";
     const hand = document.createElement("button");
     hand.type = "button";
     hand.className = "primary";
     hand.textContent = handedOff
       ? "Handed off to " + (billingLabel || "Billing") + (hire.handoff_at ? " on " + shortDate(hire.handoff_at) : "")
       : "Hand off to " + (billingLabel || "Billing");
-    hand.disabled = handedOff || !hire.qb_invite_at;
-    invite.onchange = function () {
-      ui()
-        .api("/hiring/hires/" + hire.id + "/qb-invite", { method: "POST", json: { sent: invite.checked } })
-        .then(function (saved) { refreshHire(saved, invite.checked ? "Invite recorded." : "Invite cleared."); })
-        .catch(function (error) { showStatus((error && error.message) || "Could not record the invite.", "error"); });
-    };
+    function syncHand() {
+      hand.disabled = handedOff || checkedPacketKeys(packetRoot).length === 0;
+    }
+    syncHand();
+    packetRoot.addEventListener("change", syncHand);
     hand.onclick = function () {
       if (hand.disabled) return;
       hand.disabled = true;
@@ -561,14 +593,13 @@
           refreshHire(saved, note);
         })
         .catch(function (error) {
-          hand.disabled = handedOff || !hire.qb_invite_at;
+          syncHand();
           hand.textContent = handedOff
             ? "Handed off to " + (billingLabel || "Billing") + (hire.handoff_at ? " on " + shortDate(hire.handoff_at) : "")
             : "Hand off to " + (billingLabel || "Billing");
           showStatus((error && error.message) || "Could not hand off.", "error");
         });
     };
-    block.appendChild(reason);
     block.appendChild(hand);
     if (hire.owner === "billing") {
       const recall = document.createElement("button");
@@ -707,24 +738,11 @@
     const heading = document.createElement("h4");
     heading.textContent = "Payroll steps";
     card.appendChild(heading);
-    const payroll = itemByKey(hire, "payroll_w4_dd");
-    const confirm = document.createElement("label");
-    const box = document.createElement("input");
-    box.type = "checkbox";
-    box.checked = payroll.status === "done";
-    confirm.appendChild(box);
-    confirm.appendChild(document.createTextNode(" 1. Confirm the hire finished QuickBooks Workforce self-onboarding (W-4 and direct deposit show complete in QuickBooks Workforce)."));
-    box.onchange = function () {
-      const dates = Object.assign({}, payroll.dates || {});
-      dates.qb_onboarding_confirmed_on = box.checked ? new Date().toISOString().slice(0, 10) : "";
-      postItem(card, hire, "payroll_w4_dd", { status: box.checked ? "done" : "open", dates: dates }, "QuickBooks onboarding saved.");
-    };
-    card.appendChild(confirm);
-    dateStep(card, hire, itemByKey(hire, "pa_new_hire_report"), "2. PA new-hire report filed", "pa_new_hire_filed_on", true);
-    dateStep(card, hire, itemByKey(hire, "i9_section2"), "3. I-9 in-person appointment", "i9_appointment_on", false);
-    dateStep(card, hire, itemByKey(hire, "i9_section2"), "3. I-9 completed", "i9_completed_on", true);
-    dateStep(card, hire, itemByKey(hire, "clearances"), "4. PA clearances received", "clearances_received_on", true);
-    dateStep(card, hire, itemByKey(hire, "exclusion_screening"), "4. Exclusion screening verified", "exclusion_received_on", true);
+    dateStep(card, hire, itemByKey(hire, "pa_new_hire_report"), "1. PA new-hire report filed", "pa_new_hire_filed_on", true);
+    dateStep(card, hire, itemByKey(hire, "i9_section2"), "2. I-9 in-person appointment", "i9_appointment_on", false);
+    dateStep(card, hire, itemByKey(hire, "i9_section2"), "2. I-9 completed", "i9_completed_on", true);
+    dateStep(card, hire, itemByKey(hire, "clearances"), "3. PA clearances received", "clearances_received_on", true);
+    dateStep(card, hire, itemByKey(hire, "exclusion_screening"), "3. Exclusion screening verified", "exclusion_received_on", true);
   }
 
   function render(data, options) {
@@ -1250,11 +1268,12 @@
         const clearances = itemByKey(hire, "clearances");
         const needsClearance = hire.direct_client_access && clearances.status !== "done" && clearances.status !== "n/a";
         const beforeStart = !!(hire.start_date && hire.start_date > easternToday());
+        const waitingQb = !hire.qb_invite_at;
         const activate = document.createElement("button");
         activate.type = "button";
         activate.className = "primary";
         activate.textContent = "Activate";
-        activate.disabled = !!needsClearance || beforeStart;
+        activate.disabled = !!needsClearance || beforeStart || waitingQb;
         if (beforeStart) {
           const why = document.createElement("p");
           why.className = "meta hire-activate-reason";
@@ -1265,6 +1284,12 @@
           const why = document.createElement("p");
           why.className = "meta hire-activate-reason";
           why.textContent = "Mark PA clearances received first";
+          card.appendChild(why);
+        }
+        if (waitingQb) {
+          const why = document.createElement("p");
+          why.className = "meta hire-activate-reason";
+          why.textContent = "Waiting on Admin: QuickBooks invite";
           card.appendChild(why);
         }
         activate.onclick = function () {
@@ -1492,6 +1517,7 @@
       card.appendChild(stepper(wizardSteps(linkedOffer || { id: hire.offer_id, status: "accepted" }, hire)));
       const packetRoot = renderPacketStep(card, hire);
       renderHandoff(card, hire, packetRoot, data.billing_label);
+      renderQuickBooksTask(card, hire);
       renderBillingSteps(card, hire);
       if (hire.i9_drive !== "ready") {
         const pending = document.createElement("p");
@@ -1520,6 +1546,7 @@
       };
       card.appendChild(copy);
       (hire.items || []).forEach(function (item) {
+        if (item.template_key === "payroll_w4_dd") return;
         const row = document.createElement("div");
         row.className = "hire-item" + (item.warning ? " late" : "");
         row.dataset.item = item.template_key;
@@ -1583,11 +1610,12 @@
         const clearances = (hire.items || []).filter(function (item) { return item.template_key === "clearances"; })[0];
         const needsClearance = hire.direct_client_access && clearances && clearances.status !== "done" && clearances.status !== "n/a";
         const beforeStart = !!(hire.start_date && hire.start_date > easternToday());
+        const waitingQb = !hire.qb_invite_at;
         const activate = document.createElement("button");
         activate.type = "button";
         activate.className = "primary";
         activate.textContent = "Activate";
-        activate.disabled = !!needsClearance || beforeStart;
+        activate.disabled = !!needsClearance || beforeStart || waitingQb;
         if (beforeStart) {
           const why = document.createElement("p");
           why.className = "meta";
@@ -1598,6 +1626,12 @@
           const why = document.createElement("p");
           why.className = "meta";
           why.textContent = "Mark PA clearances received first";
+          card.appendChild(why);
+        }
+        if (waitingQb) {
+          const why = document.createElement("p");
+          why.className = "meta";
+          why.textContent = "Waiting on Admin: QuickBooks invite";
           card.appendChild(why);
         }
         activate.onclick = function () {

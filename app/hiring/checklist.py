@@ -23,7 +23,6 @@ ITEMS: tuple[dict[str, Any], ...] = (
     {"key": "packet_signed", "stage": 2, "owner": "candidate", "title": "Employee information and HIPAA acknowledgment", "kind": "upload"},
     {"key": "agreements_signed", "stage": 2, "owner": "candidate", "title": "Employment agreement, non-solicitation, and handbook", "kind": "blocked"},
     {"key": "supervision_agreement", "stage": 2, "owner": "practice_owner", "title": "Clinical supervision agreement", "kind": "blocked"},
-    {"key": "payroll_w4_dd", "stage": 2, "owner": "billing", "title": "Confirm QuickBooks Workforce self-onboarding (W-4 and direct deposit)", "kind": "payroll"},
     {"key": "residency_cert", "stage": 2, "owner": "candidate", "title": "PA residency certification", "kind": "status"},
     {"key": "rev_419", "stage": 2, "owner": "candidate", "title": "REV-419 when an exemption applies", "kind": "status"},
     {"key": "i9_section1", "stage": 2, "owner": "candidate", "title": "I-9 Section 1", "kind": "i9"},
@@ -48,10 +47,9 @@ ITEMS: tuple[dict[str, Any], ...] = (
     {"key": "benefits", "stage": 4, "owner": "admin", "title": "QSEHRA and SIMPLE IRA", "kind": "status"},
 )
 
-PAYROLL_KEYS = frozenset({"payroll_w4_dd", "pa_new_hire_report"})
+PAYROLL_KEYS = frozenset({"pa_new_hire_report"})
 BILLING_STEP_KEYS = frozenset(
     {
-        "payroll_w4_dd",
         "pa_new_hire_report",
         "i9_section2",
         "clearances",
