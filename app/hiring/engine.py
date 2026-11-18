@@ -228,6 +228,22 @@ def _today() -> date:
     return datetime.now(EASTERN).date()
 
 
+def qb_invite_window(start: date, today: date | None = None) -> tuple[date, bool]:
+    """QuickBooks accepts a new hire only within 90 days of the start date."""
+    available = start - timedelta(days=90)
+    return available, (today or _today()) >= available
+
+
+def _qb_public(hire: dict[str, Any]) -> tuple[str, bool]:
+    raw = str(hire.get("start_date") or "")
+    try:
+        start = parse_iso(raw)
+    except (TypeError, ValueError):
+        return "", False
+    available, ready = qb_invite_window(start)
+    return available.isoformat(), ready
+
+
 def _new_id(prefix: str) -> str:
     return prefix + uuid.uuid4().hex[:12]
 
@@ -352,8 +368,21 @@ class HiringEngine:
     def _ensure_forms(self, row: dict[str, Any]) -> None:
         library = row.setdefault("forms_library", {})
         today = to_iso(_today())
+        synced = ("title", "publisher", "edition", "expires_on", "source_url", "filename", "applies_to")
         for spec in FORMS:
-            if any(item.get("form_key") == spec["form_key"] and not item.get("retired_at") for item in library.values()):
+            existing = next(
+                (
+                    item
+                    for item in library.values()
+                    if item.get("form_key") == spec["form_key"] and not item.get("retired_at")
+                ),
+                None,
+            )
+            if existing:
+                for field in synced:
+                    value = spec.get(field) or ""
+                    if value and existing.get(field) != value:
+                        existing[field] = value
                 continue
             library[_new_id("form-")] = {
                 "id": "",
@@ -1732,23 +1761,29 @@ class HiringEngine:
             "handoff_at": hire.get("handoff_at") or "",
             "qb_invite_at": hire.get("qb_invite_at") or "",
             "qb_invite_by": hire.get("qb_invite_by") or "",
+            "qb_invite_available_on": _qb_public(hire)[0],
+            "qb_invite_ready": _qb_public(hire)[1],
             "first_name": first_name,
             "last_name": last_name,
             "personal_email": candidate.get("personal_email") or "",
             "created_on": hire.get("created_on") or "",
             "packet_form_keys": list(hire.get("packet_form_keys") or []),
-            "packet_choices": self._packet_choices(hire),
+            "packet_choices": self._packet_choices(row, hire),
             "staff_email_status": hire.get("staff_email_status") or "",
             "candidate_email_status": hire.get("candidate_email_status") or "",
             "welcome": _welcome_text(candidate.get("display_name") or "", hire),
             "items": [self._item_public(row, item) for item in items],
         }
 
-    def _packet_choices(self, hire: dict[str, Any]) -> list[dict[str, Any]]:
+    def _packet_choices(self, row: dict[str, Any], hire: dict[str, Any]) -> list[dict[str, Any]]:
+        offer = (row.get("offers") or {}).get(hire.get("offer_id") or "") or {}
+        version = (row.get("offer_versions") or {}).get(offer.get("current_version_id") or "") or {}
+        credentials = str((version.get("field_values") or {}).get("candidate_credentials") or "")
         return packet_catalog(
             str(hire.get("employment_type") or ""),
             bool(hire.get("direct_client_access")),
             str(hire.get("position") or ""),
+            credentials,
         )
 
     @staticmethod
@@ -1930,9 +1965,7 @@ class HiringEngine:
                 public = self._hire_public(row, hire)
                 public["notice"] = "already handed off"
                 return public
-            if not str(hire.get("qb_invite_at") or "").strip():
-                raise HiringError(409, "Mark Invite sent in QuickBooks before handing this hire to Billing.")
-            choices = {str(item["form_key"]): item for item in self._packet_choices(hire)}
+            choices = {str(item["form_key"]): item for item in self._packet_choices(row, hire)}
             selected: list[str] = []
             for key in form_keys:
                 text = str(key or "").strip()
@@ -1942,6 +1975,8 @@ class HiringEngine:
                 if not choice or not choice.get("available"):
                     raise HiringError(400, "That form is not in the library yet.")
                 selected.append(text)
+            if not selected:
+                raise HiringError(400, "Choose the packet documents before handing this hire to Billing.")
             hire["packet_form_keys"] = selected
             hire["stage"] = "payroll"
             hire["owner"] = "billing"
@@ -1979,6 +2014,9 @@ class HiringEngine:
             hire = row["hires"].get(hire_id)
             if not hire or hire.get("status") == "archived":
                 raise HiringError(404, "Hire not found.")
+            available, ready = _qb_public(hire)
+            if sent and not ready:
+                raise HiringError(409, f"Available on {available} (90 days before start).")
             if sent:
                 if not hire.get("qb_invite_at"):
                     hire["qb_invite_at"] = _iso()
@@ -1987,8 +2025,18 @@ class HiringEngine:
                 hire["qb_invite_at"] = ""
                 hire["qb_invite_by"] = ""
             self._history(row, "hire", hire_id, "qb_invite", actor, "QuickBooks invite recorded" if sent else "QuickBooks invite cleared")
+            self._sync_qb_todo(practice_id, row, hire)
             self._save(payload)
             return self._hire_public(row, hire)
+
+    def sync_qb_invites(self, practice_id: str) -> None:
+        """Refresh Admin Home to-dos. Does not write hire records."""
+        with _lock:
+            row = self._practice(self._read(), practice_id)
+            for hire in row["hires"].values():
+                if hire.get("status") == "archived":
+                    continue
+                self._sync_qb_todo(practice_id, row, hire)
 
     def _send_handoff_mail(self, practice_id: str, row: dict[str, Any], hire: dict[str, Any], actor: str) -> None:
         settings = row["settings"]
@@ -2323,7 +2371,7 @@ class HiringEngine:
             hire = row["hires"].get(hire_id)
             if not hire:
                 raise HiringError(404, "Hire not found.")
-            choices = {str(item["form_key"]): item for item in self._packet_choices(hire)}
+            choices = {str(item["form_key"]): item for item in self._packet_choices(row, hire)}
             library = {str(item.get("form_key") or ""): item for item in row["forms_library"].values()}
             names: list[tuple[str, bytes]] = []
             for key in form_keys:
@@ -2347,6 +2395,33 @@ class HiringEngine:
         safe = "".join(ch if ch.isalnum() else "_" for ch in label).strip("_") or "packet"
         return buffer.getvalue(), f"{safe}_packet.zip"
 
+    def _sync_qb_todo(self, practice_id: str, row: dict[str, Any], hire: dict[str, Any]) -> None:
+        from app.platform.due import due_engine
+
+        hire_id = str(hire.get("id") or "")
+        source_ref = hire_id + ":qb"
+        available, ready = _qb_public(hire)
+        if hire.get("qb_invite_at") or not ready:
+            due_engine.complete(practice_id=practice_id, source="hiring-qb", source_ref=source_ref)
+            return
+        candidate = row["candidates"].get(hire.get("candidate_id") or "") or {}
+        name = str(candidate.get("display_name") or "New hire")
+        due_day = parse_iso(available)
+        if due_day < _today():
+            due_day = _today()
+        due_at = datetime(due_day.year, due_day.month, due_day.day, 23, 59, 59, tzinfo=EASTERN).isoformat()
+        due_engine.upsert(
+            practice_id=practice_id,
+            domain="people",
+            source="hiring-qb",
+            title=f"{name}: send the QuickBooks Workforce invite",
+            owner_user_id="admin",
+            due_at=due_at,
+            href=f"/#hiring?hire={hire_id}",
+            source_ref=source_ref,
+            status="open",
+        )
+
     def _payroll_todo(self, practice_id: str, row: dict[str, Any], hire: dict[str, Any]) -> None:
         from app.platform.due import due_engine
 
@@ -2362,7 +2437,7 @@ class HiringEngine:
             practice_id=practice_id,
             domain="books",
             source="hiring-payroll",
-            title=f"{name}: confirm QuickBooks onboarding and file the PA new-hire report",
+            title=f"{name}: file the PA new-hire report and schedule the I-9",
             owner_user_id="billing",
             due_at=due_at,
             href=f"/#hiring?hire={hire.get('id') or ''}",
@@ -2464,6 +2539,8 @@ class HiringEngine:
                 )
                 if not clearance or clearance.get("status") != "done":
                     raise HiringError(409, "PA clearances have to be marked received before activation.")
+            if not str(hire.get("qb_invite_at") or "").strip():
+                raise HiringError(409, "Waiting on Admin: QuickBooks invite")
             candidate = row["candidates"][hire["candidate_id"]]
             email = (work_email or candidate.get("personal_email") or "").strip().lower()
             if not EMAIL_RX.match(email):
@@ -2484,6 +2561,9 @@ class HiringEngine:
                     item["done_at"] = _iso()
                     item["done_by"] = actor
             self._history(row, "hire", hire_id, "activated", actor, "Hire activated")
+            from app.platform.due import due_engine
+
+            due_engine.complete(practice_id=practice_id, source="hiring-qb", source_ref=hire_id + ":qb")
             self._save(payload)
             return self._hire_public(row, hire)
 
@@ -2530,6 +2610,7 @@ class HiringEngine:
             employees_store.remove_created_by_hire(practice_id, hire_id)
             due_engine.complete(practice_id=practice_id, source="hiring-payroll", source_ref=hire_id)
             due_engine.complete(practice_id=practice_id, source="hiring-payroll", source_ref=hire_id + ":packet")
+            due_engine.complete(practice_id=practice_id, source="hiring-qb", source_ref=hire_id + ":qb")
             self._history(row, "hire", hire_id, "deleted", actor, "Hire deleted")
             self._save(payload)
 

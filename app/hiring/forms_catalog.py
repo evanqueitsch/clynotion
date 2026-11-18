@@ -111,12 +111,12 @@ FORMS: tuple[dict[str, str], ...] = (
     {
         "form_key": "pa_standard_application",
         "title": "PA Standard Application",
-        "publisher": "Pennsylvania",
+        "publisher": "Keystone First",
         "edition": "12/06",
         "expires_on": "",
-        "source_url": "",
-        "filename": "",
-        "applies_to": "credentialing handoff, file not shipped",
+        "source_url": "https://www.keystonefirstpa.com/provider/credentialing/paper",
+        "filename": "pa_standard_application.pdf",
+        "applies_to": "credentialing handoff, direct client access",
     },
     {
         "form_key": "h4c_employment_agreement",
@@ -130,7 +130,7 @@ FORMS: tuple[dict[str, str], ...] = (
     },
     {
         "form_key": "h4c_confidentiality",
-        "title": "Confidentiality and non-solicitation",
+        "title": "Confidentiality, non-competition and non-solicitation",
         "publisher": "H4C",
         "edition": "",
         "expires_on": "",
@@ -169,26 +169,34 @@ FORMS: tuple[dict[str, str], ...] = (
         "applies_to": "full-time benefits, file not shipped",
     },
     {
-        "form_key": "pa_clearances_info",
+        "form_key": "h4c_pa_clearances",
         "title": "PA clearances",
-        "publisher": "Pennsylvania",
-        "edition": "",
+        "publisher": "H4C",
+        "edition": "2026-11",
         "expires_on": "",
-        "source_url": "",
-        "filename": "",
-        "applies_to": "client-facing roles, file not shipped",
+        "source_url": "https://www.pa.gov/agencies/dhs/resources/keep-kids-safe/child-abuse-clearances",
+        "filename": "h4c_pa_clearances.pdf",
+        "applies_to": "client-facing roles",
     },
 )
 
 BENEFIT_KEYS = frozenset({"h4c_qsehra", "h4c_simple_ira"})
-CLIENT_KEYS = frozenset({"pa_standard_application", "pa_clearances_info"})
+CLIENT_KEYS = frozenset({"pa_standard_application", "h4c_pa_clearances"})
 OPTIONAL_KEYS = frozenset({"pa_rev_419"})
 
 
-def packet_catalog(employment_type: str, direct_client_access: bool, position: str) -> list[dict[str, str | bool]]:
+def packet_catalog(
+    employment_type: str,
+    direct_client_access: bool,
+    position: str,
+    credentials: str = "",
+) -> list[dict[str, str | bool]]:
     """Forms for the packet step. Missing files stay visible and cannot be selected."""
+    from app.hiring.checklist import supervision_required
+
     rows: list[dict[str, str | bool]] = []
     clinical = "lsw" in (position or "").casefold() or "clinician" in (position or "").casefold()
+    supervised = clinical and supervision_required(credentials)
     for spec in FORMS:
         key = spec["form_key"]
         if key in {"irs_w4", "h4c_welcome_template"}:
@@ -197,7 +205,7 @@ def packet_catalog(employment_type: str, direct_client_access: bool, position: s
             continue
         if key in CLIENT_KEYS and not direct_client_access:
             continue
-        if key == "h4c_supervision_agreement" and not clinical:
+        if key == "h4c_supervision_agreement" and not supervised:
             continue
         available = bool(spec.get("filename"))
         rows.append(
