@@ -31,7 +31,7 @@ A stored schedule that is still the old Thursday 9:00 / Friday 8:00 / Friday 11:
 
 Employees can enter only while that prior week is open: from the Saturday after the workweek Friday until the Thursday cutoff. They cannot enter the week that is still in progress. After cutoff the week is read-only except for Melissa.
 
-Melissa’s Thursday 11:30 email is a short reminder with a link to that exact payroll week (`#time-admin?week=YYYY-MM-DD&v=2`). The dashboard is the source of truth. The email does not include the pay table or a CSV. The dashboard can still download a CSV.
+Melissa’s Thursday 11:30 email links to that exact payroll week (`#time-admin?week=YYYY-MM-DD&v=2`) and includes a snapshot taken at send time: everyone enabled for that week, grouped as submitted (hours and the Eastern submitted date) or not yet submitted, plus a count such as “7 of 9 submitted.” The dashboard remains the source of truth and can still download a CSV. The email does not attach one.
 
 Scheduled reminders stay off until an HR admin checks **Send scheduled reminders** on the settings screen. Turning that on does not send reminders whose minute has already passed. It uses the connected operations mailbox, not `TIME_MAIL_MODE`. `TIME_MAIL_MODE` remains off so the old service-account path does not send. The self-test Send buttons are separate and still send only when pressed.
 
@@ -72,7 +72,7 @@ Decimal hours are the payable minutes divided by 60, two places.
 
 HR admins and Melissa can open the week, sorted by name: employee, raw total, rounded payable total, decimal hours, and the missing list. CSV download uses the same rows. Missing cells are blank, not `0`. Names that start with `=`, `+`, `-`, `@`, or a tab are prefixed with a quote so a spreadsheet does not treat them as formulas.
 
-The summary email goes to the recipient snapshotted at lock (default `msmith@heart4change.org`), with the same figures, the missing list, the CSV attached, and `https://clynotion.com/#time-admin?week=YYYY-MM-DD`.
+The summary email goes to the recipient snapshotted at lock (default `msmith@heart4change.org`), with the same figures in the styled snapshot, and `https://clynotion.com/#time-admin?week=YYYY-MM-DD`. An Admin can send a test copy of each hours email to `operations@heart4change.org` only, with `[TEST]` on the subject. Sample names are Riley Sample and Jordan Example. That test does not run the scheduler and does not change who is enabled.
 
 Preview and “Preview reminders” render that copy and return `sent: false`. They do not call the mailer.
 

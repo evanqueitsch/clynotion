@@ -47,6 +47,11 @@ class SettingsBody(BaseModel):
     automation_enabled: bool = False
 
 
+class HoursEmailTestBody(BaseModel):
+    kind: str
+    sample: bool = True
+
+
 class ReminderPreviewBody(BaseModel):
     slot: str
     week_ending: str = ""
@@ -178,6 +183,38 @@ def time_self_test_send(user: CurrentUser, body: SelfTestSendBody) -> dict:
             "error": send.get("last_error") or "",
             "gmail_message_id": send.get("gmail_message_id") or "",
             "duplicate": bool(send.get("duplicate")),
+        },
+        flush=True,
+    )
+    return result
+
+
+@router.post("/hr/time/settings/email-test/preview")
+def time_settings_email_test_preview(user: CurrentUser, body: HoursEmailTestBody) -> dict:
+    """Render a test copy. Does not send and does not run the scheduler."""
+    return _call(lambda: time_store.preview_hours_email(user, body.kind, sample=body.sample))
+
+
+@router.post("/hr/time/settings/email-test/send")
+def time_settings_email_test_send(user: CurrentUser, body: HoursEmailTestBody) -> dict:
+    """Send one test copy to operations@ only. Does not email staff or Melissa."""
+    from app.hr.gmail_oauth import deliver_self_test_message
+
+    result = _call(
+        lambda: time_store.send_hours_email_test(
+            user,
+            body.kind,
+            lambda message: deliver_self_test_message(user.practice_id, message),
+            sample=body.sample,
+        )
+    )
+    print(
+        "hours_email_test",
+        {
+            "kind": result.get("kind") or body.kind,
+            "sample": bool(result.get("sample")),
+            "status": result.get("status") or "",
+            "error": result.get("last_error") or "",
         },
         flush=True,
     )
