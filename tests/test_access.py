@@ -14,7 +14,7 @@ from app.access.store import access_store
 from app.auth import User, issue_token, user_store
 from app.hr.time_entry import set_clock
 from tests.test_time_entry import (
-    FRI_1130,
+    WED,
     WEEK,
     _alice,
     _enter,
@@ -151,7 +151,7 @@ def test_no_role_sees_no_product_and_cannot_call_apis(client: TestClient) -> Non
 
 def test_time_entry_role_still_requires_the_hours_checklist(client: TestClient) -> None:
     _roster()
-    set_clock(datetime(2026, 3, 18, 14, 0, tzinfo=timezone.utc))
+    set_clock(WED)
     _save_settings(client, participant_emails=["sam@heart4change.org"])
     blocked = _enter(client, _jordan(), 2, 0)
     assert blocked.status_code == 403
@@ -172,10 +172,10 @@ def test_time_entry_role_still_requires_the_hours_checklist(client: TestClient) 
 
 def test_melissa_keeps_payroll_without_admin_and_admin_cannot_correct(client: TestClient) -> None:
     _roster()
-    set_clock(datetime(2026, 3, 18, 14, 0, tzinfo=timezone.utc))
+    set_clock(WED)
     _save_settings(client, participant_emails=["jordan@heart4change.org"])
     submission = _enter(client, _jordan(), 3, 0).json()["submission_id"]
-    set_clock(FRI_1130)
+    set_clock(datetime(2026, 11, 21, 17, 0, tzinfo=timezone.utc))
     client.get(f"/hr/time/week?week_ending={WEEK}", headers=_alice())
     admin_fix = client.patch(
         f"/hr/time/entries/{submission}",

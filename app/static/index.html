@@ -1090,20 +1090,10 @@
       <span class="section-label">Who may enter hours</span>
       <p class="meta">Unchecked people are not enabled. A directory account is not an admin and is not enabled until you save it. You can enable yourself.</p>
       <div id="time-roster"></div>
-      <label for="time-rem1-day">First reminder day</label>
-      <select id="time-rem1-day"></select>
-      <label for="time-rem1-time">First reminder time</label>
-      <input id="time-rem1-time" type="time" step="60" />
-      <p class="meta" id="time-rem1-subject"></p>
-      <label for="time-rem2-day">Day-of reminder day</label>
-      <select id="time-rem2-day"></select>
-      <label for="time-rem2-time">Day-of reminder time</label>
-      <input id="time-rem2-time" type="time" step="60" />
-      <p class="meta" id="time-rem2-subject"></p>
-      <label for="time-lock-day">Summary and employee cutoff day</label>
-      <select id="time-lock-day"></select>
-      <label for="time-lock-time">Summary and employee cutoff time</label>
-      <input id="time-lock-time" type="time" step="60" />
+      <label for="time-deadline-day">Deadline day</label>
+      <select id="time-deadline-day"></select>
+      <p class="meta">Hours are due at 11:59 PM Eastern on this day. Weekend work stays in the Monday–Friday week. Reminder times are fixed.</p>
+      <p class="meta" id="time-schedule-preview"></p>
       <label for="time-summary-to">Summary recipient</label>
       <input id="time-summary-to" type="email" autocomplete="off" />
       <label><input id="time-automation" type="checkbox" /> Send scheduled reminders and payroll links</label>
@@ -1117,11 +1107,12 @@
       <p class="meta">Preview and the reminder check render the message only. They do not send email.</p>
       <pre class="note hidden" id="time-settings-preview"></pre>
       <span class="section-label">Send a test copy</span>
-      <p class="meta">These three buttons send only to operations@heart4change.org. The subject starts with [TEST]. They do not email staff or Melissa, and they do not run the Wednesday, Thursday, or 11:30 schedule.</p>
+      <p class="meta">These buttons send only to operations@heart4change.org. The subject starts with [TEST]. They do not email staff or Melissa, and they do not run the schedule.</p>
       <label><input id="time-email-test-sample" type="checkbox" checked /> Use sample names (Riley Sample, Jordan Example)</label>
       <div class="row">
-        <button class="ghost" id="btn-time-email-test-first" type="button">Send test first reminder</button>
-        <button class="ghost" id="btn-time-email-test-due" type="button">Send test day-of reminder</button>
+        <button class="ghost" id="btn-time-email-test-heads" type="button">Send test heads-up</button>
+        <button class="ghost" id="btn-time-email-test-due" type="button">Send test due today</button>
+        <button class="ghost" id="btn-time-email-test-overdue" type="button">Send test overdue</button>
         <button class="ghost" id="btn-time-email-test-summary" type="button">Send test summary</button>
       </div>
       <p class="status" id="time-email-test-status" role="status" aria-live="polite"></p>
@@ -1246,7 +1237,7 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.24.4"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.27.1"></script>
+  <script src="/static/hiring.js?v=0.28.0"></script>
   <script>
     const state = {
       token: null,
@@ -1475,9 +1466,9 @@
       if (topRoles && state.accessLoaded) topRoles.classList.toggle("hidden", !admin);
     }
 
-    function fillWeekdaySelect(select) {
+    function fillWeekdaySelect(select, count) {
       if (!select || select.options.length) return;
-      TIME_WEEKDAYS.forEach((name, index) => {
+      TIME_WEEKDAYS.slice(0, count || TIME_WEEKDAYS.length).forEach((name, index) => {
         const opt = document.createElement("option");
         opt.value = String(index);
         opt.textContent = name;
@@ -1639,7 +1630,7 @@
         const data = await api(`/hr/time/week?week_ending=${encodeURIComponent(ending)}&v=${encodeURIComponent(version)}`);
         window.history.replaceState({}, "", `/#time-admin?week=${ending}&v=${version}`);
         const counts = `${data.submitted_count || 0} submitted, ${data.missing_count || 0} missing`;
-        $("time-admin-meta").textContent = `${data.label}. Payroll ${data.payroll_label || data.deadline_label}. ${counts}. ${data.locked ? "Locked." : "Open."} ${data.coverage_note || ""}`;
+        $("time-admin-meta").textContent = `${data.label}. Summary ${data.payroll_label || data.deadline_label}. ${counts}. ${data.locked ? "Locked." : "Open."} ${data.coverage_note || ""}`;
       const root = $("time-admin-rows");
       root.innerHTML = "";
       (data.rows || []).forEach((row) => {
@@ -1780,17 +1771,6 @@
       return `Message: Weekly hours are due by ${day} at ${hour}:${minute} ${suffix}.`;
     }
 
-    function refreshReminderMessages() {
-      const first = $("time-rem1-subject");
-      const second = $("time-rem2-subject");
-      if (first && $("time-rem1-day") && $("time-rem1-time")) {
-        first.textContent = reminderMessage($("time-rem1-day").value, $("time-rem1-time").value);
-      }
-      if (second && $("time-rem2-day") && $("time-rem2-time")) {
-        second.textContent = reminderMessage($("time-rem2-day").value, $("time-rem2-time").value);
-      }
-    }
-
     function settingsPayload() {
       const emails = [];
       document.querySelectorAll("#time-roster input[type=checkbox]:checked").forEach((box) => {
@@ -1799,12 +1779,7 @@
       const trimTime = (value) => (value || "").slice(0, 5);
       return {
         participant_emails: emails,
-        reminder_first_weekday: Number($("time-rem1-day").value),
-        reminder_first_time: trimTime($("time-rem1-time").value),
-        reminder_due_weekday: Number($("time-rem2-day").value),
-        reminder_due_time: trimTime($("time-rem2-time").value),
-        summary_weekday: Number($("time-lock-day").value),
-        summary_time: trimTime($("time-lock-time").value),
+        deadline_weekday: Number($("time-deadline-day").value),
         summary_recipient: $("time-summary-to").value.trim(),
         automation_enabled: !!($("time-automation") && $("time-automation").checked),
       };
@@ -1828,13 +1803,8 @@
         : `Nobody is enabled yet${disabled.length ? `. Not enabled: ${disabled.join(", ")}.` : "."}`;
       $("time-settings-note").textContent = "All times are Eastern.";
       $("time-settings-corrector").textContent = data.corrector_note || "";
-      $("time-rem1-day").value = String(data.reminder_first_weekday);
-      $("time-rem1-time").value = data.reminder_first_time;
-      $("time-rem2-day").value = String(data.reminder_due_weekday);
-      $("time-rem2-time").value = data.reminder_due_time;
-      refreshReminderMessages();
-      $("time-lock-day").value = String(data.summary_weekday);
-      $("time-lock-time").value = data.summary_time;
+      if ($("time-deadline-day")) $("time-deadline-day").value = String(data.deadline_weekday ?? 4);
+      if ($("time-schedule-preview")) $("time-schedule-preview").textContent = data.schedule_preview || "";
       $("time-summary-to").value = data.summary_recipient || "";
       if ($("time-automation")) $("time-automation").checked = !!data.automation_enabled;
       const roster = $("time-roster");
@@ -2047,7 +2017,7 @@
     async function openTimeSettings() {
       show("time-settings-panel");
       window.history.replaceState({}, "", "/#time-settings");
-      ["time-rem1-day", "time-rem2-day", "time-lock-day"].forEach((id) => fillWeekdaySelect($(id)));
+      fillWeekdaySelect($("time-deadline-day"), 5);
       setStatus($("time-settings-status"), "Loading…");
       try {
         const data = await api("/hr/time/settings");
@@ -2075,7 +2045,7 @@
 
     async function sendHoursEmailTest(kind) {
       const sample = !!($("time-email-test-sample") && $("time-email-test-sample").checked);
-      const buttons = ["btn-time-email-test-first", "btn-time-email-test-due", "btn-time-email-test-summary"].map($);
+      const buttons = ["btn-time-email-test-heads", "btn-time-email-test-due", "btn-time-email-test-overdue", "btn-time-email-test-summary"].map($);
       buttons.forEach((button) => { if (button) button.disabled = true; });
       setStatus($("time-email-test-status"), "Sending…");
       try {
@@ -3697,20 +3667,28 @@
     if (btnTimeSettingsHome) btnTimeSettingsHome.onclick = () => enterHome();
     const btnTimeSettingsSave = $("btn-time-settings-save");
     if (btnTimeSettingsSave) btnTimeSettingsSave.onclick = () => { saveTimeSettings(); };
-    ["time-rem1-day", "time-rem1-time", "time-rem2-day", "time-rem2-time"].forEach((id) => {
-      const el = $(id);
-      if (!el) return;
-      el.addEventListener("change", refreshReminderMessages);
-      el.addEventListener("input", refreshReminderMessages);
-    });
+    const deadlineDay = $("time-deadline-day");
+    if (deadlineDay) {
+      deadlineDay.addEventListener("change", () => {
+        const preview = $("time-schedule-preview");
+        if (preview) preview.textContent = localSchedulePreview(Number(deadlineDay.value));
+      });
+    }
+    function localSchedulePreview(deadlineWeekday) {
+      const prev = deadlineWeekday === 0 ? 4 : deadlineWeekday - 1;
+      const next = deadlineWeekday === 4 ? 0 : deadlineWeekday + 1;
+      return `Heads-up ${TIME_WEEKDAYS[prev]} 9:00 AM · Due-today reminder ${TIME_WEEKDAYS[deadlineWeekday]} 8:00 AM · Due ${TIME_WEEKDAYS[deadlineWeekday]} 11:59 PM · Summary ${TIME_WEEKDAYS[next]} 8:00 AM · Weekday overdue reminders at 9:00 AM until submitted, up to 10 business days`;
+    }
     const btnTimePreview = $("btn-time-preview");
     if (btnTimePreview) btnTimePreview.onclick = () => { previewTimeSummary(); };
     const btnTimeTestReminder = $("btn-time-test-reminder");
     if (btnTimeTestReminder) btnTimeTestReminder.onclick = () => { previewTimeReminders(); };
-    const btnHoursTestFirst = $("btn-time-email-test-first");
-    if (btnHoursTestFirst) btnHoursTestFirst.onclick = () => { sendHoursEmailTest("first"); };
+    const btnHoursTestHeads = $("btn-time-email-test-heads");
+    if (btnHoursTestHeads) btnHoursTestHeads.onclick = () => { sendHoursEmailTest("heads_up"); };
     const btnHoursTestDue = $("btn-time-email-test-due");
     if (btnHoursTestDue) btnHoursTestDue.onclick = () => { sendHoursEmailTest("due"); };
+    const btnHoursTestOverdue = $("btn-time-email-test-overdue");
+    if (btnHoursTestOverdue) btnHoursTestOverdue.onclick = () => { sendHoursEmailTest("overdue"); };
     const btnHoursTestSummary = $("btn-time-email-test-summary");
     if (btnHoursTestSummary) btnHoursTestSummary.onclick = () => { sendHoursEmailTest("summary"); };
     const btnTimeDirectory = $("btn-time-directory-refresh");

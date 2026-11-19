@@ -90,7 +90,7 @@ def compose_summary(report: dict[str, Any]) -> tuple[str, str, str]:
     text_lines.extend(["", "Not yet submitted"])
     text_lines.extend(_plain_people(missing_rows, submitted=False) or ["None"])
     if payroll:
-        text_lines.extend(["", f"Payroll run: {payroll}"])
+        text_lines.extend(["", f"Summary: {payroll}"])
     if link:
         text_lines.extend(["", f"Open this payroll week: {link}"])
     text_lines.extend(["", WIZARD_FOOTER])
@@ -99,7 +99,7 @@ def compose_summary(report: dict[str, Any]) -> tuple[str, str, str]:
         _paragraphs(intro)
         + _people_table("Submitted", submitted_rows, submitted=True)
         + _people_table("Not yet submitted", missing_rows, submitted=False)
-        + (_paragraphs(f"Payroll run: {payroll}") if payroll else "")
+        + (_paragraphs(f"Summary: {payroll}") if payroll else "")
         + _button(link, "Review hours"),
     )
     return subject, "\n".join(text_lines).strip() + "\n", html
@@ -124,7 +124,7 @@ def compose_reminder(
             greeting,
             subject,
             f"Workweek: {week_label}",
-            f"Payroll run: {payroll_label}" if payroll_label else "",
+            f"Summary: {payroll_label}" if payroll_label else "",
             f"Deadline: {deadline_label}" if deadline_label else "",
             coverage_note,
         )
