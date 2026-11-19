@@ -458,11 +458,19 @@ def test_additional_documents_go_to_the_override_and_the_personnel_folder(monkey
         assert handed.status_code == 200, handed.text
         sends = {item["form_key"]: item["sent_at"] for item in handed.json()["document_sends"]}
         assert set(sends) == {"h4c_hipaa_nda", "h4c_employee_info"}
-        assert client.post(
+        held = client.post(
             f"/hiring/hires/{hire_id}/additional-documents",
             headers=_alice(),
             json={"form_keys": ["h4c_packet"]},
-        ).status_code == 409
+        )
+        assert held.status_code == 200, held.text
+        held_body = held.json()
+        assert held_body["emailed"] is False
+        assert held_body["additional_email"] == "suppressed"
+        assert held_body["notice"] == "Not emailed: candidate emails are turned off"
+        assert held_body["documents"] == ["New hire packet"]
+        assert held_body["packet_form_keys"] == ["h4c_hipaa_nda", "h4c_employee_info"]
+        assert "h4c_packet" not in {item["form_key"] for item in held_body["document_sends"]}
         client.put(
             "/hiring/settings",
             headers=_alice(),
@@ -496,6 +504,15 @@ def test_additional_documents_go_to_the_override_and_the_personnel_folder(monkey
         assert mailed.status_code == 200, mailed.text
         body = mailed.json()
         assert body["packet_form_keys"] == ["h4c_hipaa_nda", "h4c_employee_info", "h4c_packet", "pa_clgs_32_6"]
+        assert body["emailed"] is True
+        assert body["emailed_via"] == "override"
+        assert body["emailed_to"] == "operations@heart4change.org"
+        assert body["documents"] == ["New hire packet", "PA Residency Certification CLGS-32-6"]
+        assert body["notice"] == (
+            "Sent 2 documents to test recipient operations@heart4change.org: "
+            "New hire packet, PA Residency Certification CLGS-32-6"
+        )
+        assert body["additional_email"] == "sent"
         later = {item["form_key"]: item for item in body["document_sends"]}
         assert later["h4c_packet"]["sent_by"] == "alice@example.com"
         assert later["h4c_packet"]["sent_at"] != sends["h4c_hipaa_nda"]
@@ -511,6 +528,9 @@ def test_additional_documents_go_to_the_override_and_the_personnel_folder(monkey
         assert len(added) == 2
         page = open("app/static/hiring.js", encoding="utf-8").read()
         assert "Send additional documents" in page
+        assert "additional-banner" in page
+        assert "reopenAdditional" in page
+        assert "send.disabled = true" in page
         assert 'if (!hire.handoff_at) return;' in page
         client.put(
             "/hiring/settings",

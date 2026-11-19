@@ -235,6 +235,29 @@ def qb_invite_window(start: date, today: date | None = None) -> tuple[date, bool
     return available, (today or _today()) >= available
 
 
+def _additional_result(
+    *,
+    emailed: bool,
+    emailed_to: str,
+    via: str,
+    titles: list[str],
+    notice: str,
+) -> dict[str, Any]:
+    count = len(titles)
+    if emailed:
+        noun = "document" if count == 1 else "documents"
+        target = f"test recipient {emailed_to}" if via == "override" else emailed_to
+        notice = f"Sent {count} {noun} to {target}: {', '.join(titles)}"
+    return {
+        "emailed": emailed,
+        "emailed_to": emailed_to,
+        "emailed_via": via,
+        "documents": list(titles),
+        "notice": notice,
+        "additional_email": "sent" if emailed else "suppressed",
+    }
+
+
 def _document_sends(hire: dict[str, Any]) -> list[dict[str, str]]:
     """Sent dates for the picker. Original packet keys use the handoff time. Nothing is written."""
     latest: dict[str, dict[str, str]] = {}
@@ -2455,9 +2478,32 @@ class HiringEngine:
             settings = row["settings"]
             candidate = row["candidates"].get(hire.get("candidate_id") or "") or {}
             override = str(settings.get("wizard_email_override") or "").strip().lower()
-            candidate_to = override or str(candidate.get("personal_email") or "").strip().lower()
-            if not settings.get("candidate_emails_enabled") or not candidate_to:
-                raise HiringError(409, "Candidate email is off.")
+            personal = str(candidate.get("personal_email") or "").strip().lower()
+            if not settings.get("candidate_emails_enabled"):
+                public = self._hire_public(row, hire)
+                public.update(
+                    _additional_result(
+                        emailed=False,
+                        emailed_to="",
+                        via="",
+                        titles=titles,
+                        notice="Not emailed: candidate emails are turned off",
+                    )
+                )
+                return public
+            candidate_to = override or personal
+            if not candidate_to:
+                public = self._hire_public(row, hire)
+                public.update(
+                    _additional_result(
+                        emailed=False,
+                        emailed_to="",
+                        via="",
+                        titles=titles,
+                        notice="Not emailed: this hire has no email address.",
+                    )
+                )
+                return public
             subject, text, html = self._compose_additional(row, hire, candidate, titles)
             status = deliver(
                 practice_id,
@@ -2469,8 +2515,6 @@ class HiringEngine:
                 reply_to=REPLY_TO,
             )
             if status != "sent":
-                self._history(row, "hire", hire_id, "additional_documents", actor, "Additional documents email failed")
-                self._save(payload)
                 raise HiringError(502, "The email was not sent.")
             now = _iso()
             sent = list(hire.get("documents_sent") or [])
@@ -2492,7 +2536,16 @@ class HiringEngine:
             )
             self._save(payload)
             public = self._hire_public(row, hire)
-            public["additional_email"] = "sent"
+            via = "override" if override else "candidate"
+            public.update(
+                _additional_result(
+                    emailed=True,
+                    emailed_to=candidate_to,
+                    via=via,
+                    titles=titles,
+                    notice="",
+                )
+            )
             public["drive_copy"] = copied
             return public
 
