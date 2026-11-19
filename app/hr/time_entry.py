@@ -32,6 +32,14 @@ from zoneinfo import ZoneInfo
 from app.auth import User, is_hr_admin
 from app.clinicians import clinician_store
 from app.crypto import decrypt_utf8, encrypt_utf8
+from app.hr.hours_schedule import (
+    FIRST_LIVE_WEEK_ENDING,
+    HoursSchedule,
+    collection_friday,
+    on_schedule_minute,
+    preview_sentence,
+    schedule_for,
+)
 from app.hr.time_email import (
     OPERATIONS_TEST_TO,
     as_test_copy,
@@ -65,7 +73,8 @@ KNOWN_CATEGORIES: dict[str, str] = {CATEGORY_TOTAL: "Weekly total"}
 # Not an overtime policy.
 MAX_WEEK_MINUTES = 7 * 24 * 60
 SCHEDULE_V1 = 1  # legacy Saturday–Friday week, Friday cutoff
-SCHEDULE_V2 = 2  # Monday–Friday workweek, Thursday payroll
+SCHEDULE_V2 = 2  # Monday–Friday workweek, Thursday payroll (retired)
+SCHEDULE_V3 = 3  # Monday–Friday week, deadline day at 11:59 PM, business-day mail
 
 _WEEKDAY_NAMES = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
 _MONTH_ABBR = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
@@ -172,36 +181,29 @@ def can_view_payroll(user: User) -> bool:
 
 
 def pay_week_ending(moment: datetime) -> date:
-    """Workweek Friday shown for entry at ``moment``.
+    """Friday of the Monday–Sunday collection that contains ``moment``.
 
-    Before the Thursday payroll cutoff this is the prior completed Monday–Friday.
-    After that cutoff it is the same closed week until the next Saturday, when
-    the following workweek opens. It is not the Saturday–Friday week that
-    contains ``moment``.
+    This is the same week, not the prior one. Thursday, November 19, 2026 is
+    the week of Monday, November 16 through Friday, November 20.
     """
-    friday, _open = entry_period(moment)
-    return friday
+    return collection_friday(moment)
 
 
 def entry_period(moment: datetime) -> tuple[date, bool]:
-    """Return ``(workweek Friday, open for employee entry)``."""
-    local = moment.astimezone(ET)
-    today = local.date()
-    if today.weekday() == 4:
-        friday = today - timedelta(days=7)
-    else:
-        friday = today - timedelta(days=(today.weekday() - 4) % 7)
-    deadline = at_local(payroll_thursday(friday), "11:30")
-    # The configured cutoff time is applied by callers that have settings.
-    # This default matches the product cutoff so the open flag is right
-    # before settings are loaded; ``period_is_open`` rechecks the real time.
-    return friday, moment < deadline
+    """Return ``(workweek Friday, open before the default Friday 11:59 PM deadline)``."""
+    friday = collection_friday(moment)
+    spec = schedule_for(friday, 4)
+    return friday, moment <= spec.deadline_at
 
 
 def period_is_open(moment: datetime, week_ending: date, settings: "TimeSettings") -> bool:
-    if workweek_friday_for(moment) != week_ending:
-        return False
-    return moment < deadline_instant(week_ending, settings)
+    spec = _hours_spec(week_ending, settings)
+    start = at_local(spec.week_start, "00:00")
+    return start <= moment <= spec.window_end
+
+
+def _hours_spec(week_ending: date, settings: "TimeSettings") -> HoursSchedule:
+    return schedule_for(week_ending, getattr(settings, "deadline_weekday", 4))
 
 
 def workweek_friday_for(moment: datetime) -> date:
@@ -353,12 +355,11 @@ def legacy_date_for_weekday(week_ending: date, weekday: int) -> date:
     return saturday + timedelta(days=(weekday - 5) % 7)
 
 
-def deadline_instant(week_ending: date, settings: "TimeSettings", version: int = SCHEDULE_V2) -> datetime:
+def deadline_instant(week_ending: date, settings: "TimeSettings", version: int = SCHEDULE_V3) -> datetime:
     if int(version) == SCHEDULE_V1:
         day = legacy_date_for_weekday(week_ending, settings.summary_weekday)
-    else:
-        day = date_for_weekday(week_ending, settings.summary_weekday)
-    return at_local(day, settings.summary_time)
+        return at_local(day, settings.summary_time)
+    return _hours_spec(week_ending, settings).deadline_at
 
 
 def schedule_warnings(settings: "TimeSettings", week_ending: date) -> list[str]:
@@ -389,12 +390,13 @@ _NEW_SCHEDULE_DEFAULT = (2, "09:00", 3, "08:00", 3, "11:30")
 class TimeSettings:
     practice_id: str
     participant_emails: list[str]
-    reminder_first_weekday: int = 2  # Wednesday of the payroll week
+    deadline_weekday: int = 4  # Friday. Time is fixed at 11:59 PM Eastern.
+    reminder_first_weekday: int = 3  # unused; kept so older rows still load
     reminder_first_time: str = "09:00"
-    reminder_due_weekday: int = 3  # Thursday
+    reminder_due_weekday: int = 4
     reminder_due_time: str = "08:00"
-    summary_weekday: int = 3  # Thursday payroll cutoff
-    summary_time: str = "11:30"
+    summary_weekday: int = 4
+    summary_time: str = "23:59"
     summary_recipient: str = MELISSA_EMAIL
     active_from_week: str = ""
     created_at: str = ""
@@ -407,6 +409,7 @@ class TimeSettings:
         return {
             "practice_id": self.practice_id,
             "participant_emails": list(self.participant_emails),
+            "deadline_weekday": self.deadline_weekday,
             "reminder_first_weekday": self.reminder_first_weekday,
             "reminder_first_time": self.reminder_first_time,
             "reminder_due_weekday": self.reminder_due_weekday,
@@ -423,35 +426,23 @@ class TimeSettings:
 
     @classmethod
     def from_dict(cls, data: dict[str, Any]) -> "TimeSettings":
-        first_wd = int(data.get("reminder_first_weekday", _NEW_SCHEDULE_DEFAULT[0]))
-        first_time = str(data.get("reminder_first_time") or _NEW_SCHEDULE_DEFAULT[1])
-        due_wd = int(data.get("reminder_due_weekday", _NEW_SCHEDULE_DEFAULT[2]))
-        due_time = str(data.get("reminder_due_time") or _NEW_SCHEDULE_DEFAULT[3])
-        summary_wd = int(data.get("summary_weekday", _NEW_SCHEDULE_DEFAULT[4]))
-        summary_time = str(data.get("summary_time") or _NEW_SCHEDULE_DEFAULT[5])
-        version = int(data.get("schedule_version") or 0)
-        migrated = False
-        stored = (first_wd, first_time, due_wd, due_time, summary_wd, summary_time)
-        if version < SCHEDULE_V2 and stored == _OLD_SCHEDULE_DEFAULT:
-            first_wd, first_time, due_wd, due_time, summary_wd, summary_time = _NEW_SCHEDULE_DEFAULT
+        """Keep the toggle, enabled people, and recipient. Deadline day becomes Friday unless already stored."""
+        migrated = "deadline_weekday" not in data
+        try:
+            deadline_weekday = int(data["deadline_weekday"]) if not migrated else 4
+        except (KeyError, TypeError, ValueError):
+            deadline_weekday = 4
             migrated = True
-            version = SCHEDULE_V2
-        elif version < SCHEDULE_V2:
-            version = SCHEDULE_V2
+        deadline_weekday = min(max(deadline_weekday, 0), 4)
         return cls(
             practice_id=str(data["practice_id"]),
             participant_emails=[str(e).strip().lower() for e in data.get("participant_emails") or []],
-            reminder_first_weekday=first_wd,
-            reminder_first_time=first_time,
-            reminder_due_weekday=due_wd,
-            reminder_due_time=due_time,
-            summary_weekday=summary_wd,
-            summary_time=summary_time,
+            deadline_weekday=deadline_weekday,
             summary_recipient=str(data.get("summary_recipient") or MELISSA_EMAIL).strip().lower(),
             active_from_week=str(data.get("active_from_week") or ""),
             created_at=str(data.get("created_at") or ""),
             updated_at=str(data.get("updated_at") or ""),
-            schedule_version=version,
+            schedule_version=SCHEDULE_V3,
             schedule_migrated=migrated,
             automation_enabled=bool(data.get("automation_enabled", False)),
         )
@@ -796,12 +787,15 @@ class TimeStore:
             settings = self._settings.get(user.practice_id)
             if settings is not None:
                 self._apply_scope_locks(user.practice_id, settings, moment)
+                self._lock_if_due(user.practice_id, settings, week, moment)
             state = self._get_week(user.practice_id, week.isoformat())
             self._authorize_write(user, target, week, moment, settings, state)
             display_name, clinician_id = self._identity(user, target, settings, state)
             key = self._sub_key(user.practice_id, week.isoformat(), target)
             existing_id = self._submission_index.get(key)
-            late = bool(state and state.locked_at)
+            late = bool(state and state.locked_at) or bool(
+                settings is not None and moment > deadline_instant(week, settings)
+            )
             if existing_id:
                 sub = self._submissions[existing_id]
                 before_lines = [dict(line) for line in sub.lines]
@@ -876,6 +870,7 @@ class TimeStore:
             settings = self._settings.get(user.practice_id)
             if settings is not None:
                 self._apply_scope_locks(user.practice_id, settings, moment)
+                self._lock_if_due(user.practice_id, settings, week, moment)
             report = self._report_unlocked(user.practice_id, week, moment, settings, version)
             report["can_correct"] = is_melissa(user)
             self._flush_if_dirty()
@@ -909,8 +904,8 @@ class TimeStore:
         now: Optional[datetime] = None,
     ) -> dict[str, Any]:
         self._require_manager(user)
-        if slot not in ("first", "due"):
-            raise ValueError("slot must be first or due.")
+        if slot not in ("first", "due", "heads_up", "overdue"):
+            raise ValueError("slot must be first, due, heads_up, or overdue.")
         moment = now or utcnow()
         week = parse_week_ending(week_ending) if week_ending else pay_week_ending(moment)
         with self.exclusive():
@@ -919,18 +914,18 @@ class TimeStore:
                 self._apply_scope_locks(user.practice_id, settings, moment)
                 self._flush_if_dirty()
             report = self._report_unlocked(user.practice_id, week, moment, self._settings.get(user.practice_id))
+            spec = _hours_spec(week, settings)
         messages = []
         for row in report["rows"]:
-            if slot == "due" and row["status"] != "missing":
+            if slot in ("due", "overdue") and row["status"] != "missing":
                 continue
-            subject, body, html = render_reminder(
-                slot=slot,
-                week_ending=week,
-                deadline=_parse_iso(report["deadline"]),
-                weekday=settings.reminder_first_weekday if slot == "first" else settings.reminder_due_weekday,
-                at_time=settings.reminder_first_time if slot == "first" else settings.reminder_due_time,
-                display_name=str(row.get("display_name") or ""),
-            )
+            name = str(row.get("display_name") or "")
+            if slot == "overdue":
+                subject, body, html = render_overdue(spec, name, spec.overdue_days[0])
+            elif slot == "due":
+                subject, body, html = render_due_today(spec, name)
+            else:
+                subject, body, html = render_heads_up(spec, name)
             messages.append({"to": row["email"], "subject": subject, "body": body, "html": html})
         return {"sent": False, "slot": slot, "messages": messages}
 
@@ -984,33 +979,32 @@ class TimeStore:
     def _hours_test_message(self, user: User, kind: str, *, sample: bool, now: datetime):
         from app.hr.time_mail import OutboundMail
 
-        if kind not in ("first", "due", "summary"):
-            raise ValueError("kind must be first, due, or summary.")
+        aliases = {"first": "heads_up", "due_day": "due"}
+        kind = aliases.get(kind, kind)
+        if kind not in ("heads_up", "due", "overdue", "summary"):
+            raise ValueError("kind must be heads_up, due, overdue, or summary.")
         week = pay_week_ending(now)
         with self.exclusive():
             settings = self._settings.get(user.practice_id) or default_settings(user.practice_id, now)
             report = self._report_unlocked(user.practice_id, week, now, settings)
+            spec = _hours_spec(week, settings)
         if sample:
             report = dict(report)
             report["rows"] = sample_rows()
-            person = sample_reminder_person(kind)
-        elif kind == "due":
+            person = sample_reminder_person("due" if kind == "overdue" else kind)
+        elif kind in ("due", "overdue"):
             person = next((row for row in report["rows"] if row["status"] == "missing"), None) or {}
         else:
             person = (report["rows"][:1] or [{}])[0]
+        name = str(person.get("display_name") or "")
         if kind == "summary":
             subject, text, html = compose_summary(report)
+        elif kind == "due":
+            subject, text, html = render_due_today(spec, name)
+        elif kind == "overdue":
+            subject, text, html = render_overdue(spec, name, spec.overdue_days[0])
         else:
-            weekday = settings.reminder_first_weekday if kind == "first" else settings.reminder_due_weekday
-            at_time = settings.reminder_first_time if kind == "first" else settings.reminder_due_time
-            subject, text, html = render_reminder(
-                slot=kind,
-                week_ending=week,
-                deadline=_parse_iso(str(report["deadline"])),
-                weekday=weekday,
-                at_time=at_time,
-                display_name=str(person.get("display_name") or ""),
-            )
+            subject, text, html = render_heads_up(spec, name)
         subject, text, html = as_test_copy(subject, text, html)
         return OutboundMail(
             to=OPERATIONS_TEST_TO,
@@ -1445,29 +1439,18 @@ class TimeStore:
         base = existing or default_settings(practice_id, now)
         recipient = _require_email(str(patch.get("summary_recipient") or base.summary_recipient), field="summary recipient")
         emails = self._validate_participants(practice_id, list(patch.get("participant_emails") or []))
-        first_weekday = _weekday(patch.get("reminder_first_weekday", base.reminder_first_weekday))
-        due_weekday = _weekday(patch.get("reminder_due_weekday", base.reminder_due_weekday))
-        summary_weekday = _weekday(patch.get("summary_weekday", base.summary_weekday))
-        first_time = str(patch.get("reminder_first_time") or base.reminder_first_time)
-        due_time = str(patch.get("reminder_due_time") or base.reminder_due_time)
-        summary_time = str(patch.get("summary_time") or base.summary_time)
-        parse_hhmm(first_time)
-        parse_hhmm(due_time)
-        parse_hhmm(summary_time)
+        deadline_weekday = _weekday(patch.get("deadline_weekday", base.deadline_weekday))
+        if deadline_weekday > 4:
+            raise ValueError("Deadline day must be Monday through Friday.")
         return TimeSettings(
             practice_id=practice_id,
             participant_emails=emails,
-            reminder_first_weekday=first_weekday,
-            reminder_first_time=first_time,
-            reminder_due_weekday=due_weekday,
-            reminder_due_time=due_time,
-            summary_weekday=summary_weekday,
-            summary_time=summary_time,
+            deadline_weekday=deadline_weekday,
             summary_recipient=recipient,
             active_from_week=base.active_from_week or pay_week_ending(now).isoformat(),
             created_at=base.created_at or _iso(now),
             updated_at=_iso(now),
-            schedule_version=SCHEDULE_V2,
+            schedule_version=SCHEDULE_V3,
             schedule_migrated=base.schedule_migrated,
             automation_enabled=bool(patch.get("automation_enabled", base.automation_enabled)),
         )
@@ -1563,16 +1546,17 @@ class TimeStore:
             "saved": saved,
             "practice_id": settings.practice_id,
             "participant_emails": list(settings.participant_emails),
+            "deadline_weekday": settings.deadline_weekday,
+            "schedule_preview": preview_sentence(
+                schedule_for(collection_friday(now), settings.deadline_weekday),
+                self._recipient_display_name(settings.practice_id, settings.summary_recipient),
+            ),
             "reminder_first_weekday": settings.reminder_first_weekday,
             "reminder_first_time": settings.reminder_first_time,
-            "reminder_first_subject": reminder_due_phrase(
-                settings.reminder_first_weekday, settings.reminder_first_time
-            ),
+            "reminder_first_subject": "",
             "reminder_due_weekday": settings.reminder_due_weekday,
             "reminder_due_time": settings.reminder_due_time,
-            "reminder_due_subject": reminder_due_phrase(
-                settings.reminder_due_weekday, settings.reminder_due_time
-            ),
+            "reminder_due_subject": "",
             "summary_weekday": settings.summary_weekday,
             "summary_time": settings.summary_time,
             "summary_recipient": settings.summary_recipient,
@@ -1609,14 +1593,16 @@ class TimeStore:
         return count
 
     def _lock_if_due(self, practice_id: str, settings: TimeSettings, week: date, now: datetime) -> bool:
+        if week < FIRST_LIVE_WEEK_ENDING:
+            return False
         existing = self._get_week(practice_id, week.isoformat(), SCHEDULE_V2)
         if existing and existing.locked_at:
             return False
         legacy = self._get_week(practice_id, week.isoformat(), SCHEDULE_V1)
         if legacy is not None:
             return False
-        deadline = deadline_instant(week, settings)
-        if now < deadline:
+        spec = _hours_spec(week, settings)
+        if now <= spec.window_end:
             return False
         self._put_week(
             WeekState(
@@ -1625,7 +1611,7 @@ class TimeStore:
                 locked_at=_iso(now),
                 snapshot=self._active_participants(practice_id, settings),
                 summary_recipient=settings.summary_recipient,
-                lock_deadline=deadline.isoformat(),
+                lock_deadline=spec.deadline_at.isoformat(),
                 schedule_version=SCHEDULE_V2,
             )
         )
@@ -1829,14 +1815,12 @@ class TimeStore:
                         "Only the employee can edit before cutoff, and only Melissa can edit after cutoff."
                     )
                 raise NotFoundError()
-            if locked:
+            if locked or not period_is_open(now, week, settings or default_settings(user.practice_id, now)):
                 raise TimeAuthzError(
                     "This week is locked. Only Melissa can enter missing hours or corrections."
                 )
             if not own:
                 raise TimeAuthzError("Before cutoff, each person enters only their own hours.")
-            if not period_is_open(now, week, settings or default_settings(user.practice_id, now)):
-                raise ValueError("Hours can only be entered for the payroll week that is open.")
             raise TimeAuthzError("Only selected hourly staff can enter hours.")
 
     def _can_write(
@@ -1852,13 +1836,21 @@ class TimeStore:
             return False
         own = target == _email(user.email)
         locked = bool(state and state.locked_at)
-        if not locked:
-            if not own or settings is None or not period_is_open(now, week, settings):
+        if settings is None or not period_is_open(now, week, settings):
+            if not (locked and is_melissa(user) and state is not None):
                 return False
-            return any(row["email"] == target for row in self._active_participants(user.practice_id, settings))
-        if not is_melissa(user) or state is None:
-            return False
-        return any(row["email"] == target for row in state.snapshot)
+        if locked:
+            if not is_melissa(user) or state is None:
+                return False
+            return any(row["email"] == target for row in state.snapshot)
+        people = self._active_participants(user.practice_id, settings)
+        if own and any(row["email"] == target for row in people):
+            return True
+        return bool(
+            is_melissa(user)
+            and now > deadline_instant(week, settings)
+            and any(row["email"] == target for row in people)
+        )
 
     def _identity(
         self,
@@ -1886,6 +1878,7 @@ class TimeStore:
         settings = self._settings.get(user.practice_id)
         if settings is not None:
             self._apply_scope_locks(user.practice_id, settings, moment)
+            self._lock_if_due(user.practice_id, settings, parse_week_ending(sub.week_ending), moment)
         week = parse_week_ending(sub.week_ending)
         state = self._get_week(user.practice_id, sub.week_ending, sub.schedule_version)
         self._authorize_write(user, sub.email, week, moment, settings, state)
@@ -1902,11 +1895,12 @@ class TimeStore:
                 sub.clinician_id = clinician_id
             sub.updated_at = _iso(moment)
             sub.updated_by = user.user_id
+            past_deadline = bool(settings is not None and moment > deadline_instant(week, settings))
             self._append_audit(
                 sub,
                 user=user,
                 now=moment,
-                late=bool(state and state.locked_at),
+                late=bool(state and state.locked_at) or past_deadline,
                 before_lines=before_lines,
                 before_minutes=before_minutes,
             )
@@ -1993,9 +1987,13 @@ class TimeStore:
             coverage = week
             helper = "Historical Saturday–Friday payroll week. It is not relabeled as a Monday–Friday period."
         else:
-            start = pay_week_start(week)
-            label = week_range_label(week)
-            payroll = payroll_thursday(week)
+            spec = _hours_spec(week, settings)
+            start = spec.week_start
+            label = spec.label
+            historical = version < SCHEDULE_V3 and bool(state and state.locked_at)
+            payroll = payroll_thursday(week) if historical else spec.summary_day
+            if not historical:
+                deadline = spec.deadline_at
             coverage = coverage_end(week)
             helper = HOURS_HELPER_TEXT
         submitted = 0
@@ -2117,95 +2115,79 @@ class TimeStore:
         backoff: tuple[timedelta, ...],
         max_attempts: int,
     ) -> list[ClaimedJob]:
+        if week < FIRST_LIVE_WEEK_ENDING or not settings.automation_enabled:
+            return []
+        spec = _hours_spec(week, settings)
         state = self._get_week(practice_id, week.isoformat())
         locked = bool(state and state.locked_at)
-        reminders = _reminder_kinds(now, settings, week, locked)
-        deadline = deadline_instant(week, settings)
-        summary_keep = settings.automation_enabled and deadline <= now < deadline + timedelta(hours=3)
-        summary_create = _on_schedule_minute(now, deadline)
-        first_at = at_local(
-            date_for_weekday(week, settings.reminder_first_weekday),
-            settings.reminder_first_time,
-        )
-        due_at = at_local(
-            date_for_weekday(week, settings.reminder_due_weekday),
-            settings.reminder_due_time,
-        )
-        keep = set(reminders)
-        if summary_keep:
-            keep.add("summary")
-        self._cancel_obsolete(practice_id, week.isoformat(), keep, now)
-        jobs: list[ClaimedJob] = []
         report = self._report_unlocked(practice_id, week, now, settings)
-        report_deadline = _parse_iso(report["deadline"])
-        if "reminder_first" in reminders:
-            for row in report["rows"]:
-                job = self._claim_mail(
-                    practice_id,
-                    week.isoformat(),
-                    "reminder_first",
-                    row["email"],
-                    now,
-                    lease=lease,
-                    backoff=backoff,
-                    max_attempts=max_attempts,
-                    subject_body=lambda row=row: render_reminder(
-                        slot="first",
-                        week_ending=week,
-                        deadline=report_deadline,
-                        weekday=settings.reminder_first_weekday,
-                        at_time=settings.reminder_first_time,
-                        display_name=str(row.get("display_name") or ""),
-                    ),
-                    allow_create=_on_schedule_minute(now, first_at),
-                )
-                if job:
-                    jobs.append(job)
-        if "reminder_due" in reminders:
-            for row in report["rows"]:
-                if row["status"] != "missing":
-                    continue
-                job = self._claim_mail(
-                    practice_id,
-                    week.isoformat(),
-                    "reminder_due",
-                    row["email"],
-                    now,
-                    lease=lease,
-                    backoff=backoff,
-                    max_attempts=max_attempts,
-                    subject_body=lambda row=row: render_reminder(
-                        slot="due",
-                        week_ending=week,
-                        deadline=report_deadline,
-                        weekday=settings.reminder_due_weekday,
-                        at_time=settings.reminder_due_time,
-                        display_name=str(row.get("display_name") or ""),
-                    ),
-                    allow_create=_on_schedule_minute(now, due_at),
-                )
-                if job:
-                    jobs.append(job)
-        if summary_keep and report["rows"]:
-            subject, body, html, _csv_text, _filename = render_summary(report)
+        jobs: list[ClaimedJob] = []
+        keep: set[str] = set()
+
+        def consider(kind: str, when: datetime, recipient: str, renderer: Any, *, create: bool) -> None:
+            keep.add(kind)
             job = self._claim_mail(
                 practice_id,
                 week.isoformat(),
-                "summary",
-                report["summary_recipient"],
+                kind,
+                recipient,
                 now,
                 lease=lease,
                 backoff=backoff,
                 max_attempts=max_attempts,
-                subject_body=lambda subject=subject, body=body, html=html: (subject, body, html),
-                csv_filename="",
-                csv_text="",
-                allow_create=summary_create,
+                subject_body=renderer,
+                allow_create=create and on_schedule_minute(now, when),
             )
             if job:
                 jobs.append(job)
-        elif summary_keep:
-            self._cancel_kind(practice_id, week.isoformat(), "summary", now)
+
+        if now >= spec.heads_up_at and not locked:
+            for row in report["rows"]:
+                if row["status"] != "missing":
+                    continue
+                consider(
+                    "heads_up",
+                    spec.heads_up_at,
+                    row["email"],
+                    lambda row=row: render_heads_up(spec, str(row.get("display_name") or "")),
+                    create=True,
+                )
+        if now >= spec.due_at and not locked:
+            for row in report["rows"]:
+                if row["status"] != "missing":
+                    continue
+                consider(
+                    "due_day",
+                    spec.due_at,
+                    row["email"],
+                    lambda row=row: render_due_today(spec, str(row.get("display_name") or "")),
+                    create=True,
+                )
+        if not locked:
+            for day in spec.overdue_days:
+                when = spec.overdue_at(day)
+                if now < when:
+                    continue
+                for row in report["rows"]:
+                    if row["status"] != "missing":
+                        continue
+                    consider(
+                        f"overdue:{day.isoformat()}",
+                        when,
+                        row["email"],
+                        lambda row=row, day=day: render_overdue(spec, str(row.get("display_name") or ""), day),
+                        create=True,
+                    )
+        if report["rows"] and now >= spec.summary_at:
+            subject, body, html, _csv_text, _filename = render_summary(report)
+            consider(
+                "summary",
+                spec.summary_at,
+                str(report["summary_recipient"]),
+                lambda subject=subject, body=body, html=html: (subject, body, html),
+                create=True,
+            )
+        self._cancel_obsolete(practice_id, week.isoformat(), keep, now)
         return jobs
 
     def _quarantine_expired_claims(self, now: datetime) -> None:
@@ -2389,7 +2371,9 @@ class TimeStore:
                 return None
             week = parse_week_ending(delivery.week_ending)
             report = self._report_unlocked(delivery.practice_id, week, now, settings)
-            if delivery.kind == "reminder_due":
+            spec = _hours_spec(week, settings)
+            staff_kind = delivery.kind in ("heads_up", "due_day") or delivery.kind.startswith("overdue:")
+            if staff_kind:
                 row = next((item for item in report["rows"] if item["email"] == delivery.recipient), None)
                 if row is None or row["status"] != "missing":
                     self._release_claim(delivery, now, status="cancelled")
@@ -2410,16 +2394,14 @@ class TimeStore:
                     practice_id=delivery.practice_id,
                     html=html,
                 )
-            slot = "first" if delivery.kind == "reminder_first" else "due"
             person = next((item for item in report["rows"] if item["email"] == delivery.recipient), None)
-            subject, body, html = render_reminder(
-                slot=slot,
-                week_ending=week,
-                deadline=_parse_iso(report["deadline"]),
-                weekday=settings.reminder_first_weekday if slot == "first" else settings.reminder_due_weekday,
-                at_time=settings.reminder_first_time if slot == "first" else settings.reminder_due_time,
-                display_name=str((person or {}).get("display_name") or ""),
-            )
+            name = str((person or {}).get("display_name") or "")
+            if delivery.kind == "due_day":
+                subject, body, html = render_due_today(spec, name)
+            elif delivery.kind.startswith("overdue:"):
+                subject, body, html = render_overdue(spec, name, date.fromisoformat(delivery.kind.split(":", 1)[1]))
+            else:
+                subject, body, html = render_heads_up(spec, name)
             return ClaimedJob(
                 delivery_id=delivery.delivery_id,
                 claim_token=delivery.claim_token,
@@ -2552,32 +2534,33 @@ def _on_schedule_minute(now: datetime, scheduled: datetime) -> bool:
 def preview_new_sends(settings: TimeSettings, now: datetime, *, locked: bool = False) -> list[dict[str, str]]:
     """Sends a tick would create at ``now`` if none exist yet. Does not write or send."""
     planned: list[dict[str, str]] = []
+    if not settings.automation_enabled:
+        return planned
     for week in _scope_weeks(settings, now):
-        reminders = _reminder_kinds(now, settings, week, locked)
-        deadline = deadline_instant(week, settings)
-        first_at = at_local(
-            date_for_weekday(week, settings.reminder_first_weekday),
-            settings.reminder_first_time,
-        )
-        due_at = at_local(
-            date_for_weekday(week, settings.reminder_due_weekday),
-            settings.reminder_due_time,
-        )
-        if "reminder_first" in reminders and _on_schedule_minute(now, first_at):
+        spec = _hours_spec(week, settings)
+        if not locked and on_schedule_minute(now, spec.heads_up_at):
             planned.append(
-                {"week_ending": week.isoformat(), "kind": "reminder_first", "at": first_at.isoformat(), "audience": "enabled"}
+                {"week_ending": week.isoformat(), "kind": "heads_up", "at": spec.heads_up_at.isoformat(), "audience": "missing"}
             )
-        if "reminder_due" in reminders and _on_schedule_minute(now, due_at):
+        if not locked and on_schedule_minute(now, spec.due_at):
             planned.append(
-                {"week_ending": week.isoformat(), "kind": "reminder_due", "at": due_at.isoformat(), "audience": "missing"}
+                {"week_ending": week.isoformat(), "kind": "due_day", "at": spec.due_at.isoformat(), "audience": "missing"}
             )
-        if (
-            settings.automation_enabled
-            and deadline <= now < deadline + timedelta(hours=3)
-            and _on_schedule_minute(now, deadline)
-        ):
+        if not locked:
+            for day in spec.overdue_days:
+                when = spec.overdue_at(day)
+                if on_schedule_minute(now, when):
+                    planned.append(
+                        {
+                            "week_ending": week.isoformat(),
+                            "kind": f"overdue:{day.isoformat()}",
+                            "at": when.isoformat(),
+                            "audience": "missing",
+                        }
+                    )
+        if on_schedule_minute(now, spec.summary_at):
             planned.append(
-                {"week_ending": week.isoformat(), "kind": "summary", "at": deadline.isoformat(), "audience": "summary_recipient"}
+                {"week_ending": week.isoformat(), "kind": "summary", "at": spec.summary_at.isoformat(), "audience": "summary_recipient"}
             )
     return planned
 
@@ -2586,20 +2569,14 @@ def upcoming_slots(settings: TimeSettings, now: datetime) -> list[dict[str, str]
     """Scheduled minutes that have not already closed, including the open one."""
     slots: list[dict[str, str]] = []
     for week in _scope_weeks(settings, now):
-        deadline = deadline_instant(week, settings)
-        first_at = at_local(
-            date_for_weekday(week, settings.reminder_first_weekday),
-            settings.reminder_first_time,
-        )
-        due_at = at_local(
-            date_for_weekday(week, settings.reminder_due_weekday),
-            settings.reminder_due_time,
-        )
-        candidates = (
-            ("reminder_first", first_at, "enabled"),
-            ("reminder_due", due_at, "missing"),
-            ("summary", deadline, "summary_recipient"),
-        )
+        spec = _hours_spec(week, settings)
+        candidates = [
+            ("heads_up", spec.heads_up_at, "missing"),
+            ("due_day", spec.due_at, "missing"),
+            ("summary", spec.summary_at, "summary_recipient"),
+        ]
+        for day in spec.overdue_days:
+            candidates.append((f"overdue:{day.isoformat()}", spec.overdue_at(day), "missing"))
         for kind, at, audience in candidates:
             if now < at + timedelta(minutes=2):
                 slots.append(
@@ -2609,35 +2586,18 @@ def upcoming_slots(settings: TimeSettings, now: datetime) -> list[dict[str, str]
     return slots
 
 
-def _reminder_kinds(now: datetime, settings: TimeSettings, week: date, locked: bool) -> set[str]:
-    """Kinds that may still be retried. A brand-new send is a separate minute check."""
-    if not settings.automation_enabled or locked or now >= deadline_instant(week, settings):
-        return set()
-    lock_at = deadline_instant(week, settings)
-    first_at = at_local(
-        date_for_weekday(week, settings.reminder_first_weekday),
-        settings.reminder_first_time,
-    )
-    due_at = at_local(
-        date_for_weekday(week, settings.reminder_due_weekday),
-        settings.reminder_due_time,
-    )
-    kinds: set[str] = set()
-    if first_at <= now < lock_at:
-        kinds.add("reminder_first")
-    if due_at < lock_at and due_at <= now < lock_at:
-        kinds.add("reminder_due")
-    return kinds
-
-
 def _scope_weeks(settings: TimeSettings, now: datetime) -> list[date]:
+    """Current collection week and the previous one, never before Nov 16–20, 2026."""
     current = pay_week_ending(now)
     previous = current - timedelta(days=7)
-    try:
-        start = date.fromisoformat(settings.active_from_week)
-    except ValueError:
-        start = current
-    return [week for week in (previous, current) if week >= start]
+    weeks: list[date] = []
+    for week in (previous, current):
+        if week < FIRST_LIVE_WEEK_ENDING:
+            continue
+        spec = schedule_for(week, settings.deadline_weekday)
+        if spec.heads_up_at - timedelta(days=1) <= now <= spec.window_end + timedelta(days=2):
+            weeks.append(week)
+    return weeks
 
 
 def _can_reclaim(
@@ -2716,6 +2676,52 @@ def _self_test_summary(entry: dict[str, Any], header: dict[str, Any]) -> dict[st
         "csv_filename": "weekly-hours-self-test.csv",
         "sent": False,
     }
+
+
+def _mail_parts(spec: HoursSchedule, display_name: str, subject: str, note: str) -> tuple[str, str, str]:
+    return compose_reminder(
+        week_label=spec.label,
+        payroll_label=_long_date(spec.summary_day),
+        deadline_label=deadline_label(spec.deadline_at),
+        weekday_phrase=subject,
+        coverage_note=note,
+        display_name=display_name,
+        link=TIME_ENTRY_URL,
+    )
+
+
+def render_heads_up(spec: HoursSchedule, display_name: str) -> tuple[str, str, str]:
+    heads = spec.heads_up_at.astimezone(ET).date()
+    if (spec.deadline_on - heads).days == 1:
+        subject = "Weekly hours are due tomorrow"
+    else:
+        subject = f"Weekly hours are due {_WEEKDAY_NAMES[spec.deadline_on.weekday()]}"
+    return _mail_parts(
+        spec,
+        display_name,
+        subject,
+        "Enter the hours you already worked that Monday through Friday. "
+        "If you worked the Saturday or Sunday after that Friday, include them here.",
+    )
+
+
+def render_due_today(spec: HoursSchedule, display_name: str) -> tuple[str, str, str]:
+    return _mail_parts(
+        spec,
+        display_name,
+        "Enter your weekly hours today",
+        f"Hours are due today, {_long_date(spec.deadline_on)}, at 11:59 PM ET.",
+    )
+
+
+def render_overdue(spec: HoursSchedule, display_name: str, day: date) -> tuple[str, str, str]:
+    _ = day
+    return _mail_parts(
+        spec,
+        display_name,
+        "Weekly hours are overdue",
+        f"Your hours for {spec.label} were due {_long_date(spec.deadline_on)} and are now overdue.",
+    )
 
 
 def render_reminder(

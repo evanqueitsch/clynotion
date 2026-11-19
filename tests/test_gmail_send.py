@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import json
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 
@@ -109,7 +110,7 @@ def test_self_test_send_is_one_shot_and_leaves_payroll_and_scheduler_alone(
     assert first.status_code == 200, first.text
     assert first.json()["send_result"]["status"] == "sent"
     assert first.json()["send_result"]["to"] == "alice@example.com"
-    assert calls == [("alice@example.com", "[TEST] Weekly hours are due by Wednesday at 9:00 AM.")]
+    assert calls == [("alice@example.com", "[TEST] Weekly hours are due by Thursday at 9:00 AM.")]
     second = client.post(
         "/hr/time/self-test/send",
         headers=_auth(alice),
@@ -126,7 +127,7 @@ def test_self_test_send_is_one_shot_and_leaves_payroll_and_scheduler_alone(
     )
     assert friday.status_code == 200, friday.text
     assert friday.json()["send_result"]["to"] == "alice@example.com"
-    assert "Thursday at 8:00 AM" in friday.json()["friday"]["subject"]
+    assert "Friday at 8:00 AM" in friday.json()["friday"]["subject"]
 
     too_soon = client.post(
         "/hr/time/self-test/send",
@@ -135,7 +136,7 @@ def test_self_test_send_is_one_shot_and_leaves_payroll_and_scheduler_alone(
     )
     assert too_soon.status_code == 422
 
-    set_clock(FRI_1130)
+    set_clock(datetime(2026, 12, 5, 5, 0, tzinfo=timezone.utc))
     assert _enter(client, alice, 3, 0).status_code == 403
     saved = client.put(
         "/hr/time/self-test",

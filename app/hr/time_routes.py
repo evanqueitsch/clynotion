@@ -37,12 +37,7 @@ class HoursPatch(BaseModel):
 
 class SettingsBody(BaseModel):
     participant_emails: list[str] = Field(default_factory=list)
-    reminder_first_weekday: int = Field(ge=0, le=6)
-    reminder_first_time: str
-    reminder_due_weekday: int = Field(ge=0, le=6)
-    reminder_due_time: str
-    summary_weekday: int = Field(ge=0, le=6)
-    summary_time: str
+    deadline_weekday: int = Field(default=4, ge=0, le=4)
     summary_recipient: str
     automation_enabled: bool = False
 
