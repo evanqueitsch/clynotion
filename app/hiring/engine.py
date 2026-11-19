@@ -65,6 +65,7 @@ from app.hiring.mailer import (
     migrate_wizard_steps,
     offer_body,
     public_queue_row,
+    practice_calendar_day,
     reminder_body,
     sample_wizard_values,
     short_start_date,
@@ -264,17 +265,23 @@ def _document_sends(hire: dict[str, Any]) -> list[dict[str, str]]:
     handoff = str(hire.get("handoff_at") or "")
     if handoff:
         for key in hire.get("packet_form_keys") or []:
-            latest[str(key)] = {"form_key": str(key), "sent_at": handoff, "sent_by": ""}
+            latest[str(key)] = _send_public(str(key), handoff, "")
     for item in hire.get("documents_sent") or []:
         key = str(item.get("form_key") or "")
         if not key:
             continue
-        latest[key] = {
-            "form_key": key,
-            "sent_at": str(item.get("sent_at") or ""),
-            "sent_by": str(item.get("sent_by") or ""),
-        }
+        latest[key] = _send_public(key, str(item.get("sent_at") or ""), str(item.get("sent_by") or ""))
     return [latest[key] for key in latest]
+
+
+def _send_public(key: str, sent_at: str, sent_by: str) -> dict[str, str]:
+    day = practice_calendar_day(sent_at)
+    return {
+        "form_key": key,
+        "sent_at": sent_at,
+        "sent_by": sent_by,
+        "sent_on": day.isoformat() if day else "",
+    }
 
 
 def _qb_public(hire: dict[str, Any]) -> tuple[str, bool]:

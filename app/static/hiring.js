@@ -26,11 +26,10 @@
     return window.clynotion;
   }
 
+  const PRACTICE_TZ = "America/New_York";
+
   function todayMDY() {
-    const now = new Date();
-    const month = String(now.getMonth() + 1).padStart(2, "0");
-    const day = String(now.getDate()).padStart(2, "0");
-    return month + "/" + day + "/" + now.getFullYear();
+    return monthDayYear(easternToday());
   }
 
   function fieldValue(id) {
@@ -304,15 +303,26 @@
   }
 
   function easternToday() {
-    return new Intl.DateTimeFormat("en-CA", { timeZone: "America/New_York" }).format(new Date());
+    return new Intl.DateTimeFormat("en-CA", { timeZone: PRACTICE_TZ }).format(new Date());
+  }
+
+  function practiceDay(iso) {
+    const text = String(iso || "").trim();
+    if (!text) return "";
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+    if (/^\d{4}-\d{2}-\d{2}T00:00:00(?:\.0+)?(?:Z|\+00:00)$/.test(text)) return text.slice(0, 10);
+    const parsed = new Date(text);
+    if (Number.isNaN(parsed.getTime())) return text.slice(0, 10);
+    return new Intl.DateTimeFormat("en-CA", { timeZone: PRACTICE_TZ }).format(parsed);
   }
 
   function shortDate(iso) {
-    if (!iso) return "";
-    const parsed = new Date(iso);
-    if (Number.isNaN(parsed.getTime())) return String(iso).slice(0, 10);
+    const day = practiceDay(iso);
+    const parts = day.split("-");
+    if (parts.length !== 3) return day;
+    const parsed = new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2]), 12));
     return new Intl.DateTimeFormat("en-US", {
-      timeZone: "America/New_York",
+      timeZone: "UTC",
       month: "short",
       day: "numeric",
       year: "numeric",
@@ -469,7 +479,7 @@
   }
 
   function monthDayYear(iso) {
-    const day = String(iso || "").slice(0, 10);
+    const day = practiceDay(iso);
     const parts = day.split("-");
     if (parts.length !== 3) return day;
     return parts[1] + "/" + parts[2] + "/" + parts[0];
@@ -645,7 +655,7 @@
       ? ((item.dates && (item.dates.i9_completed_on || item.dates.i9_section2_completed_on)) || "")
       : "";
     if (enteredDate) bits.push(enteredDate);
-    else if (item.done_at) bits.push(String(item.done_at).slice(0, 10));
+    else if (item.done_at) bits.push(monthDayYear(item.done_at));
     if (item.note) bits.push(item.note);
     return bits.filter(Boolean).join(" — ");
   }
@@ -1554,6 +1564,10 @@
       banner.style.color = "#0f6e56";
       banner.style.border = "1px solid #b7e0cf";
     }
+    const icon = document.createElement("span");
+    icon.setAttribute("aria-hidden", "true");
+    icon.textContent = kind === "error" ? "! " : "✓ ";
+    banner.appendChild(icon);
     const message = document.createElement("span");
     message.textContent = text;
     banner.appendChild(message);
@@ -1564,15 +1578,13 @@
     dismiss.style.marginLeft = "0.75rem";
     dismiss.onclick = function () { banner.remove(); };
     banner.appendChild(dismiss);
-    window.setTimeout(function () {
-      if (banner.isConnected) banner.remove();
-    }, 8000);
     return banner;
   }
 
   function sentOn(hire, key) {
     const row = (hire.document_sends || []).filter(function (item) { return item.form_key === key; })[0];
-    return row && row.sent_at ? String(row.sent_at).slice(0, 10) : "";
+    if (!row) return "";
+    return row.sent_on || practiceDay(row.sent_at);
   }
 
   function renderAdditionalDocuments(card, hire) {
@@ -1585,10 +1597,6 @@
     panel.className = "additional-panel";
     panel.hidden = !reopenAdditional[hire.id];
     if (reopenAdditional[hire.id]) delete reopenAdditional[hire.id];
-    if (additionalBannerState[hire.id]) {
-      panel.insertBefore(additionalBanner(additionalBannerState[hire.id], "ok"), panel.firstChild);
-      delete additionalBannerState[hire.id];
-    }
     const note = document.createElement("p");
     note.className = "meta";
     note.textContent = "From operations@heart4change.org. Reply-To operations@heart4change.org. Candidate email and the test recipient override apply.";
@@ -1647,6 +1655,13 @@
     send.type = "button";
     send.className = "primary";
     send.textContent = "Send";
+    function showAdditionalBanner(kind, text) {
+      const previous = panel.querySelector(".additional-banner");
+      if (previous) previous.remove();
+      const banner = additionalBanner(text, kind);
+      send.insertAdjacentElement("afterend", banner);
+      if (banner.scrollIntoView) banner.scrollIntoView({ block: "nearest" });
+    }
     send.onclick = function () {
       const keys = checkedKeys();
       if (!keys.length || send.disabled) return;
@@ -1660,16 +1675,16 @@
         if (!saved || saved.emailed === false) {
           send.disabled = false;
           send.textContent = "Send";
-          panel.insertBefore(additionalBanner(notice, "warn"), panel.firstChild);
+          showAdditionalBanner("warn", notice);
           return;
         }
         additionalBannerState[hire.id] = notice;
         reopenAdditional[hire.id] = true;
-        refreshHire(saved, notice);
+        refreshHire(saved);
       }).catch(function (error) {
         send.disabled = false;
         send.textContent = "Send";
-        panel.insertBefore(additionalBanner((error && error.message) || "Could not send the documents.", "error"), panel.firstChild);
+        showAdditionalBanner("error", (error && error.message) || "Could not send the documents.");
       });
     };
     open.onclick = function () {
@@ -1677,6 +1692,12 @@
       if (!panel.hidden) loadPreview();
     };
     panel.appendChild(send);
+    if (additionalBannerState[hire.id]) {
+      const banner = additionalBanner(additionalBannerState[hire.id], "ok");
+      send.insertAdjacentElement("afterend", banner);
+      delete additionalBannerState[hire.id];
+      if (banner.scrollIntoView) banner.scrollIntoView({ block: "nearest" });
+    }
     panel.appendChild(previewSubject);
     panel.appendChild(frame);
     card.appendChild(open);

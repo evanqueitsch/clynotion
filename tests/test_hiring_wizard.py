@@ -82,14 +82,41 @@ def _invite(hire_id: str) -> None:
     assert marked.status_code == 200, marked.text
 
 
-def test_date_only_values_do_not_shift_a_day() -> None:
-    from app.hiring.mailer import long_start_date, short_start_date
+def test_calendar_day_follows_new_york_not_utc() -> None:
+    from datetime import date
 
-    assert short_start_date("2026-12-08") == "12/08/2026"
+    from app.hiring.mailer import long_start_date, practice_calendar_day, short_start_date
+
+    # 23:30 America/New_York (UTC-5) is 04:30 UTC the next morning.
+    instant = "2026-11-19T04:30:00+00:00"
+    assert practice_calendar_day(instant) == date(2026, 11, 18)
+    assert short_start_date(instant) == "11/18/2026"
+    assert long_start_date(instant) == "Wednesday, November 18, 2026"
+    # 7:41pm Eastern on Nov 18 is 00:41 UTC on Nov 19.
+    assert practice_calendar_day("2026-11-19T00:41:00+00:00") == date(2026, 11, 18)
+    assert practice_calendar_day("2026-12-08") == date(2026, 12, 8)
     assert short_start_date("2026-12-08T00:00:00Z") == "12/08/2026"
+    assert short_start_date("2026-12-08") == "12/08/2026"
     assert long_start_date("2026-12-08") == "Tuesday, December 8, 2026"
     assert long_start_date("2026-12-08T00:00:00+00:00") == "Tuesday, December 8, 2026"
     assert long_start_date("12/08/2026") == "Tuesday, December 8, 2026"
+
+
+def test_sent_label_uses_the_eastern_day_without_changing_the_stored_time() -> None:
+    from app.hiring.engine import _document_sends
+
+    hire = {
+        "handoff_at": "2026-11-19T00:41:00+00:00",
+        "packet_form_keys": ["h4c_hipaa_nda"],
+        "documents_sent": [
+            {"form_key": "h4c_packet", "sent_at": "2026-11-19T04:30:00+00:00", "sent_by": "alice@example.com"}
+        ],
+    }
+    rows = {item["form_key"]: item for item in _document_sends(hire)}
+    assert rows["h4c_hipaa_nda"]["sent_at"] == "2026-11-19T00:41:00+00:00"
+    assert rows["h4c_hipaa_nda"]["sent_on"] == "2026-11-18"
+    assert rows["h4c_packet"]["sent_at"] == "2026-11-19T04:30:00+00:00"
+    assert rows["h4c_packet"]["sent_on"] == "2026-11-18"
 
 
 def test_packet_defaults_follow_schedule_and_role() -> None:
@@ -530,7 +557,10 @@ def test_additional_documents_go_to_the_override_and_the_personnel_folder(monkey
         assert "Send additional documents" in page
         assert "additional-banner" in page
         assert "reopenAdditional" in page
-        assert "send.disabled = true" in page
+        assert "scrollIntoView" in page
+        assert "practiceDay" in page
+        assert 'refreshHire(saved)' in page
+        assert "Sending…" in page
         assert 'if (!hire.handoff_at) return;' in page
         client.put(
             "/hiring/settings",

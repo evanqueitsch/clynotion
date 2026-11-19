@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import re
 from datetime import datetime
+from zoneinfo import ZoneInfo
 from html import escape
 from typing import Any, Optional
 
@@ -247,6 +248,39 @@ def render_template(template: str, values: dict[str, str], *, html: bool = False
     return text
 
 
+PRACTICE_TZ = ZoneInfo("America/New_York")
+
+
+def practice_calendar_day(value: str):
+    """Calendar day in America/New_York.
+
+    A date-only value, including midnight UTC used to store that day, stays on
+    that day. Any other timestamp is the Eastern calendar day of that instant.
+    """
+    text = (value or "").strip()
+    if not text:
+        return None
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}", text):
+        return datetime.strptime(text, "%Y-%m-%d").date()
+    if re.fullmatch(r"\d{4}-\d{2}-\d{2}T00:00:00(?:\.0+)?(?:Z|\+00:00)", text):
+        return datetime.strptime(text[:10], "%Y-%m-%d").date()
+    if "T" in text:
+        try:
+            moment = datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except ValueError:
+            moment = None
+        if moment is not None:
+            if moment.tzinfo is None:
+                moment = moment.replace(tzinfo=ZoneInfo("UTC"))
+            return moment.astimezone(PRACTICE_TZ).date()
+    for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(text, fmt).date()
+        except ValueError:
+            continue
+    return None
+
+
 def short_start_date(value: str) -> str:
     """MM/DD/YYYY. A date-only value is never read as UTC."""
     parsed = _parse_date_only(value)
@@ -264,16 +298,10 @@ def long_start_date(value: str) -> str:
 
 
 def _parse_date_only(value: str):
-    text = (value or "").strip()
-    if not text:
+    day = practice_calendar_day(value)
+    if day is None:
         return None
-    head = text.split("T", 1)[0].strip()
-    for fmt in ("%m/%d/%Y", "%m-%d-%Y", "%Y-%m-%d"):
-        try:
-            return datetime.strptime(head, fmt)
-        except ValueError:
-            continue
-    return None
+    return datetime(day.year, day.month, day.day)
 
 
 def wizard_steps(raw: str, *, direct: bool) -> list[str]:
