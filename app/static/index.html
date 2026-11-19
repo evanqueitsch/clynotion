@@ -1246,7 +1246,7 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.24.4"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.27.0"></script>
+  <script src="/static/hiring.js?v=0.27.1"></script>
   <script>
     const state = {
       token: null,
@@ -2052,7 +2052,7 @@
       try {
         const data = await api("/hr/time/settings");
         renderTimeSettings(data);
-        setStatus($("time-settings-status"), data.saved ? "Settings saved for this practice." : "Not saved yet. Choose staff and save.", "ok");
+        setStatus($("time-settings-status"), "");
         await loadHoursEmailPreview();
       } catch (e) {
         setStatus($("time-settings-status"), errText(e), "error");

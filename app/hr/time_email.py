@@ -20,34 +20,26 @@ _INK = "color:#1c2421;"
 _MUTED = "color:#3d4742;"
 
 
-def sample_summary_report() -> dict[str, Any]:
-    """Fake week used by the Admin test copy. No practice roster names."""
-    return {
-        "label": "Monday, November 16, 2026 – Friday, November 20, 2026",
-        "week_ending": "2026-11-20",
-        "schedule_version": 2,
-        "deadline_label": "Thursday, November 19, 2026 at 11:30 AM ET",
-        "payroll_label": "Thursday, November 19, 2026",
-        "dashboard_url": "https://clynotion.com/#time-admin?week=2026-11-20&v=2",
-        "rows": [
-            {
-                "display_name": "Riley Sample",
-                "email": "riley.sample@example.com",
-                "status": "submitted",
-                "decimal_hours": "32.50",
-                "rounded_display": "32:30",
-                "updated_at": "2026-11-19T04:30:00+00:00",
-            },
-            {
-                "display_name": "Jordan Example",
-                "email": "jordan.example@example.com",
-                "status": "missing",
-                "decimal_hours": "",
-                "rounded_display": "",
-                "updated_at": "",
-            },
-        ],
-    }
+def sample_rows() -> list[dict[str, Any]]:
+    """Fake names for an Admin test copy. The week itself comes from the live schedule."""
+    return [
+        {
+            "display_name": "Riley Sample",
+            "email": "riley.sample@example.com",
+            "status": "submitted",
+            "decimal_hours": "32.50",
+            "rounded_display": "32:30",
+            "updated_at": "2026-11-19T04:30:00+00:00",
+        },
+        {
+            "display_name": "Jordan Example",
+            "email": "jordan.example@example.com",
+            "status": "missing",
+            "decimal_hours": "",
+            "rounded_display": "",
+            "updated_at": "",
+        },
+    ]
 
 
 def sample_reminder_person(slot: str) -> dict[str, str]:
@@ -72,9 +64,13 @@ def hours_label(row: dict[str, Any]) -> str:
     return rounded
 
 
-def count_line(submitted: int, missing: int) -> str:
-    total = submitted + missing
-    return f"{submitted} of {total} submitted"
+def count_line(submitted: int, missing: int, label: str) -> str:
+    if submitted == 0 and missing == 0:
+        return f"Nobody is enabled for hours for {label}."
+    if missing <= 0:
+        return f"Everyone has submitted hours for {label}."
+    still = "1 still needs to submit." if missing == 1 else f"{missing} still need to submit."
+    return f"{submitted} of {submitted + missing} people have submitted hours for {label}. {still}"
 
 
 def compose_summary(report: dict[str, Any]) -> tuple[str, str, str]:
@@ -85,11 +81,10 @@ def compose_summary(report: dict[str, Any]) -> tuple[str, str, str]:
     missing_rows = [row for row in report.get("rows") or [] if row.get("status") != "submitted"]
     submitted = len(submitted_rows)
     missing = len(missing_rows)
-    counts = count_line(submitted, missing)
-    legacy = f"Submitted: {submitted}. Missing: {missing}. Missing is not zero."
+    counts = count_line(submitted, missing, label)
     link = str(report.get("dashboard_url") or "")
-    payroll = str(report.get("payroll_label") or report.get("deadline_label") or "")
-    intro = f"Hello,\n\n{counts} for {label}.\n{legacy}"
+    payroll = str(report.get("payroll_label") or "")
+    intro = f"{_greeting(str(report.get('recipient_name') or ''))}\n\n{counts}"
     text_lines = [HEADER_TEXT, "", intro, "", "Submitted"]
     text_lines.extend(_plain_people(submitted_rows, submitted=True) or ["None"])
     text_lines.extend(["", "Not yet submitted"])
@@ -113,13 +108,14 @@ def compose_summary(report: dict[str, Any]) -> tuple[str, str, str]:
 def compose_reminder(
     *,
     week_label: str,
+    payroll_label: str,
     deadline_label: str,
     weekday_phrase: str,
     coverage_note: str,
     display_name: str = "",
     link: str = TIME_ENTRY_URL,
 ) -> tuple[str, str, str]:
-    """Subject, plain text, and HTML for a staff reminder. Wording stays the same."""
+    """Subject, plain text, and HTML for a staff reminder."""
     subject = weekday_phrase
     greeting = _greeting(display_name)
     intro = "\n\n".join(
@@ -128,7 +124,8 @@ def compose_reminder(
             greeting,
             subject,
             f"Workweek: {week_label}",
-            f"Payroll run: {deadline_label}" if deadline_label else "",
+            f"Payroll run: {payroll_label}" if payroll_label else "",
+            f"Deadline: {deadline_label}" if deadline_label else "",
             coverage_note,
         )
         if part

@@ -39,7 +39,7 @@ from app.hr.time_email import (
     compose_summary,
     coverage_sentence,
     sample_reminder_person,
-    sample_summary_report,
+    sample_rows,
 )
 from app.hr.time_mail import MailResult, safe_error_code, safe_provider_id
 
@@ -986,46 +986,30 @@ class TimeStore:
 
         if kind not in ("first", "due", "summary"):
             raise ValueError("kind must be first, due, or summary.")
+        week = pay_week_ending(now)
+        with self.exclusive():
+            settings = self._settings.get(user.practice_id) or default_settings(user.practice_id, now)
+            report = self._report_unlocked(user.practice_id, week, now, settings)
         if sample:
-            report = sample_summary_report()
+            report = dict(report)
+            report["rows"] = sample_rows()
             person = sample_reminder_person(kind)
-            deadline_text = str(report["deadline_label"])
-            week_label = str(report["label"])
-            phrase = reminder_due_phrase(2, "09:00") if kind == "first" else reminder_due_phrase(3, "08:00")
-            coverage = (
-                "Enter the hours you already worked that Monday through Friday. "
-                "Hours from Saturday, November 21, 2026 and Sunday, November 22, 2026 "
-                "belong in this same total if you worked them."
-            )
+        elif kind == "due":
+            person = next((row for row in report["rows"] if row["status"] == "missing"), None) or {}
         else:
-            week = pay_week_ending(now)
-            with self.exclusive():
-                settings = self._settings.get(user.practice_id) or default_settings(user.practice_id, now)
-                report = self._report_unlocked(user.practice_id, week, now, settings)
-            deadline_text = str(report.get("deadline_label") or "")
-            week_label = str(report["label"])
-            weekend = coverage_end(week)
-            saturday = week + timedelta(days=1)
-            coverage = coverage_sentence(saturday, weekend)
-            if kind == "due":
-                person = next((row for row in report["rows"] if row["status"] == "missing"), None) or {}
-                weekday = settings.reminder_due_weekday
-                at_time = settings.reminder_due_time
-            else:
-                person = (report["rows"][:1] or [{}])[0]
-                weekday = settings.reminder_first_weekday
-                at_time = settings.reminder_first_time
-            phrase = reminder_due_phrase(weekday, at_time)
+            person = (report["rows"][:1] or [{}])[0]
         if kind == "summary":
             subject, text, html = compose_summary(report)
         else:
-            subject, text, html = compose_reminder(
-                week_label=week_label,
-                deadline_label=deadline_text,
-                weekday_phrase=phrase,
-                coverage_note=coverage,
+            weekday = settings.reminder_first_weekday if kind == "first" else settings.reminder_due_weekday
+            at_time = settings.reminder_first_time if kind == "first" else settings.reminder_due_time
+            subject, text, html = render_reminder(
+                slot=kind,
+                week_ending=week,
+                deadline=_parse_iso(str(report["deadline"])),
+                weekday=weekday,
+                at_time=at_time,
                 display_name=str(person.get("display_name") or ""),
-                link=TIME_ENTRY_URL,
             )
         subject, text, html = as_test_copy(subject, text, html)
         return OutboundMail(
@@ -1671,6 +1655,12 @@ class TimeStore:
             f"{CORRECTOR_NOTE_TAIL}"
         )
 
+    def _recipient_display_name(self, practice_id: str, email: str) -> str:
+        name, _clinician_id = self._name_for_email(practice_id, email)
+        if _email(email) == MELISSA_EMAIL and (not name or "@" in name or name.strip().lower() == _email(email)):
+            return "Melissa Smith"
+        return name
+
     def _name_for_email(self, practice_id: str, email: str) -> tuple[str, str]:
         for row in (self._directory.get(practice_id) or {}).get("users") or []:
             if _email(str(row.get("email") or "")) == email:
@@ -2092,6 +2082,7 @@ class TimeStore:
         header["submitted_count"] = sum(1 for row in rows if row["status"] == "submitted")
         header["missing_count"] = sum(1 for row in rows if row["status"] == "missing")
         recipient = state.summary_recipient if state and state.locked_at else effective.summary_recipient
+        recipient_name = self._recipient_display_name(practice_id, recipient)
         audits = [
             dict(row)
             for row in self._audits
@@ -2108,6 +2099,7 @@ class TimeStore:
             **header,
             "practice_id": practice_id,
             "summary_recipient": recipient,
+            "recipient_name": recipient_name,
             "rows": rows,
             "missing": [row["display_name"] for row in rows if row["status"] == "missing"],
             "audits": audits,
@@ -2740,6 +2732,7 @@ def render_reminder(
     saturday = week_ending + timedelta(days=1)
     return compose_reminder(
         week_label=week_range_label(week_ending),
+        payroll_label=_long_date(payroll_thursday(week_ending)),
         deadline_label=deadline_label(deadline),
         weekday_phrase=reminder_due_phrase(weekday, at_time),
         coverage_note=coverage_sentence(saturday, weekend),
