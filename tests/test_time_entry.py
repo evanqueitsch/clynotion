@@ -274,6 +274,7 @@ def test_november_payroll_does_not_backfill_and_thursday_goes_to_the_right_peopl
     assert "were due" not in mailer.sent[0].text
     again = run_tick(mailer=mailer, now=THU_0900 + timedelta(seconds=30))
     assert again["sent"] == 0
+    assert run_tick(mailer=mailer, now=THU_0900 + timedelta(hours=3))["sent"] == 0
 
     mailer.sent.clear()
     summary = run_tick(mailer=mailer, now=SUMMARY_AT)
@@ -824,6 +825,49 @@ def test_catalog_tile_is_live(client: TestClient) -> None:
     assert source["href"] == "/#time"
 
 
+def test_sent_heads_up_is_not_claimed_again_after_reload(tmp_path) -> None:
+    from app.hr.time_entry import DEFAULT_LEASE, DEFAULT_RETRY_BACKOFF, MAX_DELIVERY_ATTEMPTS
+
+    _roster()
+    path = tmp_path / "hr_time.enc"
+    store = TimeStore(mode="file", path=path)
+    store.save_settings(
+        _alice_user(),
+        _settings(participant_emails=["jordan@heart4change.org"], automation_enabled=True),
+        THU_0900,
+    )
+    batch = store.claim_due_jobs(
+        THU_0900,
+        lease=DEFAULT_LEASE,
+        backoff=DEFAULT_RETRY_BACKOFF,
+        max_attempts=MAX_DELIVERY_ATTEMPTS,
+    )
+    assert [job.kind if hasattr(job, "kind") else job.to for job in batch.jobs]
+    heads = [job for job in batch.jobs if job.to == "jordan@heart4change.org"]
+    assert len(heads) == 1
+    assert store.finish_delivery(
+        heads[0].delivery_id,
+        heads[0].claim_token,
+        MailResult(status="sent", detail="ok", provider_id="heads-up"),
+        THU_0900,
+    ) == "sent"
+    reloaded = TimeStore(mode="file", path=path)
+    same_minute = reloaded.claim_due_jobs(
+        THU_0900 + timedelta(seconds=30),
+        lease=DEFAULT_LEASE,
+        backoff=DEFAULT_RETRY_BACKOFF,
+        max_attempts=MAX_DELIVERY_ATTEMPTS,
+    )
+    assert same_minute.jobs == []
+    later = reloaded.claim_due_jobs(
+        THU_0900 + timedelta(hours=3),
+        lease=DEFAULT_LEASE,
+        backoff=DEFAULT_RETRY_BACKOFF,
+        max_attempts=MAX_DELIVERY_ATTEMPTS,
+    )
+    assert later.jobs == []
+
+
 def test_encrypted_file_is_atomic_and_isolated_across_stores(tmp_path, monkeypatch: pytest.MonkeyPatch) -> None:
     _roster()
     path = tmp_path / "hr_time.enc"
@@ -1110,6 +1154,20 @@ def test_settings_copy_uses_names_dates_and_the_selected_reminder_time(client: T
     assert "msmith@" not in saved["corrector_note"]
     assert saved["directory"]["updated_label"] == "Nov 6, 2026, 2:00 PM ET"
     assert saved["participant_emails"] == ["jordan@heart4change.org", "sam@heart4change.org"]
+    assert saved["schedule_warnings"] == []
+    for stale in (
+        "reminder_first_weekday",
+        "reminder_first_time",
+        "reminder_first_subject",
+        "reminder_due_weekday",
+        "reminder_due_time",
+        "reminder_due_subject",
+        "summary_weekday",
+        "summary_time",
+    ):
+        assert stale not in saved
+    assert "will not send" not in Path("app/static/index.html").read_text(encoding="utf-8")
+    assert "time-settings-warnings" not in Path("app/static/index.html").read_text(encoding="utf-8")
 
     page = Path("app/static/index.html").read_text(encoding="utf-8")
     assert "Directory list updated on:" in page

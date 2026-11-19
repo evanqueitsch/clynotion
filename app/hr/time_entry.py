@@ -324,20 +324,6 @@ def parse_week_ending(raw: str) -> date:
     return day
 
 
-def date_for_weekday(week_ending: date, weekday: int) -> date:
-    """Map Python weekday onto the payroll week that contains payroll Thursday.
-
-    Wednesday and Thursday of that week are the default reminders. They fall
-    after the workweek, not inside it.
-    """
-    _require_friday(week_ending)
-    if weekday < 0 or weekday > 6:
-        raise ValueError("weekday must be 0 (Monday) through 6 (Sunday).")
-    thursday = payroll_thursday(week_ending)
-    monday = thursday - timedelta(days=3)
-    return monday + timedelta(days=weekday)
-
-
 def at_local(day: date, hhmm: str) -> datetime:
     """Wall time in America/New_York.
 
@@ -360,30 +346,6 @@ def deadline_instant(week_ending: date, settings: "TimeSettings", version: int =
         day = legacy_date_for_weekday(week_ending, settings.summary_weekday)
         return at_local(day, settings.summary_time)
     return _hours_spec(week_ending, settings).deadline_at
-
-
-def schedule_warnings(settings: "TimeSettings", week_ending: date) -> list[str]:
-    lock_at = deadline_instant(week_ending, settings)
-    first_at = at_local(
-        date_for_weekday(week_ending, settings.reminder_first_weekday),
-        settings.reminder_first_time,
-    )
-    due_at = at_local(
-        date_for_weekday(week_ending, settings.reminder_due_weekday),
-        settings.reminder_due_time,
-    )
-    warnings: list[str] = []
-    if first_at >= lock_at:
-        warnings.append("The first reminder is at or after cutoff, so it will not send.")
-    if due_at >= lock_at:
-        warnings.append("The day-of reminder is at or after cutoff, so it will not send.")
-    if due_at < first_at:
-        warnings.append("The day-of reminder is earlier than the first reminder.")
-    return warnings
-
-
-_OLD_SCHEDULE_DEFAULT = (3, "09:00", 4, "08:00", 4, "11:30")
-_NEW_SCHEDULE_DEFAULT = (2, "09:00", 3, "08:00", 3, "11:30")
 
 
 @dataclass
@@ -1551,21 +1513,13 @@ class TimeStore:
                 schedule_for(collection_friday(now), settings.deadline_weekday),
                 self._recipient_display_name(settings.practice_id, settings.summary_recipient),
             ),
-            "reminder_first_weekday": settings.reminder_first_weekday,
-            "reminder_first_time": settings.reminder_first_time,
-            "reminder_first_subject": "",
-            "reminder_due_weekday": settings.reminder_due_weekday,
-            "reminder_due_time": settings.reminder_due_time,
-            "reminder_due_subject": "",
-            "summary_weekday": settings.summary_weekday,
-            "summary_time": settings.summary_time,
             "summary_recipient": settings.summary_recipient,
             "corrector_email": MELISSA_EMAIL,
             "corrector_note": self._corrector_note(settings.practice_id),
             "active_from_week": settings.active_from_week,
             "timezone": "America/New_York",
             "schedule_note": SCHEDULE_NOTE,
-            "schedule_warnings": schedule_warnings(settings, week),
+            "schedule_warnings": [],
             "hours_cap_note": HOURS_CAP_NOTE,
             "helper_text": HOURS_HELPER_TEXT,
             "schedule_version": settings.schedule_version,

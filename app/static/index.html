@@ -1098,7 +1098,6 @@
       <input id="time-summary-to" type="email" autocomplete="off" />
       <label><input id="time-automation" type="checkbox" /> Send scheduled reminders and payroll links</label>
       <p class="meta">Checked means future reminders go out at the times above, only to people you enable. Uncheck and save to stop them. A time that already passed is not sent late. The operations mailbox must stay connected. These reminders are separate from the test Send buttons.</p>
-      <div id="time-settings-warnings"></div>
       <div class="row">
         <button class="primary" id="btn-time-settings-save" type="button">Save settings</button>
         <button class="ghost" id="btn-time-preview" type="button">Preview summary</button>
@@ -1237,7 +1236,7 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.24.4"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.28.0"></script>
+  <script src="/static/hiring.js?v=0.28.1"></script>
   <script>
     const state = {
       token: null,
@@ -1836,14 +1835,6 @@
         empty.textContent = "The practice roster is empty. Import people from Workspace first. Only people with an email can be selected.";
         roster.appendChild(empty);
       }
-      const warnings = $("time-settings-warnings");
-      warnings.innerHTML = "";
-      (data.schedule_warnings || []).forEach((warning) => {
-        const note = document.createElement("p");
-        note.className = "warn";
-        note.textContent = warning;
-        warnings.appendChild(note);
-      });
     }
 
     function renderSelfTest(data) {
