@@ -1060,6 +1060,9 @@
       </div>
       <label for="time-admin-week">Workweek Friday</label>
       <input id="time-admin-week" type="date" />
+      <p class="meta" id="time-admin-range"></p>
+      <label for="time-admin-recent">Recent weeks</label>
+      <select id="time-admin-recent"></select>
       <input id="time-admin-version" type="hidden" value="2" />
       <div class="row">
         <button class="primary" id="btn-time-admin-load" type="button">Show week</button>
@@ -1236,7 +1239,7 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.24.4"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.28.1"></script>
+  <script src="/static/hiring.js?v=0.28.2"></script>
   <script>
     const state = {
       token: null,
@@ -1498,7 +1501,7 @@
         line.className = "due-row";
         const text = document.createElement("span");
         text.className = "due-title";
-        text.textContent = `${row.week_ending}: raw ${row.raw_display}, payable ${row.rounded_display} (${row.decimal_hours})`;
+        text.textContent = `${row.week_label || shortWeekRange(row.week_ending)}: raw ${row.raw_display}, payable ${row.rounded_display} (${row.decimal_hours})`;
         line.appendChild(text);
         root.appendChild(line);
       });
@@ -1513,8 +1516,9 @@
         $("time-pay-note").textContent = data.pay_week_note || "";
         $("time-helper").textContent = data.helper_text || "";
         const week = data.week || {};
-        $("time-week-label").textContent = week.label
-          ? `${week.label}. Deadline ${week.deadline_label}. ${week.locked ? "Locked." : "Open for entries."}`
+        const weekRange = week.short_label || shortWeekRange(week.week_ending);
+        $("time-week-label").textContent = weekRange
+          ? `This week: ${weekRange}. Deadline ${week.deadline_label}. ${week.locked ? "Locked." : "Open for entries."}`
           : "";
         const nav = $("time-nav");
         nav.innerHTML = "";
@@ -1618,6 +1622,7 @@
           chosen = me.week.week_ending;
         }
         $("time-admin-week").value = chosen;
+        if ($("time-admin-range")) $("time-admin-range").textContent = shortWeekRange(chosen);
         await loadTimeAdmin(chosen);
       } catch (e) {
         setStatus($("time-admin-status"), errText(e), "error");
@@ -1629,7 +1634,10 @@
         const data = await api(`/hr/time/week?week_ending=${encodeURIComponent(ending)}&v=${encodeURIComponent(version)}`);
         window.history.replaceState({}, "", `/#time-admin?week=${ending}&v=${version}`);
         const counts = `${data.submitted_count || 0} submitted, ${data.missing_count || 0} missing`;
-        $("time-admin-meta").textContent = `${data.label}. Summary ${data.payroll_label || data.deadline_label}. ${counts}. ${data.locked ? "Locked." : "Open."} ${data.coverage_note || ""}`;
+        const range = data.short_label || shortWeekRange(ending);
+        if ($("time-admin-range")) $("time-admin-range").textContent = range;
+        $("time-admin-meta").textContent = `${range}. ${data.label}. Summary ${data.payroll_label || data.deadline_label}. ${counts}. ${data.locked ? "Locked." : "Open."} ${data.coverage_note || ""}`;
+        await refreshRecentWeeks(ending);
       const root = $("time-admin-rows");
       root.innerHTML = "";
       (data.rows || []).forEach((row) => {
@@ -3639,6 +3647,59 @@
     if (btnTimeAdminEntry) btnTimeAdminEntry.onclick = () => { openTime(); };
     const btnTimeAdminSettings = $("btn-time-admin-settings");
     if (btnTimeAdminSettings) btnTimeAdminSettings.onclick = () => { openTimeSettings(); };
+    function shortWeekRange(fridayIso) {
+      const text = String(fridayIso || "").slice(0, 10);
+      const parts = text.split("-");
+      if (parts.length !== 3) return text;
+      const end = new Date(Date.UTC(Number(parts[0]), Number(parts[1]) - 1, Number(parts[2])));
+      if (Number.isNaN(end.getTime())) return text;
+      const start = new Date(end.getTime());
+      start.setUTCDate(start.getUTCDate() - 4);
+      const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+      const startMonth = months[start.getUTCMonth()];
+      const endMonth = months[end.getUTCMonth()];
+      if (start.getUTCFullYear() !== end.getUTCFullYear()) {
+        return startMonth + " " + start.getUTCDate() + ", " + start.getUTCFullYear() + " – " + endMonth + " " + end.getUTCDate() + ", " + end.getUTCFullYear();
+      }
+      if (start.getUTCMonth() !== end.getUTCMonth()) {
+        return startMonth + " " + start.getUTCDate() + " – " + endMonth + " " + end.getUTCDate() + ", " + end.getUTCFullYear();
+      }
+      return startMonth + " " + start.getUTCDate() + "–" + end.getUTCDate() + ", " + end.getUTCFullYear();
+    }
+
+    async function refreshRecentWeeks(selected) {
+      const select = $("time-admin-recent");
+      if (!select) return;
+      const data = await api("/hr/time/weeks");
+      select.innerHTML = "";
+      (data.weeks || []).forEach((week) => {
+        const option = document.createElement("option");
+        option.value = week.week_ending;
+        const count = week.submitted_count ? week.submitted_count + " saved" : "no totals yet";
+        option.textContent = week.week_label + " — " + count + (week.current ? " (current)" : "");
+        select.appendChild(option);
+      });
+      if (selected && Array.prototype.some.call(select.options, (option) => option.value === selected)) {
+        select.value = selected;
+      }
+    }
+
+    const recentWeeks = $("time-admin-recent");
+    if (recentWeeks) {
+      recentWeeks.onchange = () => {
+        const ending = recentWeeks.value;
+        if (!ending) return;
+        $("time-admin-week").value = ending;
+        if ($("time-admin-range")) $("time-admin-range").textContent = shortWeekRange(ending);
+        loadTimeAdmin(ending).catch((e) => setStatus($("time-admin-status"), errText(e), "error"));
+      };
+    }
+    const adminWeekInput = $("time-admin-week");
+    if (adminWeekInput) {
+      adminWeekInput.addEventListener("change", () => {
+        if ($("time-admin-range")) $("time-admin-range").textContent = shortWeekRange(adminWeekInput.value);
+      });
+    }
     const btnTimeAdminLoad = $("btn-time-admin-load");
     if (btnTimeAdminLoad) {
       btnTimeAdminLoad.onclick = () => {

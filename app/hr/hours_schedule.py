@@ -88,6 +88,25 @@ def long_date(day: date) -> str:
     return f"{day.strftime('%A, %B')} {day.day}, {day.year}"
 
 
+_MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def short_week_range(week_ending: date) -> str:
+    """Monday–Friday label for a stored Friday key. Does not change the key.
+
+    Same month: ``Nov 2–6, 2026``. Month boundary: ``Nov 30 – Dec 4, 2026``.
+    Year boundary: ``Dec 29, 2025 – Jan 2, 2026``.
+    """
+    start = week_ending - timedelta(days=4)
+    start_month = _MONTHS[start.month - 1]
+    end_month = _MONTHS[week_ending.month - 1]
+    if start.year != week_ending.year:
+        return f"{start_month} {start.day}, {start.year} – {end_month} {week_ending.day}, {week_ending.year}"
+    if start.month != week_ending.month:
+        return f"{start_month} {start.day} – {end_month} {week_ending.day}, {week_ending.year}"
+    return f"{start_month} {start.day}–{week_ending.day}, {week_ending.year}"
+
+
 def clock_phrase(hhmm: str) -> str:
     hour, minute = (int(part) for part in hhmm.split(":", 1))
     suffix = "AM" if hour < 12 else "PM"

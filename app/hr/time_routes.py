@@ -79,6 +79,12 @@ def time_me(user: CurrentUser) -> dict:
     return _call(lambda: time_store.me_view(user))
 
 
+@router.get("/hr/time/weeks")
+def time_recent_weeks(user: CurrentUser) -> dict:
+    """Recent Fridays and how many totals are saved. Does not send mail or rewrite keys."""
+    return _call(lambda: time_store.recent_weeks(user))
+
+
 @router.get("/hr/time/week")
 def time_week(user: CurrentUser, week_ending: str, v: Optional[int] = None) -> dict:
     return _call(lambda: time_store.week_view(user, week_ending, version=v))
