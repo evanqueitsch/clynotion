@@ -8,7 +8,8 @@ business day. Overdue reminders are 9:00 AM on the next 10 business days,
 weekdays only, and only while the hours are still missing.
 
 Weeks before November 16–20, 2026 are not mailed. That keeps the Nov 9–13
-week quiet at deploy and prevents a backlog of overdue mail.
+week quiet at deploy and prevents a backlog of overdue mail. Those weeks are
+also closed for edits through the stored locked-through Friday.
 """
 
 from __future__ import annotations
@@ -20,6 +21,9 @@ from zoneinfo import ZoneInfo
 ET = ZoneInfo("America/New_York")
 
 FIRST_LIVE_WEEK_ENDING = date(2026, 11, 20)
+# Friday of the last week that is closed to everyone. Nov 16–20 stays open.
+DEFAULT_LOCKED_THROUGH_WEEK_ENDING = date(2026, 11, 13)
+CLOSED_WEEK_MESSAGE = "Locked — this week is closed."
 DEADLINE_TIME = "23:59"
 HEADS_UP_TIME = "09:00"
 DUE_DAY_TIME = "08:00"
@@ -89,6 +93,15 @@ def long_date(day: date) -> str:
 
 
 _MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
+def week_is_closed(week_ending: date, locked_through: date) -> bool:
+    """True when the stored Friday key is on or before the locked-through Friday."""
+    return week_ending <= locked_through
+
+
+def locked_through_sentence(locked_through: date) -> str:
+    return f"Weeks through {short_week_range(locked_through)} are locked."
 
 
 def short_week_range(week_ending: date) -> str:

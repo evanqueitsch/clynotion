@@ -1097,6 +1097,7 @@
       <select id="time-deadline-day"></select>
       <p class="meta">Hours are due at 11:59 PM Eastern on this day. Weekend work stays in the Monday–Friday week. Reminder times are fixed.</p>
       <p class="meta" id="time-schedule-preview"></p>
+      <p class="meta" id="time-locked-through"></p>
       <label for="time-summary-to">Summary recipient</label>
       <input id="time-summary-to" type="email" autocomplete="off" />
       <label><input id="time-automation" type="checkbox" /> Send scheduled reminders and payroll links</label>
@@ -1239,7 +1240,7 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.24.4"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.28.2"></script>
+  <script src="/static/hiring.js?v=0.28.3"></script>
   <script>
     const state = {
       token: null,
@@ -1517,8 +1518,11 @@
         $("time-helper").textContent = data.helper_text || "";
         const week = data.week || {};
         const weekRange = week.short_label || shortWeekRange(week.week_ending);
+        const weekState = week.closed
+          ? (week.lock_message || "Locked — this week is closed.")
+          : (week.locked ? "Locked." : "Open for entries.");
         $("time-week-label").textContent = weekRange
-          ? `This week: ${weekRange}. Deadline ${week.deadline_label}. ${week.locked ? "Locked." : "Open for entries."}`
+          ? `This week: ${weekRange}. Deadline ${week.deadline_label}. ${weekState}`
           : "";
         const nav = $("time-nav");
         nav.innerHTML = "";
@@ -1563,17 +1567,19 @@
           $("time-payable").textContent = entry
             ? `Submitted. Raw ${entry.raw_display}. Payable (rounded up to 15 minutes) ${entry.rounded_display} (${entry.decimal_hours}).`
             : "Missing for this week. Blank is missing, not zero. Save 0 hours and 0 minutes if you did not work.";
-          const editable = !!data.can_edit;
+          const editable = !!data.can_edit && !week.closed;
           $("time-hours").disabled = !editable;
           $("time-minutes").disabled = !editable;
           $("btn-time-save").disabled = !editable;
           $("btn-time-save").textContent = editable ? "Save hours" : "Locked";
           setStatus(
             $("time-status"),
-            editable
-              ? (entry ? "Submitted. You can still edit before the cutoff." : "Missing. Enter hours and minutes, then save.")
-              : "Read-only. This week is past the cutoff. Ask Melissa if a correction is needed.",
-            editable ? "ok" : "ok",
+            week.closed
+              ? (week.lock_message || "Locked — this week is closed.")
+              : (editable
+                ? (entry ? "Submitted. You can still edit before the cutoff." : "Missing. Enter hours and minutes, then save.")
+                : "Read-only. This week is past the cutoff. Ask Melissa if a correction is needed."),
+            "ok",
           );
         }
         renderTimeHistory(data.history || []);
@@ -1636,7 +1642,10 @@
         const counts = `${data.submitted_count || 0} submitted, ${data.missing_count || 0} missing`;
         const range = data.short_label || shortWeekRange(ending);
         if ($("time-admin-range")) $("time-admin-range").textContent = range;
-        $("time-admin-meta").textContent = `${range}. ${data.label}. Summary ${data.payroll_label || data.deadline_label}. ${counts}. ${data.locked ? "Locked." : "Open."} ${data.coverage_note || ""}`;
+        const lockLabel = data.closed
+          ? (data.lock_message || "Locked — this week is closed.")
+          : (data.locked ? "Locked." : "Open.");
+        $("time-admin-meta").textContent = `${range}. ${data.label}. Summary ${data.payroll_label || data.deadline_label}. ${counts}. ${lockLabel} ${data.coverage_note || ""}`;
         await refreshRecentWeeks(ending);
       const root = $("time-admin-rows");
       root.innerHTML = "";
@@ -1650,7 +1659,7 @@
           ? `${row.display_name} — missing`
           : `${row.display_name} — raw ${row.raw_display}, payable ${row.rounded_display} (${row.decimal_hours})`;
         wrap.appendChild(title);
-        if (data.can_correct) {
+        if (data.can_correct && !data.closed) {
           const hours = document.createElement("input");
           hours.type = "number";
           hours.min = "0";
@@ -1736,7 +1745,9 @@
       });
       setStatus(
         $("time-admin-status"),
-        data.can_correct ? "You can correct this week." : "View only. After cutoff, only Melissa can change hours.",
+        data.closed
+          ? (data.lock_message || "Locked — this week is closed.")
+          : (data.can_correct ? "You can correct this week." : "View only. After cutoff, only Melissa can change hours."),
         "ok",
       );
     }
@@ -1812,6 +1823,7 @@
       $("time-settings-corrector").textContent = data.corrector_note || "";
       if ($("time-deadline-day")) $("time-deadline-day").value = String(data.deadline_weekday ?? 4);
       if ($("time-schedule-preview")) $("time-schedule-preview").textContent = data.schedule_preview || "";
+      if ($("time-locked-through")) $("time-locked-through").textContent = data.locked_through_label || "";
       $("time-summary-to").value = data.summary_recipient || "";
       if ($("time-automation")) $("time-automation").checked = !!data.automation_enabled;
       const roster = $("time-roster");
@@ -3676,7 +3688,8 @@
         const option = document.createElement("option");
         option.value = week.week_ending;
         const count = week.submitted_count ? week.submitted_count + " saved" : "no totals yet";
-        option.textContent = week.week_label + " — " + count + (week.current ? " (current)" : "");
+        const lockedMark = week.locked ? " — locked" : "";
+        option.textContent = week.week_label + " — " + count + lockedMark + (week.current ? " (current)" : "");
         select.appendChild(option);
       });
       if (selected && Array.prototype.some.call(select.options, (option) => option.value === selected)) {

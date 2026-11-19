@@ -134,6 +134,29 @@ def _enter(client: TestClient, user: User, hours: int, minutes: int, *, week: st
     )
 
 
+def _seed_existing_hours(week: str, email: str, name: str, minutes: int, submission_id: str = "sub-kept") -> str:
+    """Put a row in the store the way an earlier save already did. Does not use the write API."""
+    from app.hr.time_entry import SCHEDULE_V2, Submission, total_line
+
+    sub = Submission(
+        submission_id=submission_id,
+        practice_id="practice-a",
+        week_ending=week,
+        email=email,
+        display_name=name,
+        clinician_id="clin-a-jordan",
+        lines=total_line(minutes),
+        created_at="2026-11-12T16:00:00+00:00",
+        updated_at="2026-11-12T16:00:00+00:00",
+        updated_by="user-jordan",
+        schedule_version=SCHEDULE_V2,
+    )
+    with time_store.exclusive():
+        time_store._submissions[sub.submission_id] = sub
+        time_store._submission_index[time_store._sub_key("practice-a", week, email)] = sub.submission_id
+    return sub.submission_id
+
+
 @pytest.mark.parametrize(
     ("raw", "rounded", "decimal"),
     [
@@ -176,9 +199,9 @@ def test_history_and_recent_weeks_label_ranges_without_changing_keys(client: Tes
     _roster()
     set_clock(WED)
     _save_settings(client)
-    saved = _enter(client, _jordan(), 4, 46, week="2026-11-06")
-    assert saved.status_code == 200, saved.text
-    body = saved.json()
+    _seed_existing_hours("2026-11-06", "jordan@heart4change.org", "Jordan Lee", 4 * 60 + 46)
+    me = client.get("/hr/time/me", headers=_auth(_jordan())).json()
+    body = me["history"][0]
     assert body["week_ending"] == "2026-11-06"
     assert body["week_label"] == "Nov 2–6, 2026"
     assert body["raw_minutes"] == 286
@@ -198,12 +221,128 @@ def test_history_and_recent_weeks_label_ranges_without_changing_keys(client: Tes
     older = next(row for row in weeks if row["week_ending"] == "2026-11-06")
     assert older["submitted_count"] == 1
     assert older["week_label"] == "Nov 2–6, 2026"
+    assert older["locked"] is True
+    assert weeks[0]["locked"] is False
     assert client.get("/hr/time/weeks", headers=_auth(_jordan())).status_code == 403
     page = Path("app/static/index.html").read_text(encoding="utf-8")
     assert "This week:" in page
     assert "time-admin-recent" in page
     assert "time-admin-range" in page
     assert "shortWeekRange" in page
+
+
+def test_weeks_on_or_before_the_locked_through_friday_are_closed(client: TestClient) -> None:
+    from pathlib import Path
+
+    from app.hr.hours_schedule import CLOSED_WEEK_MESSAGE, locked_through_sentence
+    from app.hr.time_entry import TimeSettings, _scope_weeks
+
+    assert locked_through_sentence(date(2026, 11, 13)) == "Weeks through Nov 9–13, 2026 are locked."
+    stored = {
+        "practice_id": "practice-a",
+        "participant_emails": ["jordan@heart4change.org"],
+        "summary_recipient": MELISSA_EMAIL,
+    }
+    assert TimeSettings.from_dict(stored).locked_through_week_ending == "2026-11-13"
+    kept = TimeSettings.from_dict({**stored, "locked_through_week_ending": "2026-11-20"})
+    assert kept.locked_through_week_ending == "2026-11-20"
+    assert TimeSettings.from_dict({**stored, "locked_through_week_ending": "2026-11-12"}).locked_through_week_ending == "2026-11-13"
+
+    _roster()
+    set_clock(WED)
+    _save_settings(client, participant_emails=["jordan@heart4change.org"])
+    hostile = _settings(participant_emails=["jordan@heart4change.org"])
+    hostile["locked_through_week_ending"] = "2026-10-30"
+    refused = client.put("/hr/time/settings", headers=_alice(), json=hostile)
+    assert refused.status_code == 200, refused.text
+    assert refused.json()["locked_through_week_ending"] == "2026-11-13"
+    assert refused.json()["locked_through_label"] == "Weeks through Nov 9–13, 2026 are locked."
+
+    submission_id = _seed_existing_hours("2026-11-06", "jordan@heart4change.org", "Jordan Lee", 286, "sub-nov6")
+    audits_before = len(time_store._audits)
+    for user, payload in (
+        (_jordan(), {"week_ending": "2026-11-06", "hours": 1, "minutes": 0}),
+        (_melissa(), {"week_ending": "2026-11-06", "hours": 9, "minutes": 0, "for_email": "jordan@heart4change.org"}),
+        (_alice_user(), {"week_ending": "2026-11-13", "hours": 2, "minutes": 0, "for_email": "jordan@heart4change.org"}),
+    ):
+        blocked = client.post("/hr/time/entries", headers=_auth(user), json=payload)
+        assert blocked.status_code == 403, blocked.text
+        assert blocked.json()["detail"] == CLOSED_WEEK_MESSAGE
+    patched = client.patch(
+        f"/hr/time/entries/{submission_id}",
+        headers=_auth(_melissa()),
+        json={"hours": 8, "minutes": 0},
+    )
+    assert patched.status_code == 403, patched.text
+    assert patched.json()["detail"] == CLOSED_WEEK_MESSAGE
+    deleted = client.delete(f"/hr/time/entries/{submission_id}", headers=_auth(_alice_user()))
+    assert deleted.status_code == 405
+    assert time_store._submissions[submission_id].lines[0]["minutes"] == 286
+    assert len(time_store._audits) == audits_before
+    assert ("practice-a", "2026-11-06", 2) not in time_store._weeks
+
+    week = client.get("/hr/time/week?week_ending=2026-11-06", headers=_alice())
+    assert week.status_code == 200, week.text
+    body = week.json()
+    assert body["closed"] is True
+    assert body["locked"] is True
+    assert body["can_correct"] is False
+    assert body["lock_message"] == CLOSED_WEEK_MESSAGE
+    jordan = next(row for row in body["rows"] if row["email"] == "jordan@heart4change.org")
+    assert jordan["status"] == "submitted"
+    assert jordan["raw_minutes"] == 286
+    assert ("practice-a", "2026-11-06", 2) not in time_store._weeks
+
+    history = client.get("/hr/time/me", headers=_auth(_jordan())).json()
+    assert history["history"][0]["week_ending"] == "2026-11-06"
+    assert history["history"][0]["week_label"] == "Nov 2–6, 2026"
+    assert history["history"][0]["raw_minutes"] == 286
+    assert history["week"]["week_ending"] == "2026-11-20"
+    assert history["week"]["closed"] is False
+    assert history["can_edit"] is True
+
+    recent = client.get("/hr/time/weeks", headers=_alice()).json()["weeks"]
+    by_week = {row["week_ending"]: row for row in recent}
+    assert by_week["2026-11-20"]["locked"] is False
+    assert by_week["2026-11-13"]["locked"] is True
+    assert by_week["2026-11-06"]["locked"] is True
+    assert by_week["2026-11-06"]["submitted_count"] == 1
+
+    set_clock(datetime(2026, 11, 12, 15, 0, tzinfo=timezone.utc))
+    earlier = client.get("/hr/time/me", headers=_auth(_jordan())).json()
+    assert earlier["week"]["week_ending"] == "2026-11-13"
+    assert earlier["week"]["closed"] is True
+    assert earlier["can_edit"] is False
+    assert earlier["week"]["lock_message"] == CLOSED_WEEK_MESSAGE
+
+    set_clock(THU_0900)
+    settings = time_store._settings["practice-a"]
+    assert date(2026, 11, 13) not in _scope_weeks(settings, THU_0900)
+    assert time_store._claim_week(
+        "practice-a",
+        settings,
+        date(2026, 11, 13),
+        THU_0900,
+        lease=timedelta(seconds=120),
+        backoff=(timedelta(minutes=5),),
+        max_attempts=3,
+    ) == []
+    settings.locked_through_week_ending = "2026-11-20"
+    quiet = RecordingMailer()
+    assert run_tick(mailer=quiet, now=THU_0900)["sent"] == 0
+    assert quiet.sent == []
+    settings.locked_through_week_ending = "2026-11-13"
+    mailed = RecordingMailer()
+    assert run_tick(mailer=mailed, now=THU_0900)["sent"] == 1
+    assert mailed.sent[0].to == "jordan@heart4change.org"
+    assert time_store._submissions[submission_id].lines[0]["minutes"] == 286
+
+    assert "Leave next week for next week." in history["helper_text"]
+    assert "Saturday and Sunday after that Friday belong in it too." in history["pay_week_note"]
+    page = Path("app/static/index.html").read_text(encoding="utf-8")
+    assert "Locked — this week is closed." in page
+    assert "time-locked-through" in page
+    assert 'id="time-locked-through"' in page
 
 
 def test_same_week_is_due_friday_and_mail_skips_weekends() -> None:
