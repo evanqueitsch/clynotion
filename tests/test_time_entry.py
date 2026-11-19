@@ -1108,3 +1108,124 @@ def test_settings_copy_uses_names_dates_and_the_selected_reminder_time(client: T
     assert "A 15-minute poll" not in page
     assert "168:00 —" not in page
     assert "Weekly total cannot exceed 168:00" in Path("app/hr/time_entry.py").read_text(encoding="utf-8")
+
+
+def test_hours_emails_group_the_week_and_keep_the_eastern_day() -> None:
+    from app.hr.time_email import compose_reminder, compose_summary, eastern_day_label, sample_summary_report
+
+    assert eastern_day_label("2026-11-19T04:30:00+00:00") == "November 18, 2026"
+    assert eastern_day_label("2026-12-08") == "December 8, 2026"
+    assert eastern_day_label("2026-12-08T00:00:00+00:00") == "December 8, 2026"
+    subject, text, html = compose_summary(sample_summary_report())
+    assert "Monday, November 16, 2026" in subject
+    assert "Friday, November 20, 2026" in subject
+    assert "1 of 2 submitted" in text
+    assert "Submitted: 1. Missing: 1." in text
+    assert text.index("Riley Sample") < text.index("Not yet submitted") < text.index("Jordan Example")
+    assert "32.50 hours" in text
+    assert "submitted November 18, 2026" in text
+    assert "https://clynotion.com/#time-admin?week=2026-11-20&v=2" in text
+    assert "https://clynotion.com/#time-admin?week=2026-11-20&amp;v=2" in html
+    assert "Review hours" in html
+    assert "#0f6e56" in html
+    assert "Heart for Change Counseling Services" in html
+    reminder_subject, reminder_text, reminder_html = compose_reminder(
+        week_label="Monday, November 16, 2026 – Friday, November 20, 2026",
+        deadline_label="Thursday, November 19, 2026 at 11:30 AM ET",
+        weekday_phrase="Weekly hours are due by Wednesday at 9:00 AM.",
+        coverage_note="Enter the hours you already worked that Monday through Friday.",
+        display_name="Riley Sample",
+        link=TIME_ENTRY_URL,
+    )
+    assert reminder_subject == "Weekly hours are due by Wednesday at 9:00 AM."
+    assert "Hi Riley," in reminder_text
+    assert "already worked" in reminder_text
+    assert TIME_ENTRY_URL in reminder_text
+    assert TIME_ENTRY_URL in reminder_html
+    assert "Enter hours" in reminder_html
+    assert "Monday, November 16, 2026" in reminder_html
+
+
+def test_hours_email_test_sends_only_to_operations_and_can_use_sample_names(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from pathlib import Path
+
+    from app.hr.time_email import OPERATIONS_TEST_TO
+
+    _roster()
+    set_clock(WED)
+    before = _save_settings(client)
+    captured: list[OutboundMail] = []
+
+    def fake_send(_practice_id: str, message: OutboundMail) -> MailResult:
+        captured.append(message)
+        return MailResult(status="sent", detail="ok", provider_id="hours-test")
+
+    monkeypatch.setattr("app.hr.gmail_oauth.deliver_self_test_message", fake_send)
+    preview = client.post(
+        "/hr/time/settings/email-test/preview",
+        headers=_alice(),
+        json={"kind": "summary", "sample": True},
+    )
+    assert preview.status_code == 200, preview.text
+    shown = preview.json()
+    assert shown["sent"] is False
+    assert shown["to"] == OPERATIONS_TEST_TO
+    assert shown["subject"].startswith("[TEST] Payroll hours are ready")
+    assert "Riley Sample" in shown["body"]
+    assert "Jordan Example" in shown["body"]
+    assert "Jordan Lee" not in shown["body"]
+    assert "1 of 2 submitted" in shown["html"]
+    assert "November 18, 2026" in shown["html"]
+    assert captured == []
+    sent = client.post(
+        "/hr/time/settings/email-test/send",
+        headers=_alice(),
+        json={"kind": "summary", "sample": True},
+    )
+    assert sent.status_code == 200, sent.text
+    assert sent.json()["to"] == OPERATIONS_TEST_TO
+    assert sent.json()["status"] == "sent"
+    assert len(captured) == 1
+    assert captured[0].to == OPERATIONS_TEST_TO
+    assert captured[0].subject.startswith("[TEST] ")
+    assert "Riley Sample" in captured[0].text
+    assert "msmith@" not in captured[0].to
+    for kind, greeting in (("first", "Hi Riley,"), ("due", "Hi Jordan,")):
+        captured.clear()
+        response = client.post(
+            "/hr/time/settings/email-test/send",
+            headers=_alice(),
+            json={"kind": kind, "sample": True},
+        )
+        assert response.status_code == 200, response.text
+        assert captured[0].to == OPERATIONS_TEST_TO
+        assert greeting in captured[0].text
+        assert TIME_ENTRY_URL in captured[0].text
+        assert TIME_ENTRY_URL in captured[0].html
+    assert client.post(
+        "/hr/time/settings/email-test/send",
+        headers=_auth(_melissa()),
+        json={"kind": "summary", "sample": True},
+    ).status_code == 403
+    _enter(client, _jordan(), 5, 1)
+    captured.clear()
+    live = client.post(
+        "/hr/time/settings/email-test/send",
+        headers=_alice(),
+        json={"kind": "summary", "sample": False},
+    )
+    assert live.status_code == 200, live.text
+    assert captured[0].to == OPERATIONS_TEST_TO
+    assert "Jordan Lee" in captured[0].text
+    assert "Sam Rivera" in captured[0].text
+    assert "1 of 2 submitted" in captured[0].text
+    assert captured[0].text.index("Jordan Lee") < captured[0].text.index("Not yet submitted")
+    after = client.get("/hr/time/settings", headers=_alice()).json()
+    assert after["participant_emails"] == before["participant_emails"]
+    assert after["automation_enabled"] == before["automation_enabled"]
+    assert after["summary_recipient"] == before["summary_recipient"]
+    page = Path("app/static/index.html").read_text(encoding="utf-8")
+    assert "Send test summary" in page
+    assert "Use sample names (Riley Sample, Jordan Example)" in page

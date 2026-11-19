@@ -1116,6 +1116,16 @@
       </div>
       <p class="meta">Preview and the reminder check render the message only. They do not send email.</p>
       <pre class="note hidden" id="time-settings-preview"></pre>
+      <span class="section-label">Send a test copy</span>
+      <p class="meta">These three buttons send only to operations@heart4change.org. The subject starts with [TEST]. They do not email staff or Melissa, and they do not run the Wednesday, Thursday, or 11:30 schedule.</p>
+      <label><input id="time-email-test-sample" type="checkbox" checked /> Use sample names (Riley Sample, Jordan Example)</label>
+      <div class="row">
+        <button class="ghost" id="btn-time-email-test-first" type="button">Send test first reminder</button>
+        <button class="ghost" id="btn-time-email-test-due" type="button">Send test day-of reminder</button>
+        <button class="ghost" id="btn-time-email-test-summary" type="button">Send test summary</button>
+      </div>
+      <p class="status" id="time-email-test-status" role="status" aria-live="polite"></p>
+      <iframe id="time-email-test-frame" title="Sample weekly hours summary" sandbox="" style="width:100%;height:640px;border:1px solid #d9ddd9;background:#f3f4f3;"></iframe>
       <p class="status" id="time-settings-status"></p>
     </section>
 
@@ -1236,7 +1246,7 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.24.4"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.26.6"></script>
+  <script src="/static/hiring.js?v=0.27.0"></script>
   <script>
     const state = {
       token: null,
@@ -2043,8 +2053,48 @@
         const data = await api("/hr/time/settings");
         renderTimeSettings(data);
         setStatus($("time-settings-status"), data.saved ? "Settings saved for this practice." : "Not saved yet. Choose staff and save.", "ok");
+        await loadHoursEmailPreview();
       } catch (e) {
         setStatus($("time-settings-status"), errText(e), "error");
+      }
+    }
+
+    async function loadHoursEmailPreview() {
+      const frame = $("time-email-test-frame");
+      if (!frame) return;
+      try {
+        const data = await api("/hr/time/settings/email-test/preview", {
+          method: "POST",
+          json: { kind: "summary", sample: true },
+        });
+        frame.srcdoc = data.html || "";
+      } catch (e) {
+        frame.srcdoc = "";
+      }
+    }
+
+    async function sendHoursEmailTest(kind) {
+      const sample = !!($("time-email-test-sample") && $("time-email-test-sample").checked);
+      const buttons = ["btn-time-email-test-first", "btn-time-email-test-due", "btn-time-email-test-summary"].map($);
+      buttons.forEach((button) => { if (button) button.disabled = true; });
+      setStatus($("time-email-test-status"), "Sending…");
+      try {
+        const data = await api("/hr/time/settings/email-test/send", {
+          method: "POST",
+          json: { kind, sample },
+        });
+        const ok = data.status === "sent" || data.sent === true;
+        setStatus(
+          $("time-email-test-status"),
+          ok
+            ? `Test copy sent only to ${data.to}. Subject: ${data.subject}`
+            : `Not sent (${data.status || "failed"}${data.last_error ? ": " + data.last_error : ""}).`,
+          ok ? "ok" : "error",
+        );
+      } catch (e) {
+        setStatus($("time-email-test-status"), errText(e), "error");
+      } finally {
+        buttons.forEach((button) => { if (button) button.disabled = false; });
       }
     }
 
@@ -3657,6 +3707,12 @@
     if (btnTimePreview) btnTimePreview.onclick = () => { previewTimeSummary(); };
     const btnTimeTestReminder = $("btn-time-test-reminder");
     if (btnTimeTestReminder) btnTimeTestReminder.onclick = () => { previewTimeReminders(); };
+    const btnHoursTestFirst = $("btn-time-email-test-first");
+    if (btnHoursTestFirst) btnHoursTestFirst.onclick = () => { sendHoursEmailTest("first"); };
+    const btnHoursTestDue = $("btn-time-email-test-due");
+    if (btnHoursTestDue) btnHoursTestDue.onclick = () => { sendHoursEmailTest("due"); };
+    const btnHoursTestSummary = $("btn-time-email-test-summary");
+    if (btnHoursTestSummary) btnHoursTestSummary.onclick = () => { sendHoursEmailTest("summary"); };
     const btnTimeDirectory = $("btn-time-directory-refresh");
     if (btnTimeDirectory) btnTimeDirectory.onclick = () => { refreshTimeDirectory(); };
     const btnTimeSelfTest = $("btn-time-self-test");

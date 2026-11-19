@@ -32,6 +32,15 @@ from zoneinfo import ZoneInfo
 from app.auth import User, is_hr_admin
 from app.clinicians import clinician_store
 from app.crypto import decrypt_utf8, encrypt_utf8
+from app.hr.time_email import (
+    OPERATIONS_TEST_TO,
+    as_test_copy,
+    compose_reminder,
+    compose_summary,
+    coverage_sentence,
+    sample_reminder_person,
+    sample_summary_report,
+)
 from app.hr.time_mail import MailResult, safe_error_code, safe_provider_id
 
 ET = ZoneInfo("America/New_York")
@@ -607,6 +616,7 @@ class ClaimedJob:
     csv_filename: str = ""
     csv_text: str = ""
     practice_id: str = ""
+    html: str = ""
 
 
 @dataclass
@@ -877,11 +887,12 @@ class TimeStore:
 
     def preview_summary(self, user: User, week_ending: str, now: Optional[datetime] = None) -> dict[str, Any]:
         report = self.week_view(user, week_ending, now)
-        subject, body, csv_text, filename = render_summary(report)
+        subject, body, html, csv_text, filename = render_summary(report)
         return {
             "sent": False,
             "subject": subject,
             "body": body,
+            "html": html,
             "csv": csv_text,
             "csv_filename": filename,
             "recipient": report["summary_recipient"],
@@ -912,15 +923,118 @@ class TimeStore:
         for row in report["rows"]:
             if slot == "due" and row["status"] != "missing":
                 continue
-            subject, body = render_reminder(
+            subject, body, html = render_reminder(
                 slot=slot,
                 week_ending=week,
                 deadline=_parse_iso(report["deadline"]),
                 weekday=settings.reminder_first_weekday if slot == "first" else settings.reminder_due_weekday,
                 at_time=settings.reminder_first_time if slot == "first" else settings.reminder_due_time,
+                display_name=str(row.get("display_name") or ""),
             )
-            messages.append({"to": row["email"], "subject": subject, "body": body})
+            messages.append({"to": row["email"], "subject": subject, "body": body, "html": html})
         return {"sent": False, "slot": slot, "messages": messages}
+
+    def preview_hours_email(
+        self,
+        user: User,
+        kind: str,
+        *,
+        sample: bool = True,
+        now: Optional[datetime] = None,
+    ) -> dict[str, Any]:
+        """Render one hours email. Does not send and does not change settings."""
+        self._require_manager(user)
+        message = self._hours_test_message(user, kind, sample=sample, now=now or utcnow())
+        return {
+            "sent": False,
+            "kind": kind,
+            "sample": bool(sample),
+            "to": message.to,
+            "subject": message.subject,
+            "body": message.text,
+            "html": message.html,
+        }
+
+    def send_hours_email_test(
+        self,
+        user: User,
+        kind: str,
+        transport: Any,
+        *,
+        sample: bool = True,
+        now: Optional[datetime] = None,
+    ) -> dict[str, Any]:
+        """Send one test copy to operations@ only. Does not claim a scheduled delivery."""
+        self._require_manager(user)
+        message = self._hours_test_message(user, kind, sample=sample, now=now or utcnow())
+        if message.to != OPERATIONS_TEST_TO:
+            raise TimeAuthzError("Hours test email can only be addressed to operations@heart4change.org.")
+        result = transport(message)
+        status = str(getattr(result, "status", "failed") or "failed")
+        return {
+            "sent": status == "sent",
+            "status": status,
+            "kind": kind,
+            "sample": bool(sample),
+            "to": message.to,
+            "subject": message.subject,
+            "last_error": "" if status == "sent" else safe_error_code(str(getattr(result, "detail", "") or "")),
+        }
+
+    def _hours_test_message(self, user: User, kind: str, *, sample: bool, now: datetime):
+        from app.hr.time_mail import OutboundMail
+
+        if kind not in ("first", "due", "summary"):
+            raise ValueError("kind must be first, due, or summary.")
+        if sample:
+            report = sample_summary_report()
+            person = sample_reminder_person(kind)
+            deadline_text = str(report["deadline_label"])
+            week_label = str(report["label"])
+            phrase = reminder_due_phrase(2, "09:00") if kind == "first" else reminder_due_phrase(3, "08:00")
+            coverage = (
+                "Enter the hours you already worked that Monday through Friday. "
+                "Hours from Saturday, November 21, 2026 and Sunday, November 22, 2026 "
+                "belong in this same total if you worked them."
+            )
+        else:
+            week = pay_week_ending(now)
+            with self.exclusive():
+                settings = self._settings.get(user.practice_id) or default_settings(user.practice_id, now)
+                report = self._report_unlocked(user.practice_id, week, now, settings)
+            deadline_text = str(report.get("deadline_label") or "")
+            week_label = str(report["label"])
+            weekend = coverage_end(week)
+            saturday = week + timedelta(days=1)
+            coverage = coverage_sentence(saturday, weekend)
+            if kind == "due":
+                person = next((row for row in report["rows"] if row["status"] == "missing"), None) or {}
+                weekday = settings.reminder_due_weekday
+                at_time = settings.reminder_due_time
+            else:
+                person = (report["rows"][:1] or [{}])[0]
+                weekday = settings.reminder_first_weekday
+                at_time = settings.reminder_first_time
+            phrase = reminder_due_phrase(weekday, at_time)
+        if kind == "summary":
+            subject, text, html = compose_summary(report)
+        else:
+            subject, text, html = compose_reminder(
+                week_label=week_label,
+                deadline_label=deadline_text,
+                weekday_phrase=phrase,
+                coverage_note=coverage,
+                display_name=str(person.get("display_name") or ""),
+                link=TIME_ENTRY_URL,
+            )
+        subject, text, html = as_test_copy(subject, text, html)
+        return OutboundMail(
+            to=OPERATIONS_TEST_TO,
+            subject=subject,
+            text=text,
+            html=html,
+            practice_id=user.practice_id,
+        )
 
     def _is_self_tester(self, user: User) -> bool:
         """Enabled HR admin, own account only. Directory membership is not an admin grant."""
@@ -1952,6 +2066,7 @@ class TimeStore:
                         "rounded_display": "",
                         "decimal_hours": "",
                         "lines": [],
+                        "updated_at": "",
                     }
                 )
                 continue
@@ -1969,6 +2084,7 @@ class TimeStore:
                     "rounded_display": public["rounded_display"],
                     "decimal_hours": public["decimal_hours"],
                     "lines": public["lines"],
+                    "updated_at": public["updated_at"],
                 }
             )
         rows.sort(key=lambda row: (row["display_name"].casefold(), row["email"]))
@@ -2041,12 +2157,13 @@ class TimeStore:
                     lease=lease,
                     backoff=backoff,
                     max_attempts=max_attempts,
-                    subject_body=lambda: render_reminder(
+                    subject_body=lambda row=row: render_reminder(
                         slot="first",
                         week_ending=week,
                         deadline=report_deadline,
                         weekday=settings.reminder_first_weekday,
                         at_time=settings.reminder_first_time,
+                        display_name=str(row.get("display_name") or ""),
                     ),
                     allow_create=_on_schedule_minute(now, first_at),
                 )
@@ -2065,19 +2182,20 @@ class TimeStore:
                     lease=lease,
                     backoff=backoff,
                     max_attempts=max_attempts,
-                    subject_body=lambda: render_reminder(
+                    subject_body=lambda row=row: render_reminder(
                         slot="due",
                         week_ending=week,
                         deadline=report_deadline,
                         weekday=settings.reminder_due_weekday,
                         at_time=settings.reminder_due_time,
+                        display_name=str(row.get("display_name") or ""),
                     ),
                     allow_create=_on_schedule_minute(now, due_at),
                 )
                 if job:
                     jobs.append(job)
         if summary_keep and report["rows"]:
-            subject, body, _csv_text, _filename = render_summary(report)
+            subject, body, html, _csv_text, _filename = render_summary(report)
             job = self._claim_mail(
                 practice_id,
                 week.isoformat(),
@@ -2087,7 +2205,7 @@ class TimeStore:
                 lease=lease,
                 backoff=backoff,
                 max_attempts=max_attempts,
-                subject_body=lambda: (subject, body),
+                subject_body=lambda subject=subject, body=body, html=html: (subject, body, html),
                 csv_filename="",
                 csv_text="",
                 allow_create=summary_create,
@@ -2213,7 +2331,9 @@ class TimeStore:
         existing.claim_expires_at = _iso(now + lease)
         existing.updated_at = _iso(now)
         self._dirty = True
-        subject, body = subject_body()
+        rendered = subject_body()
+        subject, body = rendered[0], rendered[1]
+        html = rendered[2] if len(rendered) > 2 else ""
         return ClaimedJob(
             delivery_id=existing.delivery_id,
             claim_token=existing.claim_token,
@@ -2223,6 +2343,7 @@ class TimeStore:
             csv_filename=csv_filename,
             csv_text=csv_text,
             practice_id=practice_id,
+            html=html,
         )
 
     def _finish_unlocked(
@@ -2285,7 +2406,7 @@ class TimeStore:
                 self._release_claim(delivery, now, status="cancelled")
                 return None
             if delivery.kind == "summary":
-                subject, body, csv_text, filename = render_summary(report)
+                subject, body, html, csv_text, filename = render_summary(report)
                 return ClaimedJob(
                     delivery_id=delivery.delivery_id,
                     claim_token=delivery.claim_token,
@@ -2295,14 +2416,17 @@ class TimeStore:
                     csv_filename=filename,
                     csv_text=csv_text,
                     practice_id=delivery.practice_id,
+                    html=html,
                 )
             slot = "first" if delivery.kind == "reminder_first" else "due"
-            subject, body = render_reminder(
+            person = next((item for item in report["rows"] if item["email"] == delivery.recipient), None)
+            subject, body, html = render_reminder(
                 slot=slot,
                 week_ending=week,
                 deadline=_parse_iso(report["deadline"]),
                 weekday=settings.reminder_first_weekday if slot == "first" else settings.reminder_due_weekday,
                 at_time=settings.reminder_first_time if slot == "first" else settings.reminder_due_time,
+                display_name=str((person or {}).get("display_name") or ""),
             )
             return ClaimedJob(
                 delivery_id=delivery.delivery_id,
@@ -2311,6 +2435,7 @@ class TimeStore:
                 subject=subject,
                 body=body,
                 practice_id=delivery.practice_id,
+                html=html,
             )
 
     def _release_claim(self, delivery: Delivery, now: datetime, *, status: str) -> None:
@@ -2559,7 +2684,7 @@ def _send_state(slot: Optional[dict[str, Any]]) -> dict[str, Any]:
 def _labelled_reminder(
     slot: str, week_ending: date, deadline: datetime, weekday: int, at_time: str
 ) -> tuple[str, str]:
-    subject, body = render_reminder(
+    subject, body, _html = render_reminder(
         slot=slot, week_ending=week_ending, deadline=deadline, weekday=weekday, at_time=at_time
     )
     body = body.replace(TIME_ENTRY_URL, TIME_SELF_TEST_URL)
@@ -2602,41 +2727,36 @@ def _self_test_summary(entry: dict[str, Any], header: dict[str, Any]) -> dict[st
 
 
 def render_reminder(
-    *, slot: str, week_ending: date, deadline: datetime, weekday: int, at_time: str
-) -> tuple[str, str]:
+    *,
+    slot: str,
+    week_ending: date,
+    deadline: datetime,
+    weekday: int,
+    at_time: str,
+    display_name: str = "",
+) -> tuple[str, str, str]:
     _ = slot
-    subject = reminder_due_phrase(weekday, at_time)
     weekend = coverage_end(week_ending)
     saturday = week_ending + timedelta(days=1)
-    body = "\n".join(
-        [
-            subject,
-            "",
-            f"Workweek: {week_range_label(week_ending)}",
-            f"Payroll run: {deadline_label(deadline)}",
-            "",
-            "Enter the hours you already worked that Monday through Friday. "
-            f"Hours from {_long_date(saturday)} and {_long_date(weekend)} belong in this same total if you worked them.",
-            "",
-            f"Enter hours: {TIME_ENTRY_URL}",
-        ]
+    return compose_reminder(
+        week_label=week_range_label(week_ending),
+        deadline_label=deadline_label(deadline),
+        weekday_phrase=reminder_due_phrase(weekday, at_time),
+        coverage_note=coverage_sentence(saturday, weekend),
+        display_name=display_name,
+        link=TIME_ENTRY_URL,
     )
-    return subject, body
 
 
-def render_summary(report: dict[str, Any]) -> tuple[str, str, str, str]:
-    subject = f"Payroll hours are ready — {report['label']}"
-    submitted = int(report.get("submitted_count") or 0)
-    missing = int(report.get("missing_count") or 0)
-    link = str(report.get("dashboard_url") or admin_url(str(report["week_ending"]), int(report.get("schedule_version") or SCHEDULE_V2)))
-    lines = [
-        f"Workweek: {report['label']}",
-        f"Payroll run: {report.get('payroll_label') or report['deadline_label']}",
-        f"Submitted: {submitted}. Missing: {missing}. Missing is not zero.",
-        "",
-        f"Open this payroll week: {link}",
-    ]
-    return subject, "\n".join(lines), "", ""
+def render_summary(report: dict[str, Any]) -> tuple[str, str, str, str, str]:
+    link = str(
+        report.get("dashboard_url")
+        or admin_url(str(report["week_ending"]), int(report.get("schedule_version") or SCHEDULE_V2))
+    )
+    prepared = dict(report)
+    prepared["dashboard_url"] = link
+    subject, text, html = compose_summary(prepared)
+    return subject, text, html, "", ""
 
 
 def rows_to_csv(rows: list[dict[str, Any]]) -> str:
