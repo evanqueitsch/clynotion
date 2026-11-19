@@ -33,13 +33,17 @@ from app.auth import User, is_hr_admin
 from app.clinicians import clinician_store
 from app.crypto import decrypt_utf8, encrypt_utf8
 from app.hr.hours_schedule import (
+    CLOSED_WEEK_MESSAGE,
+    DEFAULT_LOCKED_THROUGH_WEEK_ENDING,
     FIRST_LIVE_WEEK_ENDING,
     HoursSchedule,
     collection_friday,
+    locked_through_sentence,
     on_schedule_minute,
     preview_sentence,
     schedule_for,
     short_week_range,
+    week_is_closed,
 )
 from app.hr.time_email import (
     OPERATIONS_TEST_TO,
@@ -205,6 +209,27 @@ def period_is_open(moment: datetime, week_ending: date, settings: "TimeSettings"
 
 def _hours_spec(week_ending: date, settings: "TimeSettings") -> HoursSchedule:
     return schedule_for(week_ending, getattr(settings, "deadline_weekday", 4))
+
+
+def _locked_through_value(raw: object) -> str:
+    """Friday key, or the default when the stored value is missing or not a Friday."""
+    text = str(raw or "").strip()[:10]
+    try:
+        day = date.fromisoformat(text)
+    except ValueError:
+        return DEFAULT_LOCKED_THROUGH_WEEK_ENDING.isoformat()
+    if day.weekday() != 4:
+        return DEFAULT_LOCKED_THROUGH_WEEK_ENDING.isoformat()
+    return day.isoformat()
+
+
+def locked_through_day(settings: Optional["TimeSettings"]) -> date:
+    raw = getattr(settings, "locked_through_week_ending", "") if settings is not None else ""
+    return date.fromisoformat(_locked_through_value(raw))
+
+
+def week_closed_by_settings(week_ending: date, settings: Optional["TimeSettings"]) -> bool:
+    return week_is_closed(week_ending, locked_through_day(settings))
 
 
 def workweek_friday_for(moment: datetime) -> date:
@@ -374,12 +399,14 @@ class TimeSettings:
     schedule_version: int = SCHEDULE_V2
     schedule_migrated: bool = False
     automation_enabled: bool = False
+    locked_through_week_ending: str = DEFAULT_LOCKED_THROUGH_WEEK_ENDING.isoformat()
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "practice_id": self.practice_id,
             "participant_emails": list(self.participant_emails),
             "deadline_weekday": self.deadline_weekday,
+            "locked_through_week_ending": self.locked_through_week_ending,
             "reminder_first_weekday": self.reminder_first_weekday,
             "reminder_first_time": self.reminder_first_time,
             "reminder_due_weekday": self.reminder_due_weekday,
@@ -415,6 +442,7 @@ class TimeSettings:
             schedule_version=SCHEDULE_V3,
             schedule_migrated=migrated,
             automation_enabled=bool(data.get("automation_enabled", False)),
+            locked_through_week_ending=_locked_through_value(data.get("locked_through_week_ending")),
         )
 
 
@@ -755,6 +783,8 @@ class TimeStore:
             raise ValueError("An email is required to store hours.")
         with self.exclusive():
             settings = self._settings.get(user.practice_id)
+            if week_closed_by_settings(week, settings):
+                raise TimeAuthzError(CLOSED_WEEK_MESSAGE)
             if settings is not None:
                 self._apply_scope_locks(user.practice_id, settings, moment)
                 self._lock_if_due(user.practice_id, settings, week, moment)
@@ -842,7 +872,12 @@ class TimeStore:
                 self._apply_scope_locks(user.practice_id, settings, moment)
                 self._lock_if_due(user.practice_id, settings, week, moment)
             report = self._report_unlocked(user.practice_id, week, moment, settings, version)
-            report["can_correct"] = is_melissa(user)
+            closed = week_closed_by_settings(week, settings)
+            report["can_correct"] = is_melissa(user) and not closed
+            report["closed"] = closed
+            if closed:
+                report["locked"] = True
+                report["lock_message"] = CLOSED_WEEK_MESSAGE
             self._flush_if_dirty()
             return report
 
@@ -853,6 +888,8 @@ class TimeStore:
         current = pay_week_ending(moment)
         fridays = [current - timedelta(days=7 * offset) for offset in range(0, 9)]
         with self.exclusive():
+            settings = self._settings.get(user.practice_id)
+            through = locked_through_day(settings)
             counts: dict[str, int] = {}
             for sub in self._submissions.values():
                 if sub.practice_id != user.practice_id:
@@ -866,6 +903,7 @@ class TimeStore:
                     "week_label": short_week_range(friday),
                     "submitted_count": counts.get(friday.isoformat(), 0),
                     "current": friday == current,
+                    "locked": week_is_closed(friday, through),
                 }
                 for friday in fridays
             ]
@@ -1448,6 +1486,7 @@ class TimeStore:
             schedule_version=SCHEDULE_V3,
             schedule_migrated=base.schedule_migrated,
             automation_enabled=bool(patch.get("automation_enabled", base.automation_enabled)),
+            locked_through_week_ending=_locked_through_value(base.locked_through_week_ending),
         )
 
     def _validate_participants(self, practice_id: str, emails: list[str]) -> list[str]:
@@ -1558,6 +1597,8 @@ class TimeStore:
             "schedule_version": settings.schedule_version,
             "schedule_migrated": settings.schedule_migrated,
             "automation_enabled": settings.automation_enabled,
+            "locked_through_week_ending": locked_through_day(settings).isoformat(),
+            "locked_through_label": locked_through_sentence(locked_through_day(settings)),
             "scheduled_mail": (
                 "on"
                 if (os.environ.get("CRON_SECRET") or "").strip() and settings.automation_enabled
@@ -1580,7 +1621,7 @@ class TimeStore:
         return count
 
     def _lock_if_due(self, practice_id: str, settings: TimeSettings, week: date, now: datetime) -> bool:
-        if week < FIRST_LIVE_WEEK_ENDING:
+        if week_closed_by_settings(week, settings) or week < FIRST_LIVE_WEEK_ENDING:
             return False
         existing = self._get_week(practice_id, week.isoformat(), SCHEDULE_V2)
         if existing and existing.locked_at:
@@ -1791,6 +1832,8 @@ class TimeStore:
         settings: Optional[TimeSettings],
         state: Optional[WeekState],
     ) -> None:
+        if week_closed_by_settings(week, settings):
+            raise TimeAuthzError(CLOSED_WEEK_MESSAGE)
         if not self._can_write(user, target, week, now, settings, state):
             own = target == _email(user.email)
             locked = bool(state and state.locked_at)
@@ -1819,6 +1862,8 @@ class TimeStore:
         settings: Optional[TimeSettings],
         state: Optional[WeekState],
     ) -> bool:
+        if week_closed_by_settings(week, settings):
+            return False
         if not target or user.practice_id is None:
             return False
         own = target == _email(user.email)
@@ -1863,10 +1908,12 @@ class TimeStore:
     ) -> dict[str, Any]:
         """Caller holds the lock. ``sub`` is already practice-checked."""
         settings = self._settings.get(user.practice_id)
+        week = parse_week_ending(sub.week_ending)
+        if week_closed_by_settings(week, settings):
+            raise TimeAuthzError(CLOSED_WEEK_MESSAGE)
         if settings is not None:
             self._apply_scope_locks(user.practice_id, settings, moment)
-            self._lock_if_due(user.practice_id, settings, parse_week_ending(sub.week_ending), moment)
-        week = parse_week_ending(sub.week_ending)
+            self._lock_if_due(user.practice_id, settings, week, moment)
         state = self._get_week(user.practice_id, sub.week_ending, sub.schedule_version)
         self._authorize_write(user, sub.email, week, moment, settings, state)
         raw = combine_hours_minutes(hours, minutes)
@@ -1998,7 +2045,9 @@ class TimeStore:
             "coverage_note": helper,
             "deadline": deadline.isoformat(),
             "deadline_label": deadline_label(deadline),
-            "locked": bool(state and state.locked_at),
+            "closed": week_closed_by_settings(week, settings),
+            "lock_message": CLOSED_WEEK_MESSAGE if week_closed_by_settings(week, settings) else "",
+            "locked": bool(state and state.locked_at) or week_closed_by_settings(week, settings),
             "locked_at": state.locked_at if state else "",
             "dashboard_url": admin_url(week.isoformat(), version),
             "submitted_count": submitted,
@@ -2104,6 +2153,8 @@ class TimeStore:
         backoff: tuple[timedelta, ...],
         max_attempts: int,
     ) -> list[ClaimedJob]:
+        if week_closed_by_settings(week, settings):
+            return []
         if week < FIRST_LIVE_WEEK_ENDING or not settings.automation_enabled:
             return []
         spec = _hours_spec(week, settings)
@@ -2581,7 +2632,7 @@ def _scope_weeks(settings: TimeSettings, now: datetime) -> list[date]:
     previous = current - timedelta(days=7)
     weeks: list[date] = []
     for week in (previous, current):
-        if week < FIRST_LIVE_WEEK_ENDING:
+        if week_closed_by_settings(week, settings) or week < FIRST_LIVE_WEEK_ENDING:
             continue
         spec = schedule_for(week, settings.deadline_weekday)
         if spec.heads_up_at - timedelta(days=1) <= now <= spec.window_end + timedelta(days=2):
