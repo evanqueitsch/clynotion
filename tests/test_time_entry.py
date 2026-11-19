@@ -165,6 +165,47 @@ def test_hours_cap_is_the_minutes_in_a_week_not_eighty() -> None:
         normalize_lines([{"category": "supervision", "minutes": 15}])
 
 
+def test_history_and_recent_weeks_label_ranges_without_changing_keys(client: TestClient) -> None:
+    from pathlib import Path
+
+    from app.hr.hours_schedule import short_week_range
+
+    assert short_week_range(date(2026, 11, 6)) == "Nov 2–6, 2026"
+    assert short_week_range(date(2026, 12, 4)) == "Nov 30 – Dec 4, 2026"
+    assert short_week_range(date(2026, 1, 2)) == "Dec 29, 2025 – Jan 2, 2026"
+    _roster()
+    set_clock(WED)
+    _save_settings(client)
+    saved = _enter(client, _jordan(), 4, 46, week="2026-11-06")
+    assert saved.status_code == 200, saved.text
+    body = saved.json()
+    assert body["week_ending"] == "2026-11-06"
+    assert body["week_label"] == "Nov 2–6, 2026"
+    assert body["raw_minutes"] == 286
+    me = client.get("/hr/time/me", headers=_auth(_jordan())).json()
+    assert me["week"]["week_ending"] == "2026-11-20"
+    assert me["week"]["short_label"] == "Nov 16–20, 2026"
+    assert me["history"][0]["week_ending"] == "2026-11-06"
+    assert me["history"][0]["week_label"] == "Nov 2–6, 2026"
+    recent = client.get("/hr/time/weeks", headers=_alice())
+    assert recent.status_code == 200, recent.text
+    weeks = recent.json()["weeks"]
+    assert [row["week_ending"] for row in weeks][:3] == ["2026-11-20", "2026-11-13", "2026-11-06"]
+    assert len(weeks) == 9
+    assert weeks[0]["current"] is True
+    assert weeks[0]["week_label"] == "Nov 16–20, 2026"
+    assert weeks[0]["submitted_count"] == 0
+    older = next(row for row in weeks if row["week_ending"] == "2026-11-06")
+    assert older["submitted_count"] == 1
+    assert older["week_label"] == "Nov 2–6, 2026"
+    assert client.get("/hr/time/weeks", headers=_auth(_jordan())).status_code == 403
+    page = Path("app/static/index.html").read_text(encoding="utf-8")
+    assert "This week:" in page
+    assert "time-admin-recent" in page
+    assert "time-admin-range" in page
+    assert "shortWeekRange" in page
+
+
 def test_same_week_is_due_friday_and_mail_skips_weekends() -> None:
     from app.hr.hours_schedule import preview_sentence, schedule_for
     from app.hr.time_entry import TimeSettings, coverage_end, pay_week_start

@@ -39,6 +39,7 @@ from app.hr.hours_schedule import (
     on_schedule_minute,
     preview_sentence,
     schedule_for,
+    short_week_range,
 )
 from app.hr.time_email import (
     OPERATIONS_TEST_TO,
@@ -299,6 +300,13 @@ def admin_url(week_ending: str, version: int = SCHEDULE_V2) -> str:
 def week_range_label(week_ending: date) -> str:
     start = pay_week_start(week_ending)
     return f"{_long_date(start)} – {_long_date(week_ending)}"
+
+
+def _week_label(week_ending: str) -> str:
+    try:
+        return short_week_range(date.fromisoformat(str(week_ending)[:10]))
+    except ValueError:
+        return str(week_ending)
 
 
 def deadline_label(moment: datetime) -> str:
@@ -837,6 +845,31 @@ class TimeStore:
             report["can_correct"] = is_melissa(user)
             self._flush_if_dirty()
             return report
+
+    def recent_weeks(self, user: User, now: Optional[datetime] = None) -> dict[str, Any]:
+        """Last eight Fridays plus the current one. Read only. Does not rewrite keys."""
+        self._require_payroll_viewer(user)
+        moment = now or utcnow()
+        current = pay_week_ending(moment)
+        fridays = [current - timedelta(days=7 * offset) for offset in range(0, 9)]
+        with self.exclusive():
+            counts: dict[str, int] = {}
+            for sub in self._submissions.values():
+                if sub.practice_id != user.practice_id:
+                    continue
+                key = str(sub.week_ending)
+                counts[key] = counts.get(key, 0) + 1
+        return {
+            "weeks": [
+                {
+                    "week_ending": friday.isoformat(),
+                    "week_label": short_week_range(friday),
+                    "submitted_count": counts.get(friday.isoformat(), 0),
+                    "current": friday == current,
+                }
+                for friday in fridays
+            ]
+        }
 
     def week_csv(self, user: User, week_ending: str, now: Optional[datetime] = None, version: Optional[int] = None) -> str:
         report = self.week_view(user, week_ending, now, version)
@@ -1915,6 +1948,7 @@ class TimeStore:
             "submission_id": sub.submission_id,
             "practice_id": sub.practice_id,
             "week_ending": sub.week_ending,
+            "week_label": _week_label(sub.week_ending),
             "email": sub.email,
             "display_name": sub.display_name,
             "hours": hours,
@@ -1957,6 +1991,7 @@ class TimeStore:
             "schedule_version": version,
             "week_start": start.isoformat(),
             "label": label,
+            "short_label": short_week_range(week),
             "payroll_date": payroll.isoformat(),
             "payroll_label": _long_date(payroll),
             "coverage_end": coverage.isoformat(),
