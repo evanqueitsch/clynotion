@@ -1530,6 +1530,46 @@
     }
   }
 
+  const reopenAdditional = {};
+  const additionalBannerState = {};
+
+  function additionalBanner(text, kind) {
+    const banner = document.createElement("div");
+    banner.className = "additional-banner";
+    banner.setAttribute("role", "status");
+    banner.style.margin = "0.75rem 0";
+    banner.style.padding = "0.75rem 1rem";
+    banner.style.borderRadius = "6px";
+    banner.style.fontWeight = "600";
+    if (kind === "error") {
+      banner.style.background = "#fde8e8";
+      banner.style.color = "#7a1f1f";
+      banner.style.border = "1px solid #e3b4b4";
+    } else if (kind === "warn") {
+      banner.style.background = "#fff6e5";
+      banner.style.color = "#6b4a00";
+      banner.style.border = "1px solid #ead7a3";
+    } else {
+      banner.style.background = "#e5f6ee";
+      banner.style.color = "#0f6e56";
+      banner.style.border = "1px solid #b7e0cf";
+    }
+    const message = document.createElement("span");
+    message.textContent = text;
+    banner.appendChild(message);
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.className = "ghost";
+    dismiss.textContent = "Dismiss";
+    dismiss.style.marginLeft = "0.75rem";
+    dismiss.onclick = function () { banner.remove(); };
+    banner.appendChild(dismiss);
+    window.setTimeout(function () {
+      if (banner.isConnected) banner.remove();
+    }, 8000);
+    return banner;
+  }
+
   function sentOn(hire, key) {
     const row = (hire.document_sends || []).filter(function (item) { return item.form_key === key; })[0];
     return row && row.sent_at ? String(row.sent_at).slice(0, 10) : "";
@@ -1542,7 +1582,13 @@
     open.className = "ghost";
     open.textContent = "Send additional documents";
     const panel = document.createElement("div");
-    panel.hidden = true;
+    panel.className = "additional-panel";
+    panel.hidden = !reopenAdditional[hire.id];
+    if (reopenAdditional[hire.id]) delete reopenAdditional[hire.id];
+    if (additionalBannerState[hire.id]) {
+      panel.insertBefore(additionalBanner(additionalBannerState[hire.id], "ok"), panel.firstChild);
+      delete additionalBannerState[hire.id];
+    }
     const note = document.createElement("p");
     note.className = "meta";
     note.textContent = "From operations@heart4change.org. Reply-To operations@heart4change.org. Candidate email and the test recipient override apply.";
@@ -1610,12 +1656,20 @@
         method: "POST",
         json: { form_keys: keys },
       }).then(function (saved) {
-        send.textContent = "Sent";
-        refreshHire(saved, "Additional documents sent.");
+        const notice = (saved && saved.notice) || "Additional documents sent.";
+        if (!saved || saved.emailed === false) {
+          send.disabled = false;
+          send.textContent = "Send";
+          panel.insertBefore(additionalBanner(notice, "warn"), panel.firstChild);
+          return;
+        }
+        additionalBannerState[hire.id] = notice;
+        reopenAdditional[hire.id] = true;
+        refreshHire(saved, notice);
       }).catch(function (error) {
         send.disabled = false;
         send.textContent = "Send";
-        showStatus((error && error.message) || "Could not send the documents.", "error");
+        panel.insertBefore(additionalBanner((error && error.message) || "Could not send the documents.", "error"), panel.firstChild);
       });
     };
     open.onclick = function () {
