@@ -8,6 +8,8 @@ Home items.
 
 from __future__ import annotations
 
+import hashlib
+import re
 from datetime import datetime, time
 from typing import Any, Optional
 from urllib.parse import quote
@@ -93,12 +95,23 @@ def _name_match(list_name: str, staff_name: str, first: str, last: str) -> bool:
 
 
 def _city_state(address: str) -> tuple[str, str]:
-    parts = [part.strip() for part in (address or "").split(",") if part.strip()]
-    if len(parts) < 2:
+    """Pull a city and state from a stored address. Full names and 'City ST ZIP' both count."""
+    text = " ".join(str(address or "").replace("\n", " ").split())
+    if not text:
         return "", ""
-    tail = parts[-1].split()
-    if tail and len(tail[0]) == 2 and tail[0].isalpha():
-        return parts[-2], tail[0].upper()
+    tokens = [part.strip(".,") for part in re.split(r"[\s,]+", text) if part.strip(".,")]
+    for index in range(len(tokens) - 1, -1, -1):
+        code = _normalize_state(tokens[index])
+        if not code and index > 0:
+            code = _normalize_state(tokens[index - 1] + tokens[index])
+            if code:
+                city = tokens[index - 2] if index >= 2 else ""
+                return city, code
+        if code:
+            city = tokens[index - 1] if index else ""
+            if _normalize_state(city):
+                city = ""
+            return city, code
     return "", ""
 
 
@@ -154,10 +167,46 @@ def _subject_into(practice_id: str, subject_id: str, found: dict[str, str]) -> N
         value = str(subject.get(key) or "").strip()
         if value and not found["license_state"]:
             found["license_state"] = value
+    if not found["license_state"]:
+        found["license_state"] = _state_from_label(found.get("license_type") or "")
+    _license_state_elsewhere(subject, found)
     _employee_for_subject(practice_id, subject_id, found, str(subject.get("name") or ""))
     clinician_id = str(subject.get("clinician_id") or "")
     if clinician_id and not found["state"]:
         _employee_for_clinician(practice_id, clinician_id, found)
+
+
+def _state_from_label(value: str) -> str:
+    for match in re.findall(r"\(([^)]+)\)", value or ""):
+        code = _normalize_state(match)
+        if code:
+            return code
+    return ""
+
+
+def _license_state_elsewhere(subject: dict[str, Any], found: dict[str, str]) -> None:
+    """Read a license state stored under another key or inside a license list."""
+    if found.get("license_state"):
+        return
+    for key, value in subject.items():
+        if "state" not in str(key).casefold():
+            continue
+        if isinstance(value, str) and _normalize_state(value):
+            found["license_state"] = value.strip()
+            return
+        if isinstance(value, dict):
+            nested = str(value.get("state") or value.get("license_state") or "")
+            if _normalize_state(nested):
+                found["license_state"] = nested.strip()
+                return
+        if isinstance(value, list):
+            for item in value:
+                if not isinstance(item, dict):
+                    continue
+                nested = str(item.get("state") or item.get("license_state") or "")
+                if _normalize_state(nested):
+                    found["license_state"] = nested.strip()
+                    return
 
 
 def _employee_for_subject(practice_id: str, subject_id: str, found: dict[str, str], name: str) -> None:
@@ -166,6 +215,18 @@ def _employee_for_subject(practice_id: str, subject_id: str, found: dict[str, st
     _, row = employees_store._load(practice_id)
     records = [item for item in (row.get("records") or {}).values() if isinstance(item, dict)]
     match = next((item for item in records if str(item.get("subject_id") or "") == subject_id), None)
+    if match is None and name:
+        wanted = _tokens(name)
+        if len(wanted) >= 2:
+            match = next(
+                (
+                    item
+                    for item in records
+                    if _tokens(str(item.get("preferred_name") or ""))[:1] + _tokens(str(item.get("preferred_name") or ""))[-1:]
+                    == [wanted[0], wanted[-1]]
+                ),
+                None,
+            )
     if match is None and name:
         wanted = name.casefold().strip()
         match = next(
@@ -206,12 +267,13 @@ def _employee_into(practice_id: str, email: str, found: dict[str, str]) -> None:
 
 
 def _contact_into(record: dict[str, Any], found: dict[str, str]) -> None:
+    contact = record.get("contact") if isinstance(record.get("contact"), dict) else {}
     if not found["city"]:
-        found["city"] = str(record.get("city") or "").strip()
+        found["city"] = str(record.get("city") or contact.get("city") or "").strip()
     if not found["state"]:
-        found["state"] = str(record.get("state") or "").strip()
+        found["state"] = str(record.get("state") or contact.get("state") or "").strip()
     if not found["dob"]:
-        found["dob"] = iso_date(str(record.get("date_of_birth") or record.get("dob") or ""))
+        found["dob"] = iso_date(str(record.get("date_of_birth") or record.get("dob") or contact.get("dob") or ""))
     if not found.get("specialties"):
         names = [str(item).strip() for item in (record.get("specialties") or []) if str(item).strip()]
         if names:
@@ -599,6 +661,15 @@ def _packet_for(practice_id: str, item: dict[str, Any], staff: dict[str, str]) -
     rows = comparison_rows(record, staff)
     judged = likelihood_from_rows(rows, list_name=list_name)
     stored_note = str(item.get("list_detail_note") or "")
+    busy = str(item.get("sam_detail_status") or "") == "http_429" or "http_429" in stored_note
+    if busy:
+        from app.compliance.sources import SAM_BUSY
+
+        detail = SAM_BUSY
+    elif refreshed:
+        detail = ""
+    else:
+        detail = stored_note or "The full list entry is not stored on this result yet. The match result is unchanged."
     return {
         "result_id": str(item.get("id") or ""),
         "list_name": list_name,
@@ -614,7 +685,8 @@ def _packet_for(practice_id: str, item: dict[str, Any], staff: dict[str, str]) -
             if list_name == "leie"
             else ""
         ),
-        "detail_note": "" if refreshed else (stored_note or "The full list entry is not stored on this result yet. The match result is unchanged."),
+        "detail_note": detail,
+        "sam_busy": busy,
         "alignment": "",
     }
 
@@ -624,19 +696,43 @@ def _hhs_agency(value: str) -> bool:
     return any(token in text for token in ("hhs", "oig", "health and human", "health & human"))
 
 
+def _row_text(packet: dict[str, Any], label: str) -> str:
+    row = next((item for item in packet.get("rows") or [] if item.get("label") == label), {})
+    return _shown(row, "list_value")
+
+
+def _thin_sam(packet: dict[str, Any]) -> bool:
+    if packet.get("list_name") != "sam" or not _row_text(packet, "Full name"):
+        return False
+    return not any(
+        _row_text(packet, label)
+        for label in ("Address", "City", "State", "Excluding agency", "Record status", "Exclusion date", "SAM UEI")
+    )
+
+
 def _mark_same_hhs_record(lists: list[dict[str, Any]]) -> None:
     leie = next((item for item in lists if item.get("list_name") == "leie"), None)
     sam = next((item for item in lists if item.get("list_name") == "sam"), None)
     if leie is None or sam is None:
         return
-    leie_name = next((row for row in leie.get("rows") or [] if row.get("label") == "Full name"), {})
-    sam_name = next((row for row in sam.get("rows") or [] if row.get("label") == "Full name"), {})
-    agency = next((row for row in sam.get("rows") or [] if row.get("label") == "Excluding agency"), {})
-    if not _hhs_agency(str(agency.get("list_value") or "")):
+    if norm_token(_row_text(leie, "Full name")) != norm_token(_row_text(sam, "Full name")):
         return
-    if norm_token(str(leie_name.get("list_value") or "")) != norm_token(str(sam_name.get("list_value") or "")):
+    if _thin_sam(sam):
+        sam["alignment"] = "Probably the same exclusion as the OIG LEIE entry above"
+        return
+    if not _hhs_agency(_row_text(sam, "Excluding agency")):
         return
     sam["alignment"] = "Same exclusion reported by HHS/OIG"
+
+
+def _person_likelihood(lists: list[dict[str, Any]]) -> str:
+    leie = next((item for item in lists if item.get("list_name") == "leie"), None)
+    sam = next((item for item in lists if item.get("list_name") == "sam"), None)
+    if leie and sam and str(sam.get("alignment") or "").startswith("Probably"):
+        return str(leie.get("likelihood") or "")
+    if lists and all(item.get("likelihood") == "Likely different person" for item in lists):
+        return "Likely different person"
+    return ""
 
 
 def review_token(practice_id: str, person_id: str) -> str:
@@ -686,6 +782,7 @@ def review_packets(practice_id: str) -> list[dict[str, Any]]:
                 "review_id": review_token(practice_id, person_id),
                 "name": staff.get("name") or name,
                 "header": _header(staff.get("name") or name, lists),
+                "likelihood": _person_likelihood(rendered),
                 "lists": rendered,
                 "consequences": {
                     "not_the_same_person": "Clears every flagged list for this person. Activate stays blocked until each one is clear.",
@@ -780,6 +877,45 @@ def _needs_list_detail(item: dict[str, Any]) -> bool:
     if item.get("list_name") == "sam":
         return not _record_has_detail(item)
     return "list_records" not in item
+
+
+def refresh_sam_details(practice_id: str, *, review_id: str = "") -> None:
+    """One SAM re-read with backoff inside the client. Page loads do not call this."""
+    from datetime import date
+
+    from app.compliance.sources import SAM_BUSY, HttpxFetcher, load_sam_detail
+
+    fetcher = HttpxFetcher(timeout=2)
+    today = date.today()
+    for item in compliance_store.screenings(practice_id):
+        if item.get("list_name") != "sam" or item.get("source_mode") != "official":
+            continue
+        if item.get("kind") == "test" or item.get("result") != "possible_match":
+            continue
+        person_id = str(item.get("person_id") or "")
+        if review_id and review_token(practice_id, person_id) != review_id:
+            continue
+        if _record_has_detail(item):
+            continue
+        parts = str(item.get("display_name") or "").split()
+        first = parts[0] if parts else ""
+        last = parts[-1] if parts else ""
+        try:
+            listing = load_sam_detail(fetcher, first=first, last=last, today=today)
+        except Exception:
+            from app.compliance.sources import logger
+
+            logger.warning("sam_detail_reread reason=request_failed")
+            continue
+        result_id = str(item.get("id") or "")
+        if listing.ready:
+            records = _records_for(item, listing)
+            if records:
+                compliance_store.set_list_records(practice_id, result_id, records, replace=True)
+                continue
+        note = listing.detail or "SAM detail was not stored (no_readable_record). The match result is unchanged."
+        status_code = "http_429" if note == SAM_BUSY else ""
+        compliance_store.set_list_note(practice_id, result_id, note, status_code=status_code)
 
 
 def backfill_list_records(

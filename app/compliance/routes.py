@@ -69,6 +69,10 @@ class PersonResolveBody(BaseModel):
     note: str = ""
 
 
+class SamRetryBody(BaseModel):
+    review_id: str = ""
+
+
 class SupervisorBody(BaseModel):
     name: str = ""
     active: Optional[bool] = None
@@ -252,6 +256,16 @@ def screen_hire(hire_id: str, user: CurrentUser) -> dict[str, Any]:
     )
 
 
+@router.post("/compliance/reviews/sam-retry")
+def post_sam_retry(body: SamRetryBody, user: CurrentUser) -> dict[str, Any]:
+    """Retry a SAM detail read. Does not change a screening result or a decision."""
+    _admin(user)
+    from app.compliance.review import refresh_sam_details, review_packets
+
+    refresh_sam_details(user.practice_id, review_id=body.review_id)
+    return {"people": review_packets(user.practice_id)}
+
+
 @router.post("/compliance/reviews/decide")
 def post_person_review(body: PersonResolveBody, user: CurrentUser) -> dict[str, Any]:
     """One decision for every open list on that person."""
@@ -285,15 +299,9 @@ def post_review(result_id: str, body: ResolveBody, user: CurrentUser) -> dict[st
 def get_open_reviews(user: CurrentUser) -> dict[str, Any]:
     """Grouped possible-match reviews. Backfill adds list detail and does not change a result."""
     _admin(user)
-    from app.compliance.review import backfill_list_records, review_packets, sync_review_obligations
+    from app.compliance.review import review_packets, sync_review_obligations
 
     sync_review_obligations(user.practice_id)
-    try:
-        backfill_list_records(user.practice_id)
-    except Exception:
-        from app.compliance.sources import logger
-
-        logger.warning("reviews_open reason=backfill_failed")
     try:
         people = review_packets(user.practice_id)
     except Exception:
