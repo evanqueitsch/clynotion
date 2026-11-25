@@ -1,6 +1,7 @@
 (function () {
   const $ = (id) => document.getElementById(id);
   let pendingTestId = "";
+  let keepQaOpen = false;
 
   function ui() {
     return window.clynotion;
@@ -31,19 +32,125 @@
     ui().setStatus(status, "Loading…");
     root.innerHTML = "";
     try {
-      const [settings, roster, history] = await Promise.all([
+      const [settings, roster, history, reviews] = await Promise.all([
         ui().api("/compliance/settings"),
         ui().api("/compliance/roster"),
-        ui().api("/compliance/screening?include_test=1"),
+        ui().api("/compliance/screening"),
+        ui().api("/compliance/reviews/open"),
       ]);
-      renderScreening(root, settings, roster, history);
+      await renderScreening(root, settings, roster, history, reviews);
       ui().setStatus(status, "");
     } catch (error) {
       ui().setStatus(status, error.message, "error");
     }
   }
 
-  function renderScreening(root, settings, roster, history) {
+  function renderReviews(root, reviews) {
+    const people = (reviews && reviews.people) || [];
+    if (!people.length) return;
+    const heading = document.createElement("h3");
+    heading.textContent = "Possible matches to review";
+    root.appendChild(heading);
+    people.forEach(function (person) {
+      const card = document.createElement("section");
+      card.className = "review-card";
+      card.id = "review-" + String(person.person_id || "").replace(/[^A-Za-z0-9_-]/g, "-");
+      const header = document.createElement("h3");
+      header.textContent = person.header || "";
+      card.appendChild(header);
+      (person.lists || []).forEach(function (list) {
+        const block = document.createElement("div");
+        block.className = "review-list";
+        const title = document.createElement("h4");
+        title.textContent = list.list_label || list.list_name || "List";
+        block.appendChild(title);
+        const why = document.createElement("p");
+        why.textContent = "Why this was flagged: " + (list.why || "") + " " + (list.likelihood || "");
+        block.appendChild(why);
+        if (list.detail_note) {
+          const note = document.createElement("p");
+          note.className = "meta";
+          note.textContent = list.detail_note;
+          block.appendChild(note);
+        }
+        const table = document.createElement("table");
+        table.className = "cmp";
+        const head = document.createElement("tr");
+        ["Field", "Exclusion list", "Our record", ""].forEach(function (label) {
+          const cell = document.createElement("th");
+          cell.textContent = label;
+          head.appendChild(cell);
+        });
+        table.appendChild(head);
+        (list.rows || []).forEach(function (item) {
+          const tr = document.createElement("tr");
+          const mark = item.mark || "Not available";
+          tr.className = mark === "Match" ? "cmp-match" : (mark === "Different" ? "cmp-different" : "cmp-missing");
+          [item.label, item.list_value, item.staff_value, mark].forEach(function (value) {
+            const cell = document.createElement("td");
+            cell.textContent = value || "";
+            tr.appendChild(cell);
+          });
+          table.appendChild(tr);
+        });
+        block.appendChild(table);
+        (list.links || []).forEach(function (link) {
+          const anchor = document.createElement("a");
+          anchor.href = link.url;
+          anchor.target = "_blank";
+          anchor.rel = "noopener";
+          anchor.textContent = link.label;
+          block.appendChild(anchor);
+          block.appendChild(document.createTextNode(" "));
+        });
+        const ssn = document.createElement("p");
+        ssn.className = "meta";
+        ssn.textContent = list.ssn_note || "";
+        block.appendChild(ssn);
+        const reason = document.createElement("input");
+        reason.placeholder = "Short reason, for example NPI differs";
+        block.appendChild(reason);
+        const actions = list.consequences || {};
+        block.appendChild(button("Not the same person — clear this match", "ghost", function () {
+          decide(list.result_id, "not_the_same_person", reason.value);
+        }));
+        const clearText = document.createElement("p");
+        clearText.className = "meta";
+        clearText.textContent = actions.not_the_same_person || "";
+        block.appendChild(clearText);
+        block.appendChild(button("Same person — confirmed exclusion", "primary", function () {
+          decide(list.result_id, "confirmed_exclusion", reason.value);
+        }));
+        const confirmText = document.createElement("p");
+        confirmText.className = "meta";
+        confirmText.textContent = actions.confirmed_exclusion || "";
+        block.appendChild(confirmText);
+        block.appendChild(button("Need more info", "ghost", function () {
+          decide(list.result_id, "need_more_info", reason.value);
+        }));
+        const holdText = document.createElement("p");
+        holdText.className = "meta";
+        holdText.textContent = actions.need_more_info || "";
+        block.appendChild(holdText);
+        card.appendChild(block);
+      });
+      root.appendChild(card);
+    });
+  }
+
+  async function decide(id, decision, note) {
+    try {
+      await ui().api("/compliance/reviews/" + encodeURIComponent(id), {
+        method: "POST",
+        json: { decision: decision, note: note || "" },
+      });
+      await openScreening();
+    } catch (error) {
+      ui().setStatus($("screening-status"), error.message, "error");
+    }
+  }
+
+  async function renderScreening(root, settings, roster, history, reviews) {
     const intro = document.createElement("p");
     intro.className = "meta";
     const counts = roster.counts || {};
@@ -59,6 +166,7 @@
       + ". SAM: " + settings.sam_status
       + ". " + settings.monthly_detail;
     root.appendChild(intro);
+    renderReviews(root, reviews);
 
     const filters = document.createElement("div");
     filters.className = "cg-filters";
@@ -126,10 +234,21 @@
     }));
     root.appendChild(runBox);
 
+    const qa = document.createElement("details");
+    qa.className = "qa-tools";
+    if (keepQaOpen) qa.open = true;
+    keepQaOpen = false;
+    const qaSummary = document.createElement("summary");
+    qaSummary.textContent = "QA tools (test records only)";
+    qa.appendChild(qaSummary);
+    const qaLabel = document.createElement("p");
+    qaLabel.className = "meta";
+    qaLabel.textContent = "Fake records used only to test this feature; not real staff.";
+    qa.appendChild(qaLabel);
     const fixture = document.createElement("div");
     const fixtureNote = document.createElement("p");
     fixtureNote.className = "meta";
-    fixtureNote.textContent = "Test records only. Record test match always stores a labeled TEST possible match. No name list is required.";
+    fixtureNote.textContent = "Record test match stores a labeled TEST possible match. No name list is required.";
     const testPicker = document.createElement("select");
     const testBlank = document.createElement("option");
     testBlank.value = "";
@@ -152,6 +271,7 @@
           json: { person_id: testPicker.value, list_name: "leie" },
         });
         pendingTestId = testPicker.value;
+        keepQaOpen = true;
         await openScreening();
       } catch (error) {
         ui().setStatus($("screening-status"), error.message, "error");
@@ -164,6 +284,7 @@
         const created = await ui().api("/compliance/test-hires", { method: "POST", json: {} });
         ui().setStatus($("screening-status"), "Test record created. No email was sent.", "ok");
         if (created && created.id) pendingTestId = "hire:" + created.id;
+        keepQaOpen = true;
         await openScreening();
       } catch (error) {
         ui().setStatus($("screening-status"), error.message, "error");
@@ -187,6 +308,7 @@
       try {
         await ui().api("/compliance/screening/run", { method: "POST", json: { person_id: testPicker.value } });
         pendingTestId = testPicker.value;
+        keepQaOpen = true;
         await openScreening();
         ui().setStatus($("screening-status"), "Test screening saved.", "ok");
       } catch (error) {
@@ -194,7 +316,21 @@
       }
     }));
     fixture.appendChild(recordMatch);
-    root.appendChild(fixture);
+    qa.appendChild(fixture);
+    const testRows = document.createElement("div");
+    testRows.className = "due-list";
+    qa.appendChild(testRows);
+    if (qa.open) {
+      const testHistory = await ui().api("/compliance/screening?include_test=1");
+      drawRows(testRows, (testHistory.results || []).filter(function (item) { return item.kind === "test"; }), testHistory.resolutions || [], roster.test_people || []);
+    } else {
+      qa.addEventListener("toggle", async function () {
+        if (!qa.open || testRows.childElementCount) return;
+        const testHistory = await ui().api("/compliance/screening?include_test=1");
+        drawRows(testRows, (testHistory.results || []).filter(function (item) { return item.kind === "test"; }), testHistory.resolutions || [], roster.test_people || []);
+      });
+    }
+    root.appendChild(qa);
 
     const manual = document.createElement("form");
     manual.className = "cg-form";
@@ -223,18 +359,15 @@
     }));
     root.appendChild(manual);
 
-    const testHeading = document.createElement("h3");
-    testHeading.textContent = "Test record results";
-    root.appendChild(testHeading);
-    const testRows = document.createElement("div");
-    testRows.className = "due-list";
-    root.appendChild(testRows);
-    const allResults = history.results || [];
-    drawRows(testRows, allResults.filter(function (item) { return item.kind === "test"; }), history.resolutions || [], roster.test_people || []);
     const rows = document.createElement("div");
     rows.className = "due-list";
     root.appendChild(rows);
-    drawRows(rows, allResults.filter(function (item) { return item.kind !== "test"; }), history.resolutions || []);
+    drawRows(rows, (history.results || []).filter(function (item) { return item.kind !== "test"; }), history.resolutions || []);
+    const wanted = (window.location.hash.split("review=")[1] || "").split("&")[0];
+    if (wanted) {
+      const card = document.getElementById("review-" + decodeURIComponent(wanted).replace(/[^A-Za-z0-9_-]/g, "-"));
+      if (card) card.scrollIntoView();
+    }
   }
 
   function drawRows(root, results, resolutions, testPeople) {
@@ -258,7 +391,7 @@
       }
       text.textContent = bits.join(" — ");
       row.appendChild(text);
-      if (item.result === "possible_match" && !decided[item.id]) {
+      if (testPeople && item.result === "possible_match" && !decided[item.id]) {
         const note = document.createElement("input");
         note.placeholder = "Note";
         row.appendChild(note);

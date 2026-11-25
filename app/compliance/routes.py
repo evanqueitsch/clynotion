@@ -259,6 +259,17 @@ def post_review(result_id: str, body: ResolveBody, user: CurrentUser) -> dict[st
     )
 
 
+@router.get("/compliance/reviews/open")
+def get_open_reviews(user: CurrentUser) -> dict[str, Any]:
+    """Grouped possible-match reviews. Backfill adds list detail and does not change a result."""
+    _admin(user)
+    from app.compliance.review import backfill_list_records, review_packets, sync_review_obligations
+
+    sync_review_obligations(user.practice_id)
+    backfill_list_records(user.practice_id)
+    return {"people": review_packets(user.practice_id)}
+
+
 @router.post("/compliance/medicheck/manual")
 async def post_manual(
     user: CurrentUser,

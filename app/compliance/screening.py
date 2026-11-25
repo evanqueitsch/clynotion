@@ -308,26 +308,8 @@ def _result_row(
     }
     if person.get("created_on"):
         row["created_on"] = person["created_on"]
+    row["list_records"] = [match.record() for match in matches]
     return row
-
-
-def _open_review(practice_id: str, stored: dict[str, Any]) -> None:
-    closed = _closed(practice_id)
-    due = add_business_days(_today(), 1, closed)
-    due_at = datetime.combine(due, time(17, 0), tzinfo=EASTERN).isoformat()
-    from app.platform.due import due_engine
-
-    due_engine.upsert(
-        practice_id=practice_id,
-        domain="people",
-        source="exclusion-review",
-        title="Review a possible exclusion match",
-        owner_user_id="admin",
-        due_at=due_at,
-        href="/#screening?review=" + str(stored.get("id") or ""),
-        source_ref=str(stored.get("id") or ""),
-        status="open",
-    )
 
 
 def _store_result(practice_id: str, row: dict[str, Any]) -> dict[str, Any]:
@@ -346,8 +328,10 @@ def _store_result(practice_id: str, row: dict[str, Any]) -> dict[str, Any]:
             "source_mode": stored.get("source_mode"),
         },
     )
-    if stored.get("result") == "possible_match":
-        _open_review(practice_id, stored)
+    if stored.get("result") == "possible_match" and stored.get("kind") != "test" and stored.get("source_mode") != "fixture":
+        from app.compliance.review import sync_review_obligations
+
+        sync_review_obligations(practice_id)
     return stored
 
 
@@ -669,11 +653,11 @@ def resolve_match(
     note_text: str,
     actor: str,
 ) -> dict[str, Any]:
-    if decision not in {"not_the_same_person", "confirmed_exclusion"}:
-        raise ScreeningError(400, "Choose not the same person or confirmed exclusion.")
+    if decision not in {"not_the_same_person", "confirmed_exclusion", "need_more_info"}:
+        raise ScreeningError(400, "Choose not the same person, confirmed exclusion, or need more info.")
     text = (note_text or "").strip()
-    if decision == "not_the_same_person" and not text:
-        raise ScreeningError(400, "A note is required to mark this as not the same person.")
+    if not text:
+        raise ScreeningError(400, "A short reason is required.")
     if len(text) > 500:
         raise ScreeningError(400, "That note is too long.")
     rows = compliance_store.screenings(practice_id)
@@ -696,6 +680,10 @@ def resolve_match(
     from app.platform.due import due_engine
 
     due_engine.complete(practice_id=practice_id, source="exclusion-review", source_ref=result_id)
+    if result.get("kind") != "test" and result.get("source_mode") != "fixture":
+        from app.compliance.review import sync_review_obligations
+
+        sync_review_obligations(practice_id)
     note(
         practice_id,
         action="resolve_exclusion",

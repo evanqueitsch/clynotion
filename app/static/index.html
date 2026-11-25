@@ -565,6 +565,17 @@
       background: rgba(255,255,255,0.5);
     }
     .pulse-chip strong { color: var(--ink); font-weight: 600; }
+    .review-card { border: 1px solid var(--line); border-radius: 12px; padding: 0.85rem 1rem; margin: 0.75rem 0 1rem; background: rgba(255,255,255,0.72); }
+    .review-card h3 { margin: 0 0 0.6rem; font-size: 1.05rem; }
+    .review-list { margin-top: 0.8rem; }
+    .review-list h4 { margin: 0 0 0.35rem; }
+    table.cmp { width: 100%; border-collapse: collapse; margin: 0.4rem 0 0.6rem; font-size: 0.92rem; }
+    table.cmp th, table.cmp td { text-align: left; padding: 0.35rem 0.45rem; border-bottom: 1px solid var(--line); vertical-align: top; }
+    tr.cmp-match td { background: #e7f5ea; }
+    tr.cmp-different td { background: #fde8e4; }
+    tr.cmp-missing td { background: #f6f3ee; }
+    .qa-tools { margin: 1rem 0; }
+    .qa-tools summary { cursor: pointer; font-weight: 600; }
     .unit-block { margin: 1rem 0 1.25rem; }
     .unit-block h3 {
       font-family: Fraunces, Georgia, serif;
@@ -1262,8 +1273,8 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.24.4"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.29.4"></script>
-  <script src="/static/compliance.js?v=0.29.4"></script>
+  <script src="/static/hiring.js?v=0.30.0"></script>
+  <script src="/static/compliance.js?v=0.30.0"></script>
   <script>
     const state = {
       token: null,

@@ -431,6 +431,12 @@ def _home_payload(user: CurrentUser) -> HomeOut:
     from app.hiring.engine import hiring
 
     hiring.sync_qb_invites(user.practice_id)
+    try:
+        from app.compliance.review import sync_review_obligations
+
+        sync_review_obligations(user.practice_id)
+    except Exception:
+        pass
     bands_raw = _with_payroll_todos(user.practice_id, due_engine.bands(user.practice_id))
     bands = HomeBandsOut(
         overdue=[_obligation_out(o) for o in bands_raw["overdue"]],
