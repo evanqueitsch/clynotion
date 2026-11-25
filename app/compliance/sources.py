@@ -28,7 +28,9 @@ from datetime import date, datetime
 from typing import Any, Optional, Protocol
 from zoneinfo import ZoneInfo
 
-import httpx
+import logging
+
+logger = logging.getLogger("app.compliance.sources")
 
 EASTERN = ZoneInfo("America/New_York")
 
@@ -275,17 +277,30 @@ def _sam_address_block(item: dict[str, Any]) -> dict[str, Any]:
     return {}
 
 
+def _sam_dicts(payload: Any, depth: int = 0) -> list[dict[str, Any]]:
+    found: list[dict[str, Any]] = []
+    if depth > 6 or len(found) > 40:
+        return found
+    if isinstance(payload, dict):
+        ident = payload.get("exclusionIdentification")
+        if isinstance(ident, dict) or isinstance(payload.get("exclusionDetails"), dict):
+            found.append(payload)
+        for value in payload.values():
+            found.extend(_sam_dicts(value, depth + 1))
+            if len(found) > 40:
+                break
+    elif isinstance(payload, list):
+        for item in payload[:40]:
+            found.extend(_sam_dicts(item, depth + 1))
+            if len(found) > 40:
+                break
+    return found
+
+
 def parse_sam(payload: dict[str, Any], *, queried_on: str, raw: bytes) -> tuple[str, list[ListedPerson]]:
-    records = payload.get("excludedEntity") or []
-    if not isinstance(records, list):
-        records = []
-    if isinstance(payload.get("exclusionDetails"), list):
-        records = payload["exclusionDetails"]
-    if isinstance(payload.get("data"), list):
-        records = payload["data"]
+    records = _sam_dicts(payload)
     rows: list[ListedPerson] = []
-    if isinstance(records, list):
-        for item in records:
+    for item in records:
             if not isinstance(item, dict):
                 continue
             ident = item.get("exclusionIdentification") if isinstance(item.get("exclusionIdentification"), dict) else item
@@ -396,48 +411,72 @@ def load_sam_person(fetcher: Fetcher, *, first: str, last: str, npi: str, today:
 
 
 def load_sam_detail(fetcher: Fetcher, *, first: str, last: str, today: date) -> ListFile:
-    """Read exclusion records for one name. Tries more than one query. Does not change a stored result."""
+    """Read exclusion records for one name. The log has a reason code, never the key or a name."""
     key = (os.environ.get(SAM_KEY_ENV) or "").strip()
     if not key:
+        logger.warning("sam_detail_reread reason=missing_key status=0")
         return ListFile(name="sam", updated_on="", file_sha256="", ready=False, detail="not run: API key not configured")
     queries = [
         {"classification": "Individual", "exclusionName": f"{first} {last}".strip()},
         {"exclusionName": f"{last}, {first}".strip(", ")},
         {"exclusionName": last},
     ]
-    rows: list[ListedPerson] = []
+    last_reason = "no_query"
+    last_status = 0
+    chosen: list[ListedPerson] = []
     digest = ""
     reported = 0
     for extra in queries:
-        params = {"api_key": key, **{k: v for k, v in extra.items() if v}}
+        params = {"api_key": key, **{key_name: value for key_name, value in extra.items() if value}}
         code, text, raw = fetcher.get(SAM_URL, params)
+        last_status = code
         if code != 200:
+            last_reason = f"http_{code}"
             continue
         try:
             payload = json_loads(text)
         except ValueError:
+            last_reason = "unparsed"
             continue
         digest, found = parse_sam(payload, queried_on=today.isoformat(), raw=raw)
         reported = int(payload.get("totalRecords") or len(found) or 0)
-        if found:
-            rows = found
-            break
-    if not rows and not digest:
-        return ListFile(name="sam", updated_on=today.isoformat(), file_sha256="", ready=False, detail="source unavailable")
-    wanted_last = norm_token(last)
-    if wanted_last:
-        named = [row for row in rows if norm_token(row.last) == wanted_last or wanted_last in norm_token(row.last)]
+        if reported and not found:
+            last_reason = "unparsed"
+            logger.warning("sam_detail_reread reason=unparsed status=%s keys=%s", code, ",".join(sorted(payload.keys())[:12]))
+            continue
+        if not found:
+            last_reason = "no_rows"
+            continue
+        wanted_last = norm_token(last)
+        named = [row for row in found if not wanted_last or norm_token(row.last) == wanted_last or wanted_last in norm_token(row.last)]
         if named:
-            rows = named
-    return ListFile(
-        name="sam",
-        updated_on=today.isoformat(),
-        file_sha256=digest,
-        rows=rows,
-        ready=True,
-        detail="",
-        reported_count=reported or len(rows),
-    )
+            chosen = named
+            last_reason = "matched"
+            break
+        if len(found) == 1 and "exclusionName" in extra and "," in str(extra.get("exclusionName") or ""):
+            chosen = found
+            last_reason = "single_record"
+            break
+        last_reason = "name_filter_dropped"
+    if not chosen:
+        logger.warning("sam_detail_reread reason=%s status=%s", last_reason, last_status)
+        return ListFile(
+            name="sam",
+            updated_on=today.isoformat(),
+            file_sha256=digest,
+            rows=[],
+            ready=False,
+            detail=f"SAM detail was not stored ({last_reason}). The match result is unchanged.",
+        )
+        return ListFile(
+            name="sam",
+            updated_on=today.isoformat(),
+            file_sha256=digest,
+            rows=chosen,
+            ready=True,
+            detail="",
+            reported_count=reported or len(chosen),
+        )
 
 
 def json_loads(text: str) -> dict[str, Any]:
