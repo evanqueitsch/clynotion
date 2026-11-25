@@ -244,9 +244,10 @@ def test_confirmed_exclusion_banner_and_manual_medicheck() -> None:
 
 def test_schedule_stays_off_and_settings_do_not_run_a_job() -> None:
     health = client.get("/health").json()
-    assert health["version"] == "0.29.2"
+    assert health["version"] == "0.29.3"
     assert health["exclusion_schedule"] == "off"
     assert health["audit_drive"] == "not_configured"
+    assert health["sam"] == "not_configured"
     settings = client.get("/compliance/settings", headers=_alice()).json()
     assert settings["monthly_screening_enabled"] is False
     assert settings["drive_status"] == "Not configured"
@@ -325,6 +326,14 @@ def test_test_hire_can_be_screened_without_email_and_activate_stays_blocked() ->
         roster_body = client.get("/compliance/roster", headers=_alice()).json()
         assert all(item["person_id"] != f"hire:{hire_id}" for item in roster_body["people"])
         assert any(item["person_id"] == f"hire:{hire_id}" for item in roster_body["test_people"])
+        shown = next(item for item in roster_body["test_people"] if item["person_id"] == f"hire:{hire_id}")
+        assert shown["created_on"] == body["created_on"]
+        script = open("app/static/compliance.js", encoding="utf-8").read()
+        screen_at = script.index("Screen this test record")
+        screen_block = script[screen_at:screen_at + 700]
+        assert "pendingTestId = testPicker.value" in screen_block
+        assert 'bits.push(item.person_id)' in script
+        assert 'bits.push("created "' in script
         billing = client.get("/hiring/bootstrap", headers=_alice()).json()
         assert any(item["id"] == hire_id and item["test_record"] for item in billing["hires"])
         real = credentialing_store.save_subject(
@@ -415,7 +424,9 @@ def test_record_test_match_opens_a_home_item_and_delete_clears_it() -> None:
     hire = created.json()
     hire_id = hire["id"]
     exclusion = next(item for item in hire["items"] if item["template_key"] == "exclusion_screening")
+    clearances = next(item for item in hire["items"] if item["template_key"] == "clearances")
     assert exclusion["due_date"] == hire["start_date"]
+    assert clearances["due_date"] == hire["start_date"]
     assert exclusion["due_date"] >= hire["created_on"]
     matched = client.post(
         "/compliance/screening/fixture",
@@ -426,6 +437,8 @@ def test_record_test_match_opens_a_home_item_and_delete_clears_it() -> None:
     assert matched.json()["result"] == "possible_match"
     assert matched.json()["detail"] == "TEST possible match"
     assert matched.json()["matches"][0]["kind"] == "TEST"
+    assert matched.json()["person_id"] == f"hire:{hire_id}"
+    assert matched.json()["created_on"] == hire["created_on"]
     home = client.get("/home", headers=_alice()).json()
     open_items = [item for band in ("overdue", "this_week") for item in home["bands"][band]]
     assert any(item["source_ref"] == matched.json()["id"] for item in open_items)
@@ -459,6 +472,17 @@ def test_record_test_match_opens_a_home_item_and_delete_clears_it() -> None:
     script = open("app/static/denials.js", encoding="utf-8").read()
     assert 'window.location.hash = "#settings"' in script
     assert "openSettings();" in script
+
+
+def test_health_sam_status_does_not_reveal_the_key(monkeypatch) -> None:
+    secret = "not-a-real-sam-key-value"
+    monkeypatch.setenv("SAM_API_KEY", secret)
+    body = client.get("/health")
+    assert body.json()["sam"] == "configured"
+    assert secret not in body.text
+    settings = client.get("/compliance/settings", headers=_alice())
+    assert settings.json()["sam_status"] == "configured"
+    assert secret not in settings.text
 
 
 def test_exports_are_logged_and_practice_owner_can_read() -> None:

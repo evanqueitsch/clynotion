@@ -221,7 +221,10 @@ def hire_person(practice_id: str, hire_id: str) -> dict[str, str]:
     if not name:
         raise ScreeningError(400, "That hire has no name to screen.")
     kind = "test" if hire.get("test_record") else "hire"
-    return {"person_id": f"hire:{hire_id}", "name": name, "npi": str(values.get("npi") or ""), "kind": kind}
+    person = {"person_id": f"hire:{hire_id}", "name": name, "npi": str(values.get("npi") or ""), "kind": kind}
+    if hire.get("test_record"):
+        person["created_on"] = str(hire.get("created_on") or "")[:10]
+    return person
 
 
 def test_people(practice_id: str) -> list[dict[str, str]]:
@@ -240,7 +243,15 @@ def test_people(practice_id: str) -> list[dict[str, str]]:
         name = str(candidate.get("display_name") or "").strip()
         if not name:
             continue
-        found.append({"person_id": f"hire:{hire.get('id')}", "name": name, "npi": "", "kind": "test"})
+        found.append(
+            {
+                "person_id": f"hire:{hire.get('id')}",
+                "name": name,
+                "npi": "",
+                "kind": "test",
+                "created_on": str(hire.get("created_on") or "")[:10],
+            }
+        )
     return found
 
 
@@ -278,7 +289,8 @@ def _result_row(
     else:
         result = "clear"
         detail = ""
-    return {
+    proofs = [match.proof() for match in matches]
+    row = {
         "person_id": person["person_id"],
         "display_name": person["name"],
         "kind": person.get("kind") or "",
@@ -289,11 +301,14 @@ def _result_row(
         "result": result,
         "detail": detail,
         "source_sha256": listing.file_sha256,
-        "matches": [row.proof() for row in matches],
+        "matches": proofs,
         "purpose": purpose,
         "source_mode": source_mode,
         "actor": actor,
     }
+    if person.get("created_on"):
+        row["created_on"] = person["created_on"]
+    return row
 
 
 def _open_review(practice_id: str, stored: dict[str, Any]) -> None:
@@ -659,6 +674,7 @@ def public_screening(item: dict[str, Any]) -> dict[str, Any]:
         "purpose": item.get("purpose") or "",
         "source_mode": item.get("source_mode") or "",
         "actor": item.get("actor") or "",
+        "created_on": item.get("created_on") or "",
     }
 
 

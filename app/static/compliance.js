@@ -129,7 +129,7 @@
     (roster.test_people || []).forEach(function (item) {
       const option = document.createElement("option");
       option.value = item.person_id;
-      option.textContent = item.name;
+      option.textContent = item.name + " — " + item.person_id + (item.created_on ? " — created " + item.created_on : "");
       testPicker.appendChild(option);
     });
     const recordMatch = button("Record test match", "ghost", async function () {
@@ -177,6 +177,7 @@
       ui().setStatus($("screening-status"), "Running…");
       try {
         await ui().api("/compliance/screening/run", { method: "POST", json: { person_id: testPicker.value } });
+        pendingTestId = testPicker.value;
         await openScreening();
         ui().setStatus($("screening-status"), "Test screening saved.", "ok");
       } catch (error) {
@@ -220,22 +221,30 @@
     testRows.className = "due-list";
     root.appendChild(testRows);
     const allResults = history.results || [];
-    drawRows(testRows, allResults.filter(function (item) { return item.kind === "test"; }), history.resolutions || []);
+    drawRows(testRows, allResults.filter(function (item) { return item.kind === "test"; }), history.resolutions || [], roster.test_people || []);
     const rows = document.createElement("div");
     rows.className = "due-list";
     root.appendChild(rows);
     drawRows(rows, allResults.filter(function (item) { return item.kind !== "test"; }), history.resolutions || []);
   }
 
-  function drawRows(root, results, resolutions) {
+  function drawRows(root, results, resolutions, testPeople) {
     root.innerHTML = "";
     const decided = {};
+    const created = {};
+    (testPeople || []).forEach(function (item) { created[item.person_id] = item.created_on || ""; });
     (resolutions || []).forEach(function (item) { decided[item.result_id] = item; });
     (results || []).forEach(function (item) {
       const row = document.createElement("div");
       row.className = "due-row";
       const text = document.createElement("div");
-      text.textContent = [item.checked_at_et, item.display_name, item.list_name, item.result, item.detail].filter(Boolean).join(" — ");
+      const bits = [item.checked_at_et, item.display_name, item.list_name, item.result, item.detail].filter(Boolean);
+      if (item.kind === "test") {
+        bits.push(item.person_id);
+        const createdOn = item.created_on || created[item.person_id];
+        if (createdOn) bits.push("created " + createdOn);
+      }
+      text.textContent = bits.join(" — ");
       row.appendChild(text);
       if (item.result === "possible_match" && !decided[item.id]) {
         const note = document.createElement("input");

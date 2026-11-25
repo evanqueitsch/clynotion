@@ -150,7 +150,15 @@ def get_roster(user: CurrentUser) -> dict[str, Any]:
         people.append({"person_id": item["person_id"], "name": item["name"], "kind": item["kind"], "test_record": False})
     tests = []
     for item in test_people(user.practice_id):
-        tests.append({"person_id": item["person_id"], "name": item["name"], "kind": "test", "test_record": True})
+        tests.append(
+            {
+                "person_id": item["person_id"],
+                "name": item["name"],
+                "kind": "test",
+                "test_record": True,
+                "created_on": item.get("created_on") or "",
+            }
+        )
     return {"people": people, "test_people": tests, "sam_status": sam_status()}
 
 
