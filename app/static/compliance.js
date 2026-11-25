@@ -68,12 +68,23 @@
         why.textContent = "Why this was flagged: " + (list.why || "");
         block.appendChild(why);
         const likelihood = document.createElement("p");
-        likelihood.textContent = (list.likelihood || "") + (list.likelihood_reason ? " " + list.likelihood_reason : "");
+        const label = document.createElement("strong");
+        label.textContent = (list.likelihood || "") + ".";
+        likelihood.appendChild(label);
+        if (list.likelihood_reason) {
+          likelihood.appendChild(document.createElement("br"));
+          likelihood.appendChild(document.createTextNode(list.likelihood_reason));
+        }
         block.appendChild(likelihood);
         if (list.next_step) {
           const step = document.createElement("p");
           step.textContent = list.next_step;
           block.appendChild(step);
+        }
+        if (list.alignment) {
+          const same = document.createElement("p");
+          same.textContent = list.alignment;
+          block.appendChild(same);
         }
         if (list.detail_note) {
           const note = document.createElement("p");
@@ -140,7 +151,8 @@
       reason.placeholder = "Short reason, for example NPI differs";
       card.appendChild(reason);
       const actions = person.consequences || {};
-      card.appendChild(button("Not the same person — clear this match", "primary", function () {
+      const clearClass = (person.lists || []).every(function (list) { return list.likelihood === "Likely different person"; }) ? "primary" : "ghost";
+      card.appendChild(button("Not the same person — clear this match", clearClass, function () {
         decide(person.review_id, "not_the_same_person", reason.value);
       }));
       const clearText = document.createElement("p");

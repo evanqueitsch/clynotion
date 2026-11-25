@@ -245,7 +245,7 @@ def test_confirmed_exclusion_banner_and_manual_medicheck() -> None:
 
 def test_schedule_stays_off_and_settings_do_not_run_a_job() -> None:
     health = client.get("/health").json()
-    assert health["version"] == "0.30.1"
+    assert health["version"] == "0.30.2"
     assert health["exclusion_schedule"] == "off"
     assert health["audit_drive"] == "not_configured"
     assert health["sam"] == "not_configured"
@@ -633,7 +633,14 @@ def test_review_groups_lists_and_compares_without_changing_a_decision() -> None:
         address="9 Other St",
         excl_date="2020-01-01",
     )
-    sam = ListedPerson(last="Alpha", first="Testperson", kind="Ineligible", uei="UEI123456789", record_status="Active")
+    sam = ListedPerson(
+        last="Alpha",
+        first="Testperson",
+        kind="Ineligible",
+        uei="UEI123456789",
+        record_status="Active",
+        agency="Health and Human Services",
+    )
     lists = _lists([leie])
     lists["sam"] = ListFile(name="sam", updated_on="2026-11-25", file_sha256="sam", rows=[sam])
     run_screening("practice-a", "qa", person_ids=[person_id], lists=lists)
@@ -674,6 +681,9 @@ def test_review_groups_lists_and_compares_without_changing_a_decision() -> None:
     assert name_row["mark"] == "Match"
     assert any(link["label"] == "OIG LEIE online search" for link in leie_view["links"])
     assert "Social Security number" in leie_view["ssn_note"]
+    sam_view = next(item for item in packet[0]["lists"] if item["list_name"] == "sam")
+    assert sam_view["alignment"] == "Same exclusion reported by HHS/OIG"
+    assert sam_view["ssn_note"] == ""
     held = client.post(
         f"/compliance/reviews/{target['id']}",
         headers=_alice(),
@@ -747,14 +757,17 @@ def test_state_and_license_make_a_different_person_without_changing_the_result()
     view = packet["lists"][0]
     assert view["likelihood"] == "Likely different person"
     assert "a nurse in OH" in view["likelihood_reason"]
-    assert "a licensed counselor in PA" in view["likelihood_reason"]
+    assert "an LPC" in view["likelihood_reason"]
+    assert "PA (contact)" in view["likelihood_reason"]
     assert "Testperson" not in view["likelihood_reason"]
     state_row = next(item for item in view["rows"] if item["label"] == "State")
     discipline = next(item for item in view["rows"] if item["label"] == "Specialty / discipline")
     city = next(item for item in view["rows"] if item["label"] == "City")
     assert state_row["mark"] == "Different"
+    assert state_row["staff_value"] == "PA (contact)"
     assert discipline["mark"] == "Different"
     assert city["staff_value"] == "Harrisburg"
+    assert all(item["label"] != "License" for item in view["rows"])
     assert any(item["both_blank"] == "yes" for item in view["rows"])
     assert view["ssn_note"]
     home = next(item for item in due_engine.list_open("practice-a") if item.source == "exclusion-review")
@@ -801,3 +814,63 @@ def test_state_and_license_make_a_different_person_without_changing_the_result()
     assert parsed[0].address == "1 Example St"
     assert parsed[0].agency == "Health and Human Services"
     assert parsed[0].record_status == "Active"
+    from app.compliance.review import comparison_rows, likelihood_from_rows
+    from app.compliance.sources import load_sam_detail
+
+    aide_rows = comparison_rows(
+        {"first": "A", "last": "B", "state": "MO", "specialty": "Nurse's aide", "general": ""},
+        {
+            "name": "Example Person",
+            "license_type": "LCSW",
+            "license_state": "PA",
+            "state": "",
+            "specialties": "",
+            "npi": "",
+            "dob": "",
+            "city": "",
+            "service_state": "",
+            "hire_date": "",
+        },
+    )
+    aide = likelihood_from_rows(aide_rows, list_name="leie")
+    assert aide["label"] == "Likely different person"
+    assert "a nurse's aide in MO" in aide["reason"]
+    assert "an LCSW" in aide["reason"]
+    assert "PA (license)" in aide["reason"]
+    assert next(item["staff_value"] for item in aide_rows if item["label"] == "State") == "PA (license)"
+
+    class _Denied:
+        def get(self, url: str, params: dict | None = None) -> tuple[int, str, bytes]:
+            return 403, "", b""
+
+    import logging
+    import os
+
+    captured: list[str] = []
+
+    class _Grab(logging.Handler):
+        def emit(self, record: logging.LogRecord) -> None:
+            captured.append(record.getMessage())
+
+    log = logging.getLogger("app.compliance.sources")
+    handler = _Grab()
+    log.addHandler(handler)
+    log.setLevel(logging.WARNING)
+    previous = os.environ.get("SAM_API_KEY")
+    os.environ["SAM_API_KEY"] = "not-a-real-key"
+    try:
+        from datetime import date
+
+        failed = load_sam_detail(_Denied(), first="Test", last="Person", today=date(2026, 11, 25))
+    finally:
+        log.removeHandler(handler)
+        if previous is None:
+            os.environ.pop("SAM_API_KEY", None)
+        else:
+            os.environ["SAM_API_KEY"] = previous
+    assert failed.ready is False
+    assert "http_403" in failed.detail
+    logged = " ".join(captured)
+    assert "http_403" in logged
+    assert "not-a-real-key" not in logged
+    assert "Person" not in logged

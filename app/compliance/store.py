@@ -210,6 +210,25 @@ class ComplianceStore:
                 self._save(payload)
                 return
 
+    def set_list_note(self, practice_id: str, result_id: str, note: str) -> None:
+        """Store a safe re-read note. The result status is left as stored."""
+        text = " ".join(str(note or "").split())[:180]
+        if not text:
+            return
+        with _lock:
+            payload = self._read()
+            row = payload.get("practices", {}).get(practice_id)
+            if not isinstance(row, dict):
+                return
+            for item in row.get("screenings") or []:
+                if not isinstance(item, dict) or item.get("id") != result_id:
+                    continue
+                status = item.get("result")
+                item["list_detail_note"] = text
+                item["result"] = status
+                self._save(payload)
+                return
+
     def screenings(self, practice_id: str) -> list[dict[str, Any]]:
         with _lock:
             payload = self._read()
