@@ -2,6 +2,25 @@
   const $ = (id) => document.getElementById(id);
   let pendingTestId = "";
   let keepQaOpen = false;
+  let screenToken = 0;
+
+  function paintShell() {
+    const loading = $("screening-loading");
+    if (loading) loading.classList.remove("hidden");
+  }
+
+  function hideShellLoading() {
+    const loading = $("screening-loading");
+    if (loading) loading.classList.add("hidden");
+  }
+
+  function afterPaint() {
+    return new Promise(function (resolve) {
+      requestAnimationFrame(function () {
+        requestAnimationFrame(resolve);
+      });
+    });
+  }
 
   function ui() {
     return window.clynotion;
@@ -29,21 +48,20 @@
     const root = $("screening-root");
     const status = $("screening-status");
     if (!root) return;
-    root.innerHTML = "";
-    const heading = document.createElement("h2");
-    heading.textContent = "Exclusion screening";
-    root.appendChild(heading);
-    const loading = document.createElement("p");
-    loading.textContent = "Loading screening…";
-    root.appendChild(loading);
+    const token = ++screenToken;
+    paintShell();
     ui().setStatus(status, "");
+    await afterPaint();
+    if (token !== screenToken) return;
     try {
       const [settings, roster, history] = await Promise.all([
         ui().api("/compliance/settings"),
         ui().api("/compliance/roster"),
         ui().api("/compliance/screening"),
       ]);
+      if (token !== screenToken) return;
       root.innerHTML = "";
+      hideShellLoading();
       await renderScreening(root, settings, roster, history, { people: [] }, "", true);
       ui().setStatus(status, "");
       const controller = new AbortController();
@@ -51,10 +69,12 @@
       try {
         const reviews = await ui().api("/compliance/reviews/open", { signal: controller.signal });
         clearTimeout(timer);
+        if (token !== screenToken) return;
         root.innerHTML = "";
         await renderScreening(root, settings, roster, history, reviews, "", false);
       } catch (error) {
         clearTimeout(timer);
+        if (token !== screenToken) return;
         const reviewError = controller.signal.aborted
           ? "The review is taking too long. The rest of this page is ready."
           : "Possible-match review could not be loaded. The rest of this page is still available.";
@@ -62,6 +82,8 @@
         await renderScreening(root, settings, roster, history, { people: [] }, reviewError, false);
       }
     } catch (error) {
+      if (token !== screenToken) return;
+      hideShellLoading();
       ui().setStatus(status, error.message, "error");
     }
   }
@@ -96,7 +118,13 @@
         why.textContent = "Why this was flagged: " + (list.why || "");
         block.appendChild(why);
         const tied = String(list.alignment || "").indexOf("Probably the same exclusion") === 0;
-        if (!tied) {
+        if (tied) {
+          const line = document.createElement("p");
+          const strong = document.createElement("strong");
+          strong.textContent = (list.likelihood || "Needs a closer look") + " — probably the same exclusion as the OIG LEIE entry above.";
+          line.appendChild(strong);
+          block.appendChild(line);
+        } else {
           const likelihood = document.createElement("p");
           const label = document.createElement("strong");
           label.textContent = (list.likelihood || "") + ".";
@@ -111,11 +139,11 @@
             step.textContent = list.next_step;
             block.appendChild(step);
           }
-        }
-        if (list.alignment) {
-          const same = document.createElement("p");
-          same.textContent = list.alignment;
-          block.appendChild(same);
+          if (list.alignment) {
+            const same = document.createElement("p");
+            same.textContent = list.alignment;
+            block.appendChild(same);
+          }
         }
         if (list.sam_busy || (list.list_name === "sam" && list.detail_note)) {
           const busy = document.createElement("p");
@@ -703,5 +731,5 @@
   const auditHome = $("btn-audit-home");
   if (auditHome) auditHome.addEventListener("click", function () { window.location.hash = ""; });
 
-  window.clyCompliance = { openScreening: openScreening, openAudit: openAudit, renderSettings: renderSettings };
+  window.clyCompliance = { openScreening: openScreening, paintShell: paintShell, openAudit: openAudit, renderSettings: renderSettings };
 })();

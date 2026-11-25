@@ -873,6 +873,7 @@
       </div>
       <p class="meta">LEIE, SAM, and PA Medicheck. Results are kept. The monthly run stays off until you turn it on in Settings.</p>
       <p class="status" id="screening-status"></p>
+      <p class="meta hidden" id="screening-loading">Loading screening…</p>
       <div id="screening-root"></div>
     </section>
 
@@ -1276,7 +1277,7 @@
   <script src="/static/employee.js?v=0.24.4"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
   <script src="/static/hiring.js?v=0.30.4"></script>
-  <script src="/static/compliance.js?v=0.30.5"></script>
+  <script src="/static/compliance.js?v=0.30.6"></script>
   <script>
     const state = {
       token: null,
@@ -2845,12 +2846,7 @@
         return;
       }
       if ((ob.href || "").indexOf("#screening") !== -1 || ob.source === "exclusion-review") {
-        const hash = (ob.href || "").indexOf("#") === -1 ? "#screening" : ob.href.slice(ob.href.indexOf("#"));
-        if ((window.location.hash || "") !== hash) {
-          window.history.replaceState({}, "", "/" + hash);
-        }
-        show("screening-panel");
-        if (window.clyCompliance) window.clyCompliance.openScreening();
+        openScreening(ob.href);
         return;
       }
       if (ob.href) window.location.href = ob.href;
@@ -4248,13 +4244,17 @@
       show("capture-panel");
     };
 
-    async function openScreening() {
-      if ((window.location.hash || "") !== "#screening" && (window.location.hash || "").indexOf("#screening?") !== 0) {
-        window.location.hash = "#screening";
-        return;
-      }
+    function openScreening(href) {
       show("screening-panel");
-      if (window.clyCompliance) await window.clyCompliance.openScreening();
+      if (window.clyCompliance && window.clyCompliance.paintShell) window.clyCompliance.paintShell();
+      const source = href || window.location.hash || "";
+      const hashAt = source.indexOf("#");
+      const next = hashAt === -1 ? "#screening" : source.slice(hashAt);
+      const target = next.indexOf("#screening") === 0 ? next : "#screening";
+      if ((window.location.hash || "") !== target) {
+        window.history.replaceState({}, "", "/" + target);
+      }
+      if (window.clyCompliance) window.clyCompliance.openScreening();
     }
 
     async function openAuditLog() {

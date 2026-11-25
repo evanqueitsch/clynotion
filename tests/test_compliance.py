@@ -245,7 +245,7 @@ def test_confirmed_exclusion_banner_and_manual_medicheck() -> None:
 
 def test_schedule_stays_off_and_settings_do_not_run_a_job() -> None:
     health = client.get("/health").json()
-    assert health["version"] == "0.30.5"
+    assert health["version"] == "0.30.6"
     assert health["exclusion_schedule"] == "off"
     assert health["audit_drive"] == "not_configured"
     assert health["sam"] == "not_configured"
@@ -972,7 +972,7 @@ def test_open_reviews_survives_a_failed_sam_reread() -> None:
         assert "Prohibition/Restriction" in next(
             item["list_value"] for item in sam["rows"] if item["label"] == "Exclusion type"
         )
-        assert sam["alignment"] == "Probably the same exclusion as the OIG LEIE entry above"
+        assert sam["alignment"] == "Probably the same exclusion as the OIG LEIE entry above."
         assert view["likelihood"] == "Likely different person"
         assert view["summary"] == "Likely different person — based on the OIG LEIE details above."
         retried = client.post(
@@ -1002,8 +1002,11 @@ def test_open_reviews_survives_a_failed_sam_reread() -> None:
     script = open("app/static/compliance.js", encoding="utf-8").read()
     assert "Loading possible-match review" in script
     assert "The rest of this page is still available." in script
-    assert "Loading screening" in script
+    assert "requestAnimationFrame" in script
+    assert 'textContent = "Exclusion screening"' not in script
     assert "This decision applies to both list hits for this person." in script
+    assert "Clears every flagged list" not in script
+    assert "probably the same exclusion as the OIG LEIE entry above." in script
     assert 'person.likelihood === "Likely different person" ? "primary"' in script
 
 

@@ -24,7 +24,7 @@ _CLOSED = {"not_the_same_person", "confirmed_exclusion"}
 _LIST_LABEL = {"leie": "OIG LEIE", "sam": "SAM.gov", "medicheck": "PA Medicheck"}
 NOT_ON_FILE = "Not on file — add license state in Credentialing"
 STATE_HREF = "#credentialing"
-PROBABLY_SAME = "Probably the same exclusion as the OIG LEIE entry above"
+PROBABLY_SAME = "Probably the same exclusion as the OIG LEIE entry above."
 _LICENSE_STATE_KEYS = {
     "licensestate",
     "licensurestate",
@@ -930,7 +930,7 @@ def review_packets(practice_id: str) -> list[dict[str, Any]]:
                 "summary": read["summary"],
                 "lists": rendered,
                 "consequences": {
-                    "not_the_same_person": "Clears every flagged list for this person. Activate stays blocked until each one is clear.",
+                    "not_the_same_person": "Activate stays blocked until each one is clear.",
                     "confirmed_exclusion": "This person cannot bill Medicaid or Medicare. Activate stays blocked.",
                     "need_more_info": "Keeps this review open. Nothing is cleared and nothing is confirmed.",
                 },
