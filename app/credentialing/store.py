@@ -458,6 +458,16 @@ class CredentialingStore:
             }
         )
         self._save(payload)
+        from app.compliance.audit_chain import note_from_request
+
+        note_from_request(
+            practice_id,
+            action="view",
+            object_type="credentialing",
+            object_id=subject_id,
+            actor=actor,
+            diff={"field": field, "action": action},
+        )
         return value
 
     def audit_for(self, practice_id: str, subject_id: str) -> list[dict[str, str]]:
@@ -548,6 +558,17 @@ class CredentialingStore:
                 {"at": current["updated_at"], "by": actor, "source": "manual", "changes": changes}
             )
         self._save(payload)
+        if changes:
+            from app.compliance.audit_chain import note_from_request
+
+            note_from_request(
+                practice_id,
+                action="update" if body.get("id") else "create",
+                object_type="credentialing_subject",
+                object_id=subject_id,
+                actor=actor,
+                diff=changes,
+            )
         return _public_subject(current)
 
     def backup_store(self) -> None:

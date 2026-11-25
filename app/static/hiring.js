@@ -639,6 +639,36 @@
     card.appendChild(block);
   }
 
+  function exclusionStatus(card, hire) {
+    if (!hire || !hire.id) return;
+    const slot = document.createElement("div");
+    card.appendChild(slot);
+    ui().api("/compliance/screening/hire/" + encodeURIComponent(hire.id)).then(function (status) {
+      if (status.banner) {
+        const banner = document.createElement("p");
+        banner.className = "exclusion-banner";
+        banner.textContent = status.banner;
+        slot.appendChild(banner);
+      }
+      const line = document.createElement("p");
+      line.className = "meta";
+      const lists = status.lists || {};
+      line.textContent = "Exclusion check — " + ["leie", "sam", "medicheck"].map(function (name) {
+        const state = lists[name] && lists[name].state;
+        return name + " " + (state || "missing");
+      }).join(", ");
+      slot.appendChild(line);
+      if (!status.allowed) {
+        const button = card.querySelector('[data-action="activate"]');
+        if (button) button.disabled = true;
+        const why = document.createElement("p");
+        why.className = "meta hire-activate-reason";
+        why.textContent = status.message || "Exclusion check is not clear.";
+        slot.appendChild(why);
+      }
+    }).catch(function () {});
+  }
+
   function itemByKey(hire, key) {
     return (hire.items || []).filter(function (item) { return item.template_key === key; })[0] || {};
   }
@@ -752,7 +782,7 @@
     dateStep(card, hire, itemByKey(hire, "i9_section2"), "2. I-9 in-person appointment", "i9_appointment_on", false);
     dateStep(card, hire, itemByKey(hire, "i9_section2"), "2. I-9 completed", "i9_completed_on", true);
     dateStep(card, hire, itemByKey(hire, "clearances"), "3. PA clearances received", "clearances_received_on", true);
-    dateStep(card, hire, itemByKey(hire, "exclusion_screening"), "3. Exclusion screening verified", "exclusion_received_on", true);
+    exclusionStatus(card, hire);
   }
 
   function render(data, options) {
@@ -1295,6 +1325,7 @@
       title.className = "due-title";
       title.textContent = (hire.display_name || "Hire") + " — " + (hire.position || "") + " — " + (hire.employment_type || "");
       card.appendChild(title);
+      exclusionStatus(card, hire);
       card.appendChild(stageBar(hire.stage, hire.owner, "Billing"));
       const meta = document.createElement("p");
       meta.className = "meta";
@@ -1309,6 +1340,7 @@
         const activate = document.createElement("button");
         activate.type = "button";
         activate.className = "primary";
+        activate.dataset.action = "activate";
         activate.textContent = "Activate";
         activate.disabled = !!needsClearance || beforeStart || waitingQb;
         if (beforeStart) {
@@ -1713,6 +1745,7 @@
       title.className = "due-title";
       title.textContent = (hire.display_name || "Hire") + " — " + (hire.status || "");
       card.appendChild(title);
+      exclusionStatus(card, hire);
       card.appendChild(stageBar(hire.stage, hire.owner, data.billing_label));
       const linkedOffer = (data.offers || []).filter(function (offer) { return offer.id === hire.offer_id; })[0];
       card.appendChild(stepper(wizardSteps(linkedOffer || { id: hire.offer_id, status: "accepted" }, hire)));
@@ -1762,7 +1795,7 @@
           badge.textContent = item.badge;
           row.appendChild(badge);
         }
-        if (item.kind !== "auto" && item.template_key !== "activate") {
+        if (item.kind !== "auto" && item.template_key !== "activate" && item.template_key !== "exclusion_screening") {
           const note = document.createElement("input");
           note.type = "text";
           note.placeholder = "Note";
@@ -1816,6 +1849,7 @@
         const activate = document.createElement("button");
         activate.type = "button";
         activate.className = "primary";
+        activate.dataset.action = "activate";
         activate.textContent = "Activate";
         activate.disabled = !!needsClearance || beforeStart || waitingQb;
         if (beforeStart) {

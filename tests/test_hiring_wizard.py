@@ -21,6 +21,33 @@ from app.platform.due import due_engine
 client = TestClient(app)
 
 
+def _clear_exclusion(hire_id: str) -> None:
+    from datetime import datetime, timezone
+
+    from app.compliance.store import compliance_store
+
+    for name in ("leie", "sam", "medicheck"):
+        compliance_store.append_screening(
+            "practice-a",
+            {
+                "person_id": f"hire:{hire_id}",
+                "display_name": "Sample",
+                "kind": "hire",
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "list_name": name,
+                "list_updated_on": "2026-11-10",
+                "search_terms": ["Sample"],
+                "result": "clear",
+                "detail": "",
+                "source_sha256": "abc",
+                "matches": [],
+                "purpose": "pre_hire",
+                "source_mode": "official",
+                "actor": "qa",
+            },
+        )
+
+
 @pytest.fixture(autouse=True)
 def _clear_due_todos():
     due_engine.reset()
@@ -612,6 +639,7 @@ def test_billing_sees_only_the_handoff_and_cannot_open_pay_or_i9(monkeypatch) ->
         json={"status": "done"},
     )
     assert blocked.status_code == 403
+    _clear_exclusion(hire_id)
     activated = client.post(
         f"/hiring/hires/{hire_id}/activate",
         headers=_bill(),

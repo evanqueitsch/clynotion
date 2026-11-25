@@ -407,6 +407,16 @@ class AccessStore:
         row["roles"][role_id]["permissions"] = cleaned
         self._audit_sensitive_grants(row, role_id, previous, cleaned, actor_email)
         self._save(payload)
+        from app.compliance.audit_chain import note_from_request
+
+        note_from_request(
+            practice_id,
+            action="permission_change",
+            object_type="role",
+            object_id=role_id,
+            actor=actor_email,
+            diff={"added": sorted(set(cleaned) - set(previous)), "removed": sorted(set(previous) - set(cleaned))},
+        )
         return {"id": role_id, "permissions": cleaned}
 
     def _audit_sensitive_grants(
@@ -479,6 +489,17 @@ class AccessStore:
         else:
             assignments.pop(cleaned, None)
         self._save(payload)
+        from app.compliance.audit_chain import note_from_request
+
+        note_from_request(
+            practice_id,
+            action="role_change",
+            object_type="assignment",
+            object_id=cleaned,
+            actor=actor_email,
+            before={"role": current},
+            after={"role": role_id},
+        )
 
     def account_permissions_for(self, practice_id: str, email: str) -> list[str]:
         """Permissions stored on one mailbox. Empty when the migration added none."""

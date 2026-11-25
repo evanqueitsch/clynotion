@@ -178,9 +178,11 @@ def test_catalog_onboarding_retired(client: TestClient) -> None:
         "time_entry",
         "credentialing",
         "hiring_onboarding",
+        "exclusion_checks",
+        "audit_log",
     ]
     assert all(tool["id"] != "onboarding_compliance" for unit in units for tool in unit["tools"])
 
 
 def test_health_version_014(client: TestClient) -> None:
-    assert client.get("/health").json()["version"] == "0.28.3"
+    assert client.get("/health").json()["version"] == "0.29.0"

@@ -31,7 +31,7 @@ ITEMS: tuple[dict[str, Any], ...] = (
     {"key": "license_verification", "stage": 2, "owner": "admin", "title": "PA license verification", "kind": "upload"},
     {"key": "liability_cert", "stage": 2, "owner": "candidate", "title": "Professional liability certificate", "kind": "upload"},
     {"key": "resume_degree", "stage": 2, "owner": "candidate", "title": "Resume and degree", "kind": "upload"},
-    {"key": "exclusion_screening", "stage": 2, "owner": "admin", "title": "Exclusion screening", "kind": "status"},
+    {"key": "exclusion_screening", "stage": 2, "owner": "admin", "title": "Exclusion check", "kind": "status"},
     {"key": "workspace_account", "stage": 2, "owner": "admin", "title": "Workspace account", "kind": "status"},
     {"key": "npi_caqh", "stage": 2, "owner": "admin", "title": "NPI and CAQH collected for credentialing", "kind": "status"},
     {"key": "i9_section2", "stage": 3, "owner": "admin", "title": "I-9 Section 2", "kind": "i9"},

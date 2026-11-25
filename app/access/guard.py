@@ -14,6 +14,7 @@ _PUBLIC_PREFIXES = (
     "/auth/",
     "/static/",
     "/internal/time/tick",
+    "/internal/compliance/tick",
 )
 
 
@@ -61,6 +62,8 @@ def required_permission(path: str) -> str | None:
         return "tool:eligibility"
     if path.startswith("/debug"):
         return MANAGE_ROLES
+    if path.startswith("/compliance"):
+        return MANAGE_ROLES
     if path.startswith("/catalog"):
         return None
     if path in ("/home", "/practice") or path.startswith("/attune"):
@@ -81,10 +84,33 @@ def _user_from_request(request: Request):
         return None
 
 
+def _compliance_allowed(request: Request, user) -> bool:
+    from app.access.permissions import HIRING_PAYROLL
+    from app.access.resolve import assigned_role_id, has_permission, is_owner
+
+    path = request.url.path
+    role = assigned_role_id(user) if user is not None else ""
+    admin = user is not None and (is_owner(user) or role == "admin")
+    if path.startswith("/compliance/audit") and request.method == "GET":
+        return admin or role == "practice_owner"
+    if path.startswith("/compliance/screening/hire/") and request.method == "GET":
+        return admin or has_permission(user, "tool:billing") or has_permission(user, HIRING_PAYROLL) or has_permission(user, "tool:hiring_onboarding")
+    return False
+
+
 async def access_middleware(request: Request, call_next):
     path = request.url.path
     if request.method == "OPTIONS" or path == "/" or any(path.startswith(prefix) for prefix in _PUBLIC_PREFIXES):
         return await call_next(request)
+    if path.startswith("/compliance/audit") and request.method == "GET" or (
+        path.startswith("/compliance/screening/hire/") and request.method == "GET"
+    ):
+        user = _user_from_request(request)
+        if user is None:
+            return JSONResponse({"detail": "Not authenticated"}, status_code=401)
+        if _compliance_allowed(request, user):
+            return await call_next(request)
+        return JSONResponse({"detail": "You do not have access to that."}, status_code=403)
     needed = required_permission(path)
     authenticated = path in ("/home", "/catalog", "/practice") or path.startswith("/attune")
     authenticated = authenticated or path.startswith("/due") or path.startswith("/denials")

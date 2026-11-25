@@ -46,6 +46,9 @@ ENV PYTHONUNBUFFERED=1 \
     ATTUNE_ONBOARDING_PERSISTENCE=file \
     ATTUNE_ONBOARDING_DATA_PATH=/data/onboarding.enc \
     ATTUNE_ONBOARDING_FILES_PATH=/data/onboarding_files \
+    ATTUNE_COMPLIANCE_PERSISTENCE=file \
+    ATTUNE_COMPLIANCE_DATA_PATH=/data/compliance.enc \
+    ATTUNE_COMPLIANCE_FILES_PATH=/data/compliance_files \
     FILE_STORE_BACKEND=local \
     TIME_MAIL_MODE=off
 WORKDIR /app

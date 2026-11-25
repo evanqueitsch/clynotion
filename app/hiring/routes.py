@@ -388,6 +388,16 @@ def download_offer(offer_id: str, kind: str, user: CurrentUser) -> Response:
         data, mime, name = hiring.offer_bytes(user.practice_id, offer_id, kind, _actor(user))
     except HiringError as exc:
         _fail(exc)
+    from app.compliance.audit_chain import note_from_request
+
+    note_from_request(
+        user.practice_id,
+        action="download",
+        object_type="offer_file",
+        object_id=offer_id,
+        actor=_actor(user),
+        diff={"kind": kind},
+    )
     return Response(content=data, media_type=mime, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 
@@ -440,6 +450,16 @@ def download_document(document_id: str, user: CurrentUser) -> Response:
         )
     except HiringError as exc:
         _fail(exc)
+    from app.compliance.audit_chain import note_from_request
+
+    note_from_request(
+        user.practice_id,
+        action="download",
+        object_type="personnel_document",
+        object_id=document_id,
+        actor=_actor(user),
+        diff={"kind": "file"},
+    )
     return Response(content=data, media_type=mime, headers={"Content-Disposition": f'attachment; filename="{name}"'})
 
 

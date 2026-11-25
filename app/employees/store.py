@@ -263,6 +263,16 @@ class EmployeesStore:
                 "field": field,
             }
         )
+        from app.compliance.audit_chain import note_from_request
+
+        note_from_request(
+            "",
+            action=action or "update",
+            object_type="employee",
+            object_id=record_id,
+            actor=actor,
+            diff={"field": field} if field else {},
+        )
 
     def _change(
         self,
@@ -375,7 +385,16 @@ class EmployeesStore:
         current["email"] = key
         return current
 
-    def _history(self, record: dict[str, Any], actor: str, action: str, field: str) -> None:
+    def _history(
+        self,
+        record: dict[str, Any],
+        actor: str,
+        action: str,
+        field: str,
+        before: str = "",
+        after: str = "",
+        practice_id: str = "",
+    ) -> None:
         record.setdefault("history", []).append(
             {
                 "at": _now(),
@@ -383,6 +402,18 @@ class EmployeesStore:
                 "action": action,
                 "field": field,
             }
+        )
+        from app.compliance.audit_chain import note_from_request
+        from app.compliance.masking import mask_change
+
+        diff = mask_change(field, before, after) if (before or after) else {"field": field}
+        note_from_request(
+            practice_id,
+            action=action or "update",
+            object_type="employee",
+            object_id=str(record.get("email") or ""),
+            actor=actor,
+            diff=diff,
         )
 
     def _summary_for_contact(self, old: dict[str, str], new: dict[str, str]) -> str:
@@ -418,7 +449,15 @@ class EmployeesStore:
             action = "cleared" if summary.startswith("Cleared") else "updated"
             for field in CONTACT_FIELDS:
                 if old[field] != new[field]:
-                    self._history(record, actor, "cleared" if not new[field] else action, field)
+                    self._history(
+                        record,
+                        actor,
+                        "cleared" if not new[field] else action,
+                        field,
+                        before=old[field],
+                        after=new[field],
+                        practice_id=practice_id,
+                    )
             self._change(row, actor=actor, record_email=email, summary=summary)
         self._save(payload)
         return self._own_record(practice_id, email, actor)

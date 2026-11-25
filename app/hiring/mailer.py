@@ -543,6 +543,24 @@ def candidate_packet_body(welcome: str) -> str:
     return f"{welcome.rstrip()}\n\n{FOOTER}\n"
 
 
+def _note_email(practice_id: str, address: str, template: str) -> None:
+    """Recipient domain and template only. Never the local part or the body."""
+    domain = ""
+    if "@" in (address or ""):
+        domain = address.rsplit("@", 1)[-1].strip().lower()[:120]
+    if not practice_id or not domain:
+        return
+    from app.compliance.audit_chain import note_from_request
+
+    note_from_request(
+        practice_id,
+        action="email",
+        object_type="outbound_email",
+        object_id=template or "hiring",
+        diff={"domain": domain, "template": template or "hiring"},
+    )
+
+
 def deliver(
     practice_id: str,
     to: str,
@@ -552,6 +570,7 @@ def deliver(
     *,
     html: str = "",
     reply_to: str = "",
+    template: str = "hiring",
 ) -> str:
     """Return sent, failed, or suppressed. Does not log the address or body."""
     message = OutboundMail(
@@ -568,15 +587,20 @@ def deliver(
         if _capture is None:
             # Tests that forgot to install a capture still must not touch the network.
             box.send(message)
+            _note_email(practice_id, to, template)
             return "sent"
         result = box.send(message)
-        return "sent" if result.status == "sent" else "failed"
+        status = "sent" if result.status == "sent" else "failed"
+        if status == "sent":
+            _note_email(practice_id, to, template)
+        return status
     from app.hr.gmail_oauth import deliver_self_test_message
 
     result = deliver_self_test_message(practice_id, message)
-    if result.status == "sent":
-        return "sent"
-    return "failed"
+    status = "sent" if result.status == "sent" else "failed"
+    if status == "sent":
+        _note_email(practice_id, to, template)
+    return status
 
 
 def public_queue_row(kind: str, offer_id: str, at: str, status: str) -> dict[str, Any]:

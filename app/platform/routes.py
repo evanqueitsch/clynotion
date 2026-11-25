@@ -254,7 +254,7 @@ def _hiring_rollout_on(user: CurrentUser) -> bool:
 
 def _visible_units(user: CurrentUser) -> list[dict]:
     """Admin sees every catalog module. Everyone else sees granted live modules."""
-    from app.access.resolve import permissions_for, sees_every_module
+    from app.access.resolve import assigned_role_id, permissions_for, sees_every_module
 
     full = sees_every_module(user)
     perms = permissions_for(user)
@@ -299,6 +299,12 @@ def _visible_units(user: CurrentUser) -> list[dict]:
                 granted = True
             if tool.get("id") == "hiring_onboarding" and "capability:hiring_payroll" in perms:
                 granted = True
+            if tool.get("id") == "audit_log" and assigned_role_id(user) == "practice_owner":
+                granted = True
+                tool["status"] = "live"
+                tool["href"] = "/#audit-log"
+                tool["coming_soon"] = False
+                tool["open_label"] = "Open audit log"
             if granted:
                 kept.append(tool)
         if kept:

@@ -451,6 +451,7 @@
       line.textContent = event.action + " · " + event.what + " · " + JSON.stringify(event.counts || {});
       audit.appendChild(line);
     });
+    if (window.clyCompliance && window.clyCompliance.renderSettings) window.clyCompliance.renderSettings();
   }
 
   async function saveRetention(days, months, confirmation) {

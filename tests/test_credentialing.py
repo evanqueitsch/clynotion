@@ -94,6 +94,8 @@ def test_catalog_order_retired_tool_and_billing_placeholder(client: TestClient) 
         "time_entry",
         "credentialing",
         "hiring_onboarding",
+        "exclusion_checks",
+        "audit_log",
     ]
     assert hr["tools"][0]["status"] == "live"
     assert hr["tools"][0]["href"] == "/#employee"

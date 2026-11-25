@@ -20,6 +20,33 @@ client = TestClient(app)
 EASTERN = ZoneInfo("America/New_York")
 
 
+def _clear_exclusion(hire_id: str) -> None:
+    from datetime import timezone
+
+    from app.compliance.store import compliance_store
+
+    for name in ("leie", "sam", "medicheck"):
+        compliance_store.append_screening(
+            "practice-a",
+            {
+                "person_id": f"hire:{hire_id}",
+                "display_name": "Sample",
+                "kind": "hire",
+                "checked_at": datetime.now(timezone.utc).isoformat(),
+                "list_name": name,
+                "list_updated_on": "2026-11-10",
+                "search_terms": ["Sample"],
+                "result": "clear",
+                "detail": "",
+                "source_sha256": "abc",
+                "matches": [],
+                "purpose": "pre_hire",
+                "source_mode": "official",
+                "actor": "qa",
+            },
+        )
+
+
 def _alice() -> dict[str, str]:
     user = User("user-alice", "alice", "practice-a", "alice@example.com")
     return {"Authorization": f"Bearer {issue_token(user)}"}
@@ -349,6 +376,7 @@ def test_activate_adds_credentialing_cells_without_overwriting() -> None:
         assert too_soon.status_code == 409
     invited = client.post(f"/hiring/hires/{hire_id}/qb-invite", headers=_alice(), json={"sent": True})
     assert invited.status_code == 200, invited.text
+    _clear_exclusion(hire_id)
     activated = client.post(
         f"/hiring/hires/{hire_id}/activate",
         headers=_alice(),
@@ -380,6 +408,7 @@ def test_activate_adds_credentialing_cells_without_overwriting() -> None:
     )
     second_hire_id = second_hire.json()["hire"]["id"]
     assert client.post(f"/hiring/hires/{second_hire_id}/qb-invite", headers=_alice(), json={"sent": True}).status_code == 200
+    _clear_exclusion(second_hire_id)
     again = client.post(
         f"/hiring/hires/{second_hire_id}/activate",
         headers=_alice(),
@@ -533,6 +562,7 @@ def test_delete_hire_requires_the_exact_name_and_only_removes_that_hire() -> Non
             json={"status": "done"},
         )
         assert client.post(f"/hiring/hires/{hire_id}/qb-invite", headers=_alice(), json={"sent": True}).status_code == 200
+        _clear_exclusion(hire_id)
         activated = client.post(
             f"/hiring/hires/{hire_id}/activate",
             headers=_alice(),
