@@ -10,6 +10,7 @@ import json
 import os
 import threading
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Optional
 
@@ -206,11 +207,13 @@ class ComplianceStore:
                     return
                 status = item.get("result")
                 item["list_records"] = [dict(record) for record in records]
+                item.pop("list_detail_note", None)
+                item.pop("sam_detail_status", None)
                 item["result"] = status
                 self._save(payload)
                 return
 
-    def set_list_note(self, practice_id: str, result_id: str, note: str) -> None:
+    def set_list_note(self, practice_id: str, result_id: str, note: str, *, status_code: str = "") -> None:
         """Store a safe re-read note. The result status is left as stored."""
         text = " ".join(str(note or "").split())[:180]
         if not text:
@@ -223,9 +226,12 @@ class ComplianceStore:
             for item in row.get("screenings") or []:
                 if not isinstance(item, dict) or item.get("id") != result_id:
                     continue
-                status = item.get("result")
+                kept = item.get("result")
                 item["list_detail_note"] = text
-                item["result"] = status
+                if status_code:
+                    item["sam_detail_status"] = status_code
+                item["sam_detail_checked_at"] = datetime.now(timezone.utc).isoformat()
+                item["result"] = kept
                 self._save(payload)
                 return
 

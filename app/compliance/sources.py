@@ -154,8 +154,17 @@ class Fetcher(Protocol):
 
 
 class HttpxFetcher:
+    def __init__(self, timeout: float = 60) -> None:
+        self.timeout = timeout
+
     def get(self, url: str, params: Optional[dict[str, str]] = None) -> tuple[int, str, bytes]:
-        response = httpx.get(url, params=params, timeout=60, follow_redirects=True, headers={"User-Agent": "Clynotion"})
+        response = httpx.get(
+            url,
+            params=params,
+            timeout=self.timeout,
+            follow_redirects=True,
+            headers={"User-Agent": "Clynotion"},
+        )
         return response.status_code, response.text, response.content
 
 
@@ -412,6 +421,11 @@ def load_sam_person(fetcher: Fetcher, *, first: str, last: str, npi: str, today:
     )
 
 
+import time
+
+SAM_BUSY = "SAM.gov was busy, so details couldn't be loaded. Try again later."
+
+
 def load_sam_detail(fetcher: Fetcher, *, first: str, last: str, today: date) -> ListFile:
     """Read exclusion records for one name. The log has a reason code, never the key or a name."""
     key = (os.environ.get(SAM_KEY_ENV) or "").strip()
@@ -429,14 +443,35 @@ def load_sam_detail(fetcher: Fetcher, *, first: str, last: str, today: date) -> 
     digest = ""
     reported = 0
     for extra in queries:
-        params = {"api_key": key, **{key_name: value for key_name, value in extra.items() if value}}
-        try:
-            code, text, raw = fetcher.get(SAM_URL, params)
-        except Exception:
-            last_reason = "request_failed"
-            logger.warning("sam_detail_reread reason=request_failed")
+        attempt = 0
+        code = 0
+        while True:
+            params = {"api_key": key, **{key_name: value for key_name, value in extra.items() if value}}
+            try:
+                code, text, raw = fetcher.get(SAM_URL, params)
+            except Exception:
+                last_reason = "request_failed"
+                logger.warning("sam_detail_reread reason=request_failed")
+                code = 0
+                break
+            last_status = code
+            if code == 429 and attempt < 2:
+                time.sleep(0.4 * (2**attempt))
+                attempt += 1
+                continue
+            if code == 429:
+                logger.warning("sam_detail_reread reason=http_429 status=429")
+                return ListFile(
+                    name="sam",
+                    updated_on=today.isoformat(),
+                    file_sha256=digest,
+                    rows=[],
+                    ready=False,
+                    detail=SAM_BUSY,
+                )
+            break
+        if last_reason == "request_failed" and last_status == 0 and not chosen:
             continue
-        last_status = code
         if code != 200:
             last_reason = f"http_{code}"
             continue

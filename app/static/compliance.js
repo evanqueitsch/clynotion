@@ -37,15 +37,21 @@
         ui().api("/compliance/roster"),
         ui().api("/compliance/screening"),
       ]);
-      let reviews = { people: [] };
-      let reviewError = "";
-      try {
-        reviews = await ui().api("/compliance/reviews/open");
-      } catch (error) {
-        reviewError = "Possible-match review could not be loaded. The rest of this page is still available.";
-      }
-      await renderScreening(root, settings, roster, history, reviews, reviewError);
+      await renderScreening(root, settings, roster, history, { people: [] }, "", true);
       ui().setStatus(status, "");
+      const controller = new AbortController();
+      const timer = setTimeout(function () { controller.abort(); }, 8000);
+      try {
+        const reviews = await ui().api("/compliance/reviews/open", { signal: controller.signal });
+        clearTimeout(timer);
+        await renderScreening(root, settings, roster, history, reviews, "", false);
+      } catch (error) {
+        clearTimeout(timer);
+        const reviewError = controller.signal.aborted
+          ? "The review is taking too long. The rest of this page is ready."
+          : "Possible-match review could not be loaded. The rest of this page is still available.";
+        await renderScreening(root, settings, roster, history, { people: [] }, reviewError, false);
+      }
     } catch (error) {
       ui().setStatus(status, error.message, "error");
     }
@@ -92,7 +98,30 @@
           same.textContent = list.alignment;
           block.appendChild(same);
         }
-        if (list.detail_note) {
+        if (list.sam_busy || (list.list_name === "sam" && list.detail_note)) {
+          const busy = document.createElement("p");
+          busy.textContent = list.sam_busy
+            ? "SAM.gov was busy, so details couldn't be loaded. Try again later."
+            : (list.detail_note || "");
+          block.appendChild(busy);
+          block.appendChild(button("Retry", "ghost", async function () {
+            try {
+              const refreshed = await ui().api("/compliance/reviews/sam-retry", {
+                method: "POST",
+                json: { review_id: person.review_id },
+              });
+              const root = $("screening-root");
+              const current = root && root._screen;
+              if (!current) {
+                await openScreening();
+                return;
+              }
+              await renderScreening(root, current.settings, current.roster, current.history, refreshed, "", false);
+            } catch (error) {
+              ui().setStatus($("screening-status"), error.message, "error");
+            }
+          }));
+        } else if (list.detail_note) {
           const note = document.createElement("p");
           note.className = "meta";
           note.textContent = list.detail_note;
@@ -157,7 +186,7 @@
       reason.placeholder = "Short reason, for example NPI differs";
       card.appendChild(reason);
       const actions = person.consequences || {};
-      const clearClass = (person.lists || []).every(function (list) { return list.likelihood === "Likely different person"; }) ? "primary" : "ghost";
+      const clearClass = person.likelihood === "Likely different person" ? "primary" : "ghost";
       card.appendChild(button("Not the same person — clear this match", clearClass, function () {
         decide(person.review_id, "not_the_same_person", reason.value);
       }));
@@ -197,7 +226,8 @@
     }
   }
 
-  async function renderScreening(root, settings, roster, history, reviews, reviewError) {
+  async function renderScreening(root, settings, roster, history, reviews, reviewError, reviewLoading) {
+    root._screen = { settings: settings, roster: roster, history: history };
     const intro = document.createElement("p");
     intro.className = "meta";
     const counts = roster.counts || {};
@@ -212,6 +242,11 @@
       box.className = "warn";
       box.textContent = reviewError;
       root.appendChild(box);
+    } else if (reviewLoading) {
+      const loading = document.createElement("p");
+      loading.className = "meta";
+      loading.textContent = "Loading possible-match review…";
+      root.appendChild(loading);
     }
     renderReviews(root, reviews);
 

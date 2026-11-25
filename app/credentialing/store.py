@@ -508,7 +508,6 @@ class CredentialingStore:
             "license_type": str(body.get("license_type") or "").strip(),
             "hire_date": _date_or_blank(str(body.get("hire_date") or "")),
             "device": str(body.get("device") or "").strip(),
-            "license_state": str(body.get("license_state") or "").strip(),
             "license_expires_on": _date_or_blank(str(body.get("license_expires_on") or "")),
             "caqh_attested_on": _date_or_blank(str(body.get("caqh_attested_on") or "")),
             "supervisor_id": str(body.get("supervisor_id") or "").strip(),
@@ -516,6 +515,8 @@ class CredentialingStore:
             "service_address": str(body.get("service_address") or "").strip(),
             "active": bool(body.get("active", True)),
         }
+        if "license_state" in body:
+            plain["license_state"] = str(body.get("license_state") or "").strip()
         for key, value in plain.items():
             if current.get(key) != value:
                 changes[key] = {"old": current.get(key) or "", "new": value}
