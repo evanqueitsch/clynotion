@@ -473,7 +473,17 @@ class HiringEngine:
             if not item.get("id"):
                 item["id"] = next(key for key, value in library.items() if value is item)
 
-    def _history(self, row: dict[str, Any], entity: str, entity_id: str, action: str, actor: str, summary: str, ip: str = "") -> None:
+    def _history(
+        self,
+        row: dict[str, Any],
+        entity: str,
+        entity_id: str,
+        action: str,
+        actor: str,
+        summary: str,
+        ip: str = "",
+        diff: Optional[dict[str, Any]] = None,
+    ) -> None:
         row["history"].append(
             {
                 "id": _new_id("hist-"),
@@ -496,7 +506,7 @@ class HiringEngine:
             object_id=entity_id,
             actor=actor,
             ip=ip,
-            diff={"summary": scrub_text(summary)},
+            diff=diff or {"summary": scrub_text(summary)},
         )
 
     def _expire_row(self, row: dict[str, Any]) -> int:
@@ -935,6 +945,8 @@ class HiringEngine:
                 new_id=_new_id,
             )
             for item in items:
+                if item.get("template_key") == "exclusion_screening":
+                    item["due_date"] = start.isoformat()
                 row["checklist_items"][item["id"]] = item
             hire = {
                 "id": hire_id,
@@ -2995,7 +3007,25 @@ class HiringEngine:
             due_engine.complete(practice_id=practice_id, source="hiring-payroll", source_ref=hire_id)
             due_engine.complete(practice_id=practice_id, source="hiring-payroll", source_ref=hire_id + ":packet")
             due_engine.complete(practice_id=practice_id, source="hiring-qb", source_ref=hire_id + ":qb")
-            self._history(row, "hire", hire_id, "deleted", actor, "Hire deleted")
+            from app.compliance.masking import mask_text
+            from app.compliance.screening import close_open_reviews
+
+            close_open_reviews(practice_id, f"hire:{hire_id}")
+            row["_runtime_practice_id"] = practice_id
+            email = str(candidate.get("personal_email") or "")
+            self._history(
+                row,
+                "hire",
+                hire_id,
+                "deleted",
+                actor,
+                "Hire deleted",
+                diff={
+                    "summary": "Hire deleted",
+                    "test_record": "yes" if hire.get("test_record") else "no",
+                    "email": mask_text(email),
+                },
+            )
             self._save(payload)
 
     def _trash_owned_empty_folder(self, row: dict[str, Any], offer: dict[str, Any], actor: str) -> None:

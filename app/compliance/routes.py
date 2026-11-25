@@ -13,7 +13,7 @@ from typing import Any, Optional
 
 from fastapi import APIRouter, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from app.access.resolve import assigned_role_id, has_permission, is_owner
 from app.auth import CurrentUser
@@ -27,13 +27,12 @@ from app.compliance.screening import (
     gate,
     public_screening,
     record_manual_medicheck,
+    record_test_match,
     resolve_match,
     roster,
     run_screening,
     sam_status,
-    screen_fixture,
 )
-from app.compliance.sources import ListedPerson, parse_leie
 from app.compliance.store import compliance_store
 
 router = APIRouter(tags=["compliance"])
@@ -53,7 +52,7 @@ class ScreenBody(BaseModel):
 class FixtureBody(BaseModel):
     person_id: str
     list_name: str = "leie"
-    csv_text: str = Field(min_length=1)
+    csv_text: str = ""
 
 
 class ResolveBody(BaseModel):
@@ -184,22 +183,11 @@ def post_run(body: ScreenBody, user: CurrentUser) -> dict[str, Any]:
 
 @router.post("/compliance/screening/fixture")
 def post_fixture(body: FixtureBody, user: CurrentUser) -> dict[str, Any]:
-    """Test list for one person. Does not clear a hire."""
+    """Record a synthetic TEST possible match. The pasted text is ignored."""
     _admin(user)
-    listing = parse_leie(body.csv_text, updated_on="fixture", raw=body.csv_text.encode("utf-8"))
-    listing.rows = [
-        ListedPerson(last=row.last, first=row.first, middle=row.middle, npi=row.npi, kind=row.kind or "fixture", active=True)
-        for row in listing.rows
-    ]
-    return _call(
-        lambda: screen_fixture(
-            user.practice_id,
-            _actor(user),
-            person_id=body.person_id,
-            list_name=body.list_name,
-            listing=listing,
-        )
-    )
+    _ = body.csv_text
+    _ = body.list_name
+    return _call(lambda: record_test_match(user.practice_id, _actor(user), person_id=body.person_id))
 
 
 @router.get("/compliance/screening")

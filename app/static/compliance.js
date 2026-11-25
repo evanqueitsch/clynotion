@@ -1,5 +1,6 @@
 (function () {
   const $ = (id) => document.getElementById(id);
+  let pendingTestId = "";
 
   function ui() {
     return window.clynotion;
@@ -119,7 +120,7 @@
     const fixture = document.createElement("div");
     const fixtureNote = document.createElement("p");
     fixtureNote.className = "meta";
-    fixtureNote.textContent = "Test records only. A match here does not clear a real hire, and it cannot be recorded against an employee.";
+    fixtureNote.textContent = "Test records only. Record test match always stores a labeled TEST possible match. No name list is required.";
     const testPicker = document.createElement("select");
     const testBlank = document.createElement("option");
     testBlank.value = "";
@@ -131,9 +132,6 @@
       option.textContent = item.name;
       testPicker.appendChild(option);
     });
-    const fixtureCsv = document.createElement("textarea");
-    fixtureCsv.rows = 3;
-    fixtureCsv.placeholder = "LASTNAME,FIRSTNAME,NPI";
     const recordMatch = button("Record test match", "ghost", async function () {
       if (!testPicker.value) {
         ui().setStatus($("screening-status"), "Choose a test record. Real employees cannot be used here.", "error");
@@ -142,8 +140,9 @@
       try {
         await ui().api("/compliance/screening/fixture", {
           method: "POST",
-          json: { person_id: testPicker.value, list_name: "leie", csv_text: fixtureCsv.value },
+          json: { person_id: testPicker.value, list_name: "leie" },
         });
+        pendingTestId = testPicker.value;
         await openScreening();
       } catch (error) {
         ui().setStatus($("screening-status"), error.message, "error");
@@ -155,13 +154,21 @@
       try {
         const created = await ui().api("/compliance/test-hires", { method: "POST", json: {} });
         ui().setStatus($("screening-status"), "Test record created. No email was sent.", "ok");
-        if (created && created.id) window.location.hash = "#hiring?hire=" + encodeURIComponent(created.id);
-        else await openScreening();
+        if (created && created.id) pendingTestId = "hire:" + created.id;
+        await openScreening();
       } catch (error) {
         ui().setStatus($("screening-status"), error.message, "error");
       }
     }));
     fixture.appendChild(testPicker);
+    if (pendingTestId) {
+      testPicker.value = pendingTestId;
+      pendingTestId = "";
+    }
+    const hiringLink = document.createElement("a");
+    hiringLink.href = "#hiring";
+    hiringLink.textContent = "Open Hiring";
+    fixture.appendChild(hiringLink);
     fixture.appendChild(button("Screen this test record", "primary", async function () {
       if (!testPicker.value) {
         ui().setStatus($("screening-status"), "Choose a test record.", "error");
@@ -176,7 +183,6 @@
         ui().setStatus($("screening-status"), error.message, "error");
       }
     }));
-    fixture.appendChild(fixtureCsv);
     fixture.appendChild(recordMatch);
     root.appendChild(fixture);
 
