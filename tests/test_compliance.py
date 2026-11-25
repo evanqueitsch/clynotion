@@ -244,7 +244,7 @@ def test_confirmed_exclusion_banner_and_manual_medicheck() -> None:
 
 def test_schedule_stays_off_and_settings_do_not_run_a_job() -> None:
     health = client.get("/health").json()
-    assert health["version"] == "0.29.1"
+    assert health["version"] == "0.29.2"
     assert health["exclusion_schedule"] == "off"
     assert health["audit_drive"] == "not_configured"
     settings = client.get("/compliance/settings", headers=_alice()).json()
@@ -389,9 +389,13 @@ def test_test_hire_can_be_screened_without_email_and_activate_stays_blocked() ->
 
 
 def test_login_role_verify_actor_and_audit_csv_includes_the_export() -> None:
-    client.post("/auth/token", json={"username": "alice", "password": "alice-pass"})
-    login = next(item for item in compliance_store.audit_entries("practice-a") if item["action"] == "login")
+    client.post("/compliance/audit/verify", headers=_alice())
+    fresh = client.post("/auth/token", json={"username": "alice", "password": "alice-pass"})
+    assert fresh.status_code == 200, fresh.text
+    login = next(item for item in reversed(compliance_store.audit_entries("practice-a")) if item["action"] == "login")
+    assert login["actor"] == "alice@example.com"
     assert login["actor_role"] == "admin"
+    assert login["seq"] > 1
     verified = client.post("/compliance/audit/verify", headers=_alice())
     assert verified.status_code == 200, verified.text
     verify_row = next(item for item in reversed(compliance_store.audit_entries("practice-a")) if item["action"] == "verify_log")
@@ -403,6 +407,58 @@ def test_login_role_verify_actor_and_audit_csv_includes_the_export() -> None:
     settings = client.get("/compliance/settings", headers=_alice()).json()
     sentence = "Off-box audit copy: " + settings["drive_status"] + ". " + settings["drive_detail"]
     assert sentence.count("Not configured") == 1
+
+
+def test_record_test_match_opens_a_home_item_and_delete_clears_it() -> None:
+    created = client.post("/compliance/test-hires", headers=_alice())
+    assert created.status_code == 200, created.text
+    hire = created.json()
+    hire_id = hire["id"]
+    exclusion = next(item for item in hire["items"] if item["template_key"] == "exclusion_screening")
+    assert exclusion["due_date"] == hire["start_date"]
+    assert exclusion["due_date"] >= hire["created_on"]
+    matched = client.post(
+        "/compliance/screening/fixture",
+        headers=_alice(),
+        json={"person_id": f"hire:{hire_id}", "csv_text": "not,a,real,list"},
+    )
+    assert matched.status_code == 200, matched.text
+    assert matched.json()["result"] == "possible_match"
+    assert matched.json()["detail"] == "TEST possible match"
+    assert matched.json()["matches"][0]["kind"] == "TEST"
+    home = client.get("/home", headers=_alice()).json()
+    open_items = [item for band in ("overdue", "this_week") for item in home["bands"][band]]
+    assert any(item["source_ref"] == matched.json()["id"] for item in open_items)
+    blocked = client.post(
+        f"/hiring/hires/{hire_id}/activate",
+        headers=_alice(),
+        json={"work_email": "test.record@example.test"},
+    )
+    assert blocked.status_code == 409
+    assert "TEST possible match" in blocked.json()["detail"]
+    email = hire["personal_email"]
+    removed = client.post(
+        f"/hiring/hires/{hire_id}/delete",
+        headers=_alice(),
+        json={"confirm": hire["display_name"]},
+    )
+    assert removed.status_code == 200, removed.text
+    after = client.get("/home", headers=_alice()).json()
+    after_items = [item for band in ("overdue", "this_week") for item in after["bands"][band]]
+    assert all(item["source_ref"] != matched.json()["id"] for item in after_items)
+    kept = client.get("/compliance/screening?include_test=1", headers=_alice()).json()["results"]
+    assert any(item["person_id"] == f"hire:{hire_id}" and item["result"] == "possible_match" for item in kept)
+    deleted = [
+        item
+        for item in compliance_store.audit_entries("practice-a")
+        if item["action"] == "deleted" and item["object_id"] == hire_id
+    ]
+    assert deleted
+    assert email not in str(deleted[-1]["diff"])
+    assert "••••" in str(deleted[-1]["diff"])
+    script = open("app/static/denials.js", encoding="utf-8").read()
+    assert 'window.location.hash = "#settings"' in script
+    assert "openSettings();" in script
 
 
 def test_exports_are_logged_and_practice_owner_can_read() -> None:

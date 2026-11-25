@@ -479,5 +479,9 @@
   const settingsHome = $("btn-settings-home");
   if (settingsHome) settingsHome.addEventListener("click", () => { window.location.hash = ""; });
   const settingsButton = $("btn-top-settings");
-  if (settingsButton) settingsButton.addEventListener("click", () => { window.location.hash = "#settings"; });
+  if (settingsButton) settingsButton.addEventListener("click", () => {
+    const same = (window.location.hash || "") === "#settings";
+    if (!same) window.location.hash = "#settings";
+    openSettings();
+  });
 })();

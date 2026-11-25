@@ -414,28 +414,32 @@ def _select(practice_id: str, person_ids: list[str]) -> list[dict[str, str]]:
     return selected
 
 
-def screen_fixture(
-    practice_id: str,
-    actor: str,
-    *,
-    person_id: str,
-    list_name: str,
-    listing: ListFile,
-) -> dict[str, Any]:
-    """A test list for one person. The result cannot clear a hire."""
-    if list_name not in LISTS:
-        raise ScreeningError(400, "Unknown list.")
+def record_test_match(practice_id: str, actor: str, *, person_id: str) -> dict[str, Any]:
+    """Always record a labeled TEST LEIE possible match. Name text is not parsed."""
     if not is_test_person(practice_id, person_id):
         raise ScreeningError(403, "A test match can only be recorded for a test record.")
-    people = _select(practice_id, [person_id])
-    person = people[0]
-    first, last = _split_name(person["name"])
-    listing.name = list_name
-    listing.ready = True
-    matches = match_rows(first, last, person.get("npi") or "", listing.rows)
-    row = _result_row(person, listing, matches, purpose="fixture", actor=actor, source_mode="fixture")
+    person = _select(practice_id, [person_id])[0]
+    listing = ListFile(name="leie", updated_on="test", file_sha256="test-fixture", rows=[], ready=True)
+    synthetic = ListedPerson(last="TEST", first="RECORD", kind="TEST", state="TEST", active=True)
+    row = _result_row(person, listing, [synthetic], purpose="fixture", actor=actor, source_mode="fixture")
+    row["detail"] = "TEST possible match"
+    row["list_name"] = "leie"
     stored = _store_result(practice_id, row)
     return public_screening(stored)
+
+
+def close_open_reviews(practice_id: str, person_id: str) -> None:
+    """Close Home items for one person. Screening rows stay."""
+    from app.platform.due import due_engine
+
+    for item in compliance_store.screenings(practice_id):
+        if item.get("person_id") != person_id:
+            continue
+        due_engine.complete(
+            practice_id=practice_id,
+            source="exclusion-review",
+            source_ref=str(item.get("id") or ""),
+        )
 
 
 def _latest(rows: list[dict[str, Any]], list_name: str) -> Optional[dict[str, Any]]:
@@ -507,6 +511,21 @@ def gate(practice_id: str, person_id: str) -> dict[str, Any]:
         }
     if not rows and not confirmed:
         allowed = False
+    for item in compliance_store.screenings(practice_id):
+        if item.get("person_id") != person_id or item.get("source_mode") != "fixture":
+            continue
+        if item.get("result") != "possible_match":
+            continue
+        decision = _resolution_for(str(item.get("id") or ""), resolutions)
+        if decision and decision.get("decision") == "not_the_same_person":
+            continue
+        if decision and decision.get("decision") == "confirmed_exclusion":
+            confirmed = True
+            allowed = False
+            messages.append("Confirmed exclusion.")
+            continue
+        allowed = False
+        messages.append("A TEST possible match is still open.")
     return {
         "person_id": person_id,
         "allowed": allowed and not confirmed,
