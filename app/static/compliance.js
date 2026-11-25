@@ -54,7 +54,7 @@
     people.forEach(function (person) {
       const card = document.createElement("section");
       card.className = "review-card";
-      card.id = "review-" + String(person.person_id || "").replace(/[^A-Za-z0-9_-]/g, "-");
+      card.id = "review-" + String(person.review_id || "");
       const header = document.createElement("h3");
       header.textContent = person.header || "";
       card.appendChild(header);
@@ -65,8 +65,16 @@
         title.textContent = list.list_label || list.list_name || "List";
         block.appendChild(title);
         const why = document.createElement("p");
-        why.textContent = "Why this was flagged: " + (list.why || "") + " " + (list.likelihood || "");
+        why.textContent = "Why this was flagged: " + (list.why || "");
         block.appendChild(why);
+        const likelihood = document.createElement("p");
+        likelihood.textContent = (list.likelihood || "") + (list.likelihood_reason ? " " + list.likelihood_reason : "");
+        block.appendChild(likelihood);
+        if (list.next_step) {
+          const step = document.createElement("p");
+          step.textContent = list.next_step;
+          block.appendChild(step);
+        }
         if (list.detail_note) {
           const note = document.createElement("p");
           note.className = "meta";
@@ -82,7 +90,9 @@
           head.appendChild(cell);
         });
         table.appendChild(head);
-        (list.rows || []).forEach(function (item) {
+        const extra = document.createElement("tbody");
+        extra.hidden = true;
+        function addRow(item, target) {
           const tr = document.createElement("tr");
           const mark = item.mark || "Not available";
           tr.className = mark === "Match" ? "cmp-match" : (mark === "Different" ? "cmp-different" : "cmp-missing");
@@ -91,9 +101,24 @@
             cell.textContent = value || "";
             tr.appendChild(cell);
           });
-          table.appendChild(tr);
+          target.appendChild(tr);
+        }
+        (list.rows || []).forEach(function (item) {
+          const blank = item.both_blank && item.list_value === "Not available" && item.staff_value === "Not available";
+          addRow(item, blank ? extra : table);
         });
         block.appendChild(table);
+        if (extra.childElementCount) {
+          const more = document.createElement("details");
+          const summary = document.createElement("summary");
+          summary.textContent = "Show all fields";
+          more.appendChild(summary);
+          const rest = document.createElement("table");
+          rest.className = "cmp";
+          rest.appendChild(extra);
+          more.appendChild(rest);
+          block.appendChild(more);
+        }
         (list.links || []).forEach(function (link) {
           const anchor = document.createElement("a");
           anchor.href = link.url;
@@ -103,46 +128,50 @@
           block.appendChild(anchor);
           block.appendChild(document.createTextNode(" "));
         });
-        const ssn = document.createElement("p");
-        ssn.className = "meta";
-        ssn.textContent = list.ssn_note || "";
-        block.appendChild(ssn);
-        const reason = document.createElement("input");
-        reason.placeholder = "Short reason, for example NPI differs";
-        block.appendChild(reason);
-        const actions = list.consequences || {};
-        block.appendChild(button("Not the same person — clear this match", "ghost", function () {
-          decide(list.result_id, "not_the_same_person", reason.value);
-        }));
-        const clearText = document.createElement("p");
-        clearText.className = "meta";
-        clearText.textContent = actions.not_the_same_person || "";
-        block.appendChild(clearText);
-        block.appendChild(button("Same person — confirmed exclusion", "primary", function () {
-          decide(list.result_id, "confirmed_exclusion", reason.value);
-        }));
-        const confirmText = document.createElement("p");
-        confirmText.className = "meta";
-        confirmText.textContent = actions.confirmed_exclusion || "";
-        block.appendChild(confirmText);
-        block.appendChild(button("Need more info", "ghost", function () {
-          decide(list.result_id, "need_more_info", reason.value);
-        }));
-        const holdText = document.createElement("p");
-        holdText.className = "meta";
-        holdText.textContent = actions.need_more_info || "";
-        block.appendChild(holdText);
+        if (list.ssn_note) {
+          const ssn = document.createElement("p");
+          ssn.className = "meta";
+          ssn.textContent = list.ssn_note;
+          block.appendChild(ssn);
+        }
         card.appendChild(block);
       });
+      const reason = document.createElement("input");
+      reason.placeholder = "Short reason, for example NPI differs";
+      card.appendChild(reason);
+      const actions = person.consequences || {};
+      card.appendChild(button("Not the same person — clear this match", "primary", function () {
+        decide(person.review_id, "not_the_same_person", reason.value);
+      }));
+      const clearText = document.createElement("p");
+      clearText.className = "meta";
+      clearText.textContent = actions.not_the_same_person || "";
+      card.appendChild(clearText);
+      card.appendChild(button("Same person — confirmed exclusion", "danger", function () {
+        const ok = window.confirm("This confirms the exclusion for every flagged list. This person cannot bill Medicaid or Medicare, and Activate stays blocked.");
+        if (!ok) return;
+        decide(person.review_id, "confirmed_exclusion", reason.value);
+      }));
+      const confirmText = document.createElement("p");
+      confirmText.className = "meta";
+      confirmText.textContent = actions.confirmed_exclusion || "";
+      card.appendChild(confirmText);
+      card.appendChild(button("Need more info", "ghost", function () {
+        decide(person.review_id, "need_more_info", reason.value);
+      }));
+      const holdText = document.createElement("p");
+      holdText.className = "meta";
+      holdText.textContent = actions.need_more_info || "";
+      card.appendChild(holdText);
       root.appendChild(card);
     });
   }
 
   async function decide(id, decision, note) {
     try {
-      await ui().api("/compliance/reviews/" + encodeURIComponent(id), {
+      await ui().api("/compliance/reviews/decide", {
         method: "POST",
-        json: { decision: decision, note: note || "" },
+        json: { review_id: id, decision: decision, note: note || "" },
       });
       await openScreening();
     } catch (error) {
@@ -154,14 +183,8 @@
     const intro = document.createElement("p");
     intro.className = "meta";
     const counts = roster.counts || {};
-    const parts = [];
-    if (counts.employee) parts.push(counts.employee + (counts.employee === 1 ? " employee" : " employees"));
-    if (counts.outside_supervisor) {
-      parts.push(counts.outside_supervisor + (counts.outside_supervisor === 1 ? " paid outside supervisor" : " paid outside supervisors"));
-    }
     intro.textContent = "Screening roster: " + (counts.total || (roster.people || []).length)
-      + (parts.length ? " (" + parts.join(", ") + ")" : "")
-      + ". Home Clinicians counts included supervision clinicians, not this list. "
+      + " people (employees and paid outside supervisors). "
       + "Monthly schedule: " + (settings.monthly_screening_enabled ? "on" : "off")
       + ". SAM: " + settings.sam_status
       + ". " + settings.monthly_detail;

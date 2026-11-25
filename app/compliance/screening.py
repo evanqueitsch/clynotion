@@ -652,6 +652,8 @@ def resolve_match(
     decision: str,
     note_text: str,
     actor: str,
+    audit: bool = True,
+    sync: bool = True,
 ) -> dict[str, Any]:
     if decision not in {"not_the_same_person", "confirmed_exclusion", "need_more_info"}:
         raise ScreeningError(400, "Choose not the same person, confirmed exclusion, or need more info.")
@@ -680,23 +682,81 @@ def resolve_match(
     from app.platform.due import due_engine
 
     due_engine.complete(practice_id=practice_id, source="exclusion-review", source_ref=result_id)
-    if result.get("kind") != "test" and result.get("source_mode") != "fixture":
+    if sync and result.get("kind") != "test" and result.get("source_mode") != "fixture":
         from app.compliance.review import sync_review_obligations
 
         sync_review_obligations(practice_id)
-    note(
-        practice_id,
-        action="resolve_exclusion",
-        object_type="exclusion_review",
-        object_id=str(stored.get("id") or ""),
-        actor=actor,
-        diff={"decision": decision, "result_id": result_id, "note": text[:180]},
-    )
+    if audit:
+        note(
+            practice_id,
+            action="resolve_exclusion",
+            object_type="exclusion_review",
+            object_id=str(stored.get("id") or ""),
+            actor=actor,
+            diff={"decision": decision, "result_id": result_id, "note": text[:180]},
+        )
     return {
         "id": stored["id"],
         "decision": decision,
         "gate": gate(practice_id, str(result.get("person_id") or "")),
     }
+
+
+def resolve_person(
+    practice_id: str,
+    review_id: str,
+    *,
+    decision: str,
+    note_text: str,
+    actor: str,
+) -> dict[str, Any]:
+    """Apply one decision to every open list for that person. Stored results stay as they are."""
+    from app.compliance.review import review_token, sync_review_obligations
+
+    if decision not in {"not_the_same_person", "confirmed_exclusion", "need_more_info"}:
+        raise ScreeningError(400, "Choose not the same person, confirmed exclusion, or need more info.")
+    text = (note_text or "").strip()
+    if not text:
+        raise ScreeningError(400, "A short reason is required.")
+    chosen = ""
+    open_ids: list[str] = []
+    for item in compliance_store.screenings(practice_id):
+        if item.get("kind") == "test" or item.get("source_mode") != "official":
+            continue
+        if item.get("result") != "possible_match":
+            continue
+        person_id = str(item.get("person_id") or "")
+        if review_token(practice_id, person_id) != review_id:
+            continue
+        chosen = person_id
+        resolutions = compliance_store.resolutions(practice_id)
+        latest = [row for row in resolutions if row.get("result_id") == item.get("id")]
+        if latest and str(latest[-1].get("decision") or "") in {"not_the_same_person", "confirmed_exclusion"}:
+            continue
+        open_ids.append(str(item.get("id") or ""))
+    if not chosen:
+        raise ScreeningError(404, "That review was not found.")
+    last: dict[str, Any] = {"decision": decision}
+    for result_id in open_ids:
+        last = resolve_match(
+            practice_id,
+            result_id,
+            decision=decision,
+            note_text=text,
+            actor=actor,
+            audit=False,
+            sync=False,
+        )
+    sync_review_obligations(practice_id)
+    note(
+        practice_id,
+        action="resolve_exclusion",
+        object_type="exclusion_review",
+        object_id=review_id,
+        actor=actor,
+        diff={"decision": decision, "review_id": review_id, "lists": len(open_ids), "note": text[:180]},
+    )
+    return last
 
 
 def record_manual_medicheck(

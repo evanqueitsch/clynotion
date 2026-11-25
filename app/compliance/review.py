@@ -103,7 +103,7 @@ def _city_state(address: str) -> tuple[str, str]:
 
 
 def staff_record(practice_id: str, person_id: str, display_name: str) -> dict[str, str]:
-    """Fields we have on file. Missing values stay blank and render as Not available."""
+    """Fields already stored for this person. Nothing here is written back."""
     found = {
         "name": display_name,
         "dob": "",
@@ -111,6 +111,9 @@ def staff_record(practice_id: str, person_id: str, display_name: str) -> dict[st
         "city": "",
         "state": "",
         "license_state": "",
+        "license_type": "",
+        "specialties": "",
+        "hire_date": "",
     }
     if person_id.startswith("subject:"):
         _subject_into(practice_id, person_id.split(":", 1)[1], found)
@@ -133,23 +136,53 @@ def _subject_into(practice_id: str, subject_id: str, found: dict[str, str]) -> N
     if not isinstance(subject, dict):
         return
     found["name"] = str(subject.get("legal_name") or subject.get("name") or found["name"])
-    found["npi"] = digits(str(subject.get("npi") or ""))
-    found["license_state"] = str(subject.get("license_state") or "").strip()
-    found["dob"] = iso_date(str(subject.get("date_of_birth") or subject.get("dob") or ""))
+    found["npi"] = digits(str(subject.get("npi") or "")) or found["npi"]
+    found["license_state"] = str(subject.get("license_state") or "").strip() or found["license_state"]
+    found["license_type"] = str(subject.get("license_type") or "").strip() or found["license_type"]
+    specialties = [str(item).strip() for item in (subject.get("specialties") or []) if str(item).strip()]
+    if specialties:
+        found["specialties"] = ", ".join(specialties)
+    found["hire_date"] = iso_date(str(subject.get("hire_date") or "")) or found["hire_date"]
+    found["dob"] = iso_date(str(subject.get("date_of_birth") or subject.get("dob") or "")) or found["dob"]
     city, state = _city_state(str(subject.get("service_address") or ""))
-    found["city"] = city
-    found["state"] = state
-    _employee_for_subject(practice_id, subject_id, found)
+    if city and not found["city"]:
+        found["city"] = city
+    if state and not found["state"]:
+        found["state"] = state
+    _employee_for_subject(practice_id, subject_id, found, str(subject.get("name") or ""))
+    clinician_id = str(subject.get("clinician_id") or "")
+    if clinician_id and not found["state"]:
+        _employee_for_clinician(practice_id, clinician_id, found)
 
 
-def _employee_for_subject(practice_id: str, subject_id: str, found: dict[str, str]) -> None:
+def _employee_for_subject(practice_id: str, subject_id: str, found: dict[str, str], name: str) -> None:
     from app.employees.store import employees_store
 
     _, row = employees_store._load(practice_id)
-    for record in (row.get("records") or {}).values():
-        if isinstance(record, dict) and str(record.get("subject_id") or "") == subject_id:
-            _contact_into(record, found)
-            return
+    records = [item for item in (row.get("records") or {}).values() if isinstance(item, dict)]
+    match = next((item for item in records if str(item.get("subject_id") or "") == subject_id), None)
+    if match is None and name:
+        wanted = name.casefold().strip()
+        match = next(
+            (item for item in records if str(item.get("preferred_name") or "").casefold().strip() == wanted),
+            None,
+        )
+    if match is not None:
+        _contact_into(match, found)
+
+
+def _employee_for_clinician(practice_id: str, clinician_id: str, found: dict[str, str]) -> None:
+    from app.clinicians import clinician_store
+    from app.employees.store import employees_store
+
+    clinician = clinician_store.get(practice_id, clinician_id)
+    email = str(getattr(clinician, "email", "") or "").strip().lower()
+    if not email:
+        return
+    _, row = employees_store._load(practice_id)
+    record = (row.get("records") or {}).get(email)
+    if isinstance(record, dict):
+        _contact_into(record, found)
 
 
 def _employee_into(practice_id: str, email: str, found: dict[str, str]) -> None:
@@ -174,6 +207,10 @@ def _contact_into(record: dict[str, Any], found: dict[str, str]) -> None:
         found["state"] = str(record.get("state") or "").strip()
     if not found["dob"]:
         found["dob"] = iso_date(str(record.get("date_of_birth") or record.get("dob") or ""))
+    if not found.get("specialties"):
+        names = [str(item).strip() for item in (record.get("specialties") or []) if str(item).strip()]
+        if names:
+            found["specialties"] = ", ".join(names)
 
 
 def _hire_into(practice_id: str, hire_id: str, found: dict[str, str]) -> None:
@@ -206,31 +243,108 @@ def _mark(left: str, right: str) -> str:
     return "Different"
 
 
-def _row(label: str, list_value: str, staff_value: str, *, name: bool = False, npi: bool = False, dob: bool = False) -> dict[str, str]:
+_NURSING = {"nursing", "nurse", "rn", "lpn", "aprn", "crnp", "cna", "aide"}
+_COUNSELING = {"lpc", "lcsw", "lsw", "lmsw", "lisw", "lmft", "mft", "counselor", "therapist", "psychology", "psychologist", "socialwork"}
+_MEDICINE = {"physician", "md", "do", "medicine"}
+
+
+def _words(value: str) -> set[str]:
+    return {"".join(ch for ch in part.casefold() if ch.isalnum()) for part in (value or "").replace("/", " ").replace("-", " ").split() if part}
+
+
+def _family(value: str) -> str:
+    words = _words(value)
+    if words & _NURSING or any("nurs" in word for word in words):
+        return "nursing"
+    if words & _COUNSELING or any(word.startswith("lpc") or word.startswith("lcsw") for word in words):
+        return "counseling"
+    if words & _MEDICINE:
+        return "medicine"
+    return ""
+
+
+def _role_phrase(staff: dict[str, str]) -> str:
+    text = " ".join(part for part in (staff.get("license_type") or "", staff.get("specialties") or "") if part)
+    family = _family(text)
+    license_type = (staff.get("license_type") or "").strip()
+    if family == "nursing":
+        return "a nurse"
+    if family == "counseling":
+        folded = license_type.casefold()
+        if "lcsw" in folded or folded == "lsw":
+            return "a licensed social worker"
+        return "a licensed counselor"
+    if family == "medicine":
+        return "a physician"
+    if license_type:
+        return "a " + license_type
+    return "on our staff"
+
+
+def _list_role(record: dict[str, str]) -> str:
+    text = " ".join(part for part in (record.get("specialty") or "", record.get("general") or "") if part)
+    if _family(text) == "nursing":
+        return "a nurse"
+    if _family(text) == "counseling":
+        return "a counselor"
+    if _family(text) == "medicine":
+        return "a physician"
+    if text:
+        return text[:80]
+    return "an excluded provider"
+
+
+def _profession(value: str) -> str:
+    return value.strip() if _family(value) else ""
+
+
+def _state_codes(*values: str) -> list[str]:
+    found: list[str] = []
+    for value in values:
+        text = (value or "").strip().upper()
+        if len(text) == 2 and text.isalpha() and text not in found:
+            found.append(text)
+    return found
+
+
+def _both(left: str, right: str) -> bool:
+    return not left.strip() and not right.strip()
+
+
+def _row(label: str, list_value: str, staff_value: str, *, name: bool = False, npi: bool = False, dob: bool = False, mark: str = "") -> dict[str, str]:
     left = list_value.strip()
     right = staff_value.strip()
-    if npi:
+    blank = _both(left, right)
+    if mark:
+        chosen = mark
+    elif npi:
         left_digits = digits(left)
         right_digits = digits(right)
+        blank = len(left_digits) != 10 and len(right_digits) != 10
         if len(left_digits) == 10 and len(right_digits) == 10:
-            mark = "Match" if left_digits == right_digits else "Different"
+            chosen = "Match" if left_digits == right_digits else "Different"
         else:
-            mark = "Not available"
-        return {"label": label, "list_value": _show(left), "staff_value": _show(right), "mark": mark}
-    if dob:
-        left_iso = iso_date(left) or left
-        right_iso = iso_date(right) or right
+            chosen = "Not available"
+    elif dob:
         if iso_date(left) and iso_date(right):
-            mark = "Match" if iso_date(left) == iso_date(right) else "Different"
+            chosen = "Match" if iso_date(left) == iso_date(right) else "Different"
         else:
-            mark = "Not available"
-        return {"label": label, "list_value": _show(left_iso), "staff_value": _show(right_iso), "mark": mark}
-    if name:
-        mark = "Not available"
+            chosen = "Not available"
+        left = iso_date(left) or left
+        right = iso_date(right) or right
+    elif name:
+        chosen = "Not available"
         if left and right:
-            mark = "Match" if _name_match(left, right, "", "") else "Different"
-        return {"label": label, "list_value": _show(left), "staff_value": _show(right), "mark": mark}
-    return {"label": label, "list_value": _show(left), "staff_value": _show(right), "mark": _mark(left, right)}
+            chosen = "Match" if _name_match(left, right, "", "") else "Different"
+    else:
+        chosen = _mark(left, right)
+    return {
+        "label": label,
+        "list_value": _show(left),
+        "staff_value": _show(right),
+        "mark": chosen,
+        "both_blank": "yes" if blank else "",
+    }
 
 
 def _reinstate(record: dict[str, str]) -> str:
@@ -240,7 +354,33 @@ def _reinstate(record: dict[str, str]) -> str:
 
 def comparison_rows(record: dict[str, str], staff: dict[str, str]) -> list[dict[str, str]]:
     list_name = _full_name(record.get("first") or "", record.get("middle") or "", record.get("last") or "")
-    specialty = " / ".join(part for part in (record.get("specialty") or "", record.get("general") or "") if part)
+    list_profession = _profession(" ".join(part for part in (record.get("specialty") or "", record.get("general") or "") if part))
+    staff_profession = " · ".join(part for part in (staff.get("license_type") or "", staff.get("specialties") or "") if part)
+    list_states = _state_codes(record.get("state") or "")
+    our_states = _state_codes(staff.get("state") or "", staff.get("license_state") or "")
+    if not list_states or not our_states:
+        state_mark = "Not available"
+    elif list_states[0] in our_states and all(code == list_states[0] for code in our_states):
+        state_mark = "Match"
+    else:
+        state_mark = "Different"
+    contact = (staff.get("state") or "").strip().upper()
+    licensed = (staff.get("license_state") or "").strip().upper()
+    if contact and licensed and contact != licensed:
+        staff_state = contact + " contact · " + licensed + " license"
+    else:
+        staff_state = contact or licensed
+    list_family = _family(list_profession)
+    staff_family = _family(staff_profession)
+    if list_profession and staff_profession and list_family and staff_family:
+        discipline_mark = "Match" if list_family == staff_family else "Different"
+    elif list_profession and staff_profession:
+        discipline_mark = "Match" if list_profession.casefold() == staff_profession.casefold() else "Different"
+    else:
+        discipline_mark = "Not available"
+    license_value = " · ".join(
+        part for part in (staff.get("license_type") or "", (staff.get("license_state") or "").upper()) if part
+    )
     return [
         _row("Full name", list_name, staff.get("name") or "", name=True),
         _row("Date of birth", record.get("dob") or "", staff.get("dob") or "", dob=True),
@@ -248,16 +388,18 @@ def comparison_rows(record: dict[str, str], staff: dict[str, str]) -> list[dict[
         _row("UPIN", record.get("upin") or "", ""),
         _row("Address", record.get("address") or "", ""),
         _row("City", record.get("city") or "", staff.get("city") or ""),
-        _row("State", record.get("state") or "", staff.get("state") or ""),
+        _row("State", " ".join(list_states), staff_state, mark=state_mark),
         _row("Business name", record.get("business") or "", ""),
-        _row("Specialty / general", specialty, ""),
+        _row("Specialty / discipline", list_profession, staff_profession, mark=discipline_mark),
+        _row("License", "", license_value),
+        _row("Hire date", "", staff.get("hire_date") or ""),
         _row("Exclusion type", exclusion_meaning(record.get("exclusion_type") or ""), ""),
+        _row("Excluding agency", record.get("agency") or "", ""),
         _row("Exclusion date", record.get("exclusion_date") or "", ""),
         _row("Reinstatement / waiver date", _reinstate(record), ""),
         _row("SAM UEI", record.get("uei") or "", ""),
         _row("Record status", record.get("record_status") or "", ""),
         _row("Termination date", record.get("termination_date") or "", ""),
-        _row("License state", "", staff.get("license_state") or ""),
     ]
 
 
@@ -276,18 +418,40 @@ def why_flagged(record: dict[str, str], staff: dict[str, str]) -> str:
     return "The stored result flagged this list entry."
 
 
-def likelihood(record: dict[str, str], staff: dict[str, str]) -> str:
+def _state_differs(record: dict[str, str], staff: dict[str, str]) -> bool:
+    listed = _state_codes(record.get("state") or "")
+    ours = _state_codes(staff.get("state") or "", staff.get("license_state") or "")
+    return bool(listed and ours and listed[0] not in ours)
+
+
+def _discipline_differs(record: dict[str, str], staff: dict[str, str]) -> bool:
+    list_family = _family(" ".join(part for part in (record.get("specialty") or "", record.get("general") or "") if part))
+    staff_family = _family(" ".join(part for part in (staff.get("license_type") or "", staff.get("specialties") or "") if part))
+    return bool(list_family and staff_family and list_family != staff_family)
+
+
+def likelihood(record: dict[str, str], staff: dict[str, str], *, list_name: str = "") -> dict[str, str]:
     list_npi = digits(record.get("npi") or "")
     staff_npi = digits(staff.get("npi") or "")
     list_dob = iso_date(record.get("dob") or "")
     staff_dob = iso_date(staff.get("dob") or "")
     npi_differs = len(list_npi) == 10 and len(staff_npi) == 10 and list_npi != staff_npi
     dob_differs = bool(list_dob and staff_dob and list_dob != staff_dob)
+    npi_same = len(list_npi) == 10 and list_npi == staff_npi
+    dob_same = bool(list_dob and staff_dob and list_dob == staff_dob)
+    if npi_same or dob_same:
+        reason = "NPI matches." if npi_same else "Date of birth matches."
+        return {"label": "Likely same person", "reason": reason, "next_step": ""}
     if npi_differs or dob_differs:
-        return "Likely different person"
-    if (len(list_npi) == 10 and list_npi == staff_npi) or (list_dob and list_dob == staff_dob):
-        return "Likely same person"
-    return "Needs a closer look"
+        reason = "NPI differs." if npi_differs else "Date of birth differs."
+        return {"label": "Likely different person", "reason": reason, "next_step": ""}
+    if _state_differs(record, staff) and _discipline_differs(record, staff):
+        listed = (_state_codes(record.get("state") or "") or ["an unknown state"])[0]
+        ours = (_state_codes(staff.get("state") or "", staff.get("license_state") or "") or ["an unknown state"])[0]
+        reason = f"The list entry is {_list_role(record)} in {listed}; our staff member is {_role_phrase(staff)} in {ours}."
+        return {"label": "Likely different person", "reason": reason, "next_step": ""}
+    step = "Check date of birth on the OIG site." if list_name == "leie" else "Check date of birth on the source record."
+    return {"label": "Needs a closer look", "reason": "Only the name matches, and there is no state, license, NPI, or date of birth to compare.", "next_step": step}
 
 
 def source_links(list_name: str, record: dict[str, str]) -> list[dict[str, str]]:
@@ -347,23 +511,41 @@ def _packet_for(practice_id: str, item: dict[str, Any], staff: dict[str, str]) -
         ]
     record = {str(key): str(value or "") for key, value in records[0].items()}
     list_name = str(item.get("list_name") or "")
-    refreshed = "list_records" in item and bool(item.get("list_records"))
+    refreshed = bool(item.get("list_records")) and _record_has_detail(item)
+    judged = likelihood(record, staff, list_name=list_name)
     return {
         "result_id": str(item.get("id") or ""),
         "list_name": list_name,
         "list_label": _LIST_LABEL.get(list_name, list_name),
         "why": why_flagged(record, staff),
-        "likelihood": likelihood(record, staff),
+        "likelihood": judged["label"],
+        "likelihood_reason": judged["reason"],
+        "next_step": judged["next_step"],
         "rows": comparison_rows(record, staff),
         "links": source_links(list_name, record),
-        "ssn_note": "OIG can also verify a person by Social Security number on its site. Clynotion does not send a Social Security number.",
+        "ssn_note": (
+            "OIG can also verify a person by Social Security number on its site. Clynotion does not send a Social Security number."
+            if list_name == "leie"
+            else ""
+        ),
         "detail_note": "" if refreshed else "The full list entry is not stored on this result yet. The match result is unchanged.",
-        "consequences": {
-            "not_the_same_person": "Clears this match. Activate stays blocked until every flagged list is cleared.",
-            "confirmed_exclusion": "This person cannot bill Medicaid or Medicare. Activate stays blocked.",
-            "need_more_info": "Keeps this review open. Nothing is cleared and nothing is confirmed.",
-        },
     }
+
+
+def review_token(practice_id: str, person_id: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(f"{practice_id}\n{person_id}".encode()).hexdigest()[:20]
+
+
+def _record_has_detail(item: dict[str, Any]) -> bool:
+    records = [row for row in (item.get("list_records") or []) if isinstance(row, dict)]
+    if not records:
+        return False
+    if str(item.get("list_name") or "") != "sam":
+        return True
+    row = records[0]
+    return any(str(row.get(key) or "").strip() for key in ("address", "state", "city", "record_status", "exclusion_date", "agency"))
 
 
 def review_packets(practice_id: str) -> list[dict[str, Any]]:
@@ -393,10 +575,15 @@ def review_packets(practice_id: str) -> list[dict[str, Any]]:
             rendered.append(_packet_for(practice_id, item, staff))
         packets.append(
             {
-                "person_id": person_id,
+                "review_id": review_token(practice_id, person_id),
                 "name": staff.get("name") or name,
                 "header": _header(staff.get("name") or name, lists),
                 "lists": rendered,
+                "consequences": {
+                    "not_the_same_person": "Clears every flagged list for this person. Activate stays blocked until each one is clear.",
+                    "confirmed_exclusion": "This person cannot bill Medicaid or Medicare. Activate stays blocked.",
+                    "need_more_info": "Keeps this review open. Nothing is cleared and nothing is confirmed.",
+                },
             }
         )
     return packets
@@ -446,7 +633,7 @@ def sync_review_obligations(practice_id: str) -> None:
             title=("Possible exclusion match: " + name)[:180],
             owner_user_id="admin",
             due_at=due_at,
-            href="/#screening?review=" + person_id,
+            href="/#screening?review=" + review_token(practice_id, person_id),
             source_ref=person_id,
             status="open",
         )
@@ -481,6 +668,12 @@ def _records_for(item: dict[str, Any], listing: ListFile) -> list[dict[str, str]
     return [person.record() for person in hits[:8]]
 
 
+def _needs_list_detail(item: dict[str, Any]) -> bool:
+    if item.get("list_name") == "sam":
+        return not _record_has_detail(item)
+    return "list_records" not in item
+
+
 def backfill_list_records(
     practice_id: str,
     *,
@@ -493,7 +686,7 @@ def backfill_list_records(
         if item.get("result") == "possible_match"
         and item.get("source_mode") == "official"
         and item.get("kind") != "test"
-        and "list_records" not in item
+        and _needs_list_detail(item)
     ]
     if not pending:
         return 0
@@ -512,7 +705,7 @@ def backfill_list_records(
         list_name = str(item.get("list_name") or "")
         listing = supplied.get(list_name)
         if listing is None and fetcher is not None and today is not None:
-            from app.compliance.sources import load_leie, load_medicheck, load_sam_person
+            from app.compliance.sources import load_leie, load_medicheck, load_sam_detail
 
             if list_name == "leie":
                 supplied["leie"] = load_leie(fetcher, today=today)
@@ -524,7 +717,7 @@ def backfill_list_records(
                 parts = str(item.get("display_name") or "").split()
                 first = parts[0] if parts else ""
                 last = parts[-1] if parts else ""
-                listing = load_sam_person(fetcher, first=first, last=last, npi="", today=today)
+                listing = load_sam_detail(fetcher, first=first, last=last, today=today)
         if listing is None or not listing.ready:
             continue
         records = _records_for(item, listing)

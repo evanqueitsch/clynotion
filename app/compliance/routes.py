@@ -30,6 +30,7 @@ from app.compliance.screening import (
     close_orphaned_test_matches,
     record_test_match,
     resolve_match,
+    resolve_person,
     roster,
     roster_counts,
     run_screening,
@@ -58,6 +59,12 @@ class FixtureBody(BaseModel):
 
 
 class ResolveBody(BaseModel):
+    decision: str
+    note: str = ""
+
+
+class PersonResolveBody(BaseModel):
+    review_id: str
     decision: str
     note: str = ""
 
@@ -241,6 +248,21 @@ def screen_hire(hire_id: str, user: CurrentUser) -> dict[str, Any]:
             _actor(user),
             person_ids=[f"hire:{hire_id}"],
             purpose="pre_hire",
+        )
+    )
+
+
+@router.post("/compliance/reviews/decide")
+def post_person_review(body: PersonResolveBody, user: CurrentUser) -> dict[str, Any]:
+    """One decision for every open list on that person."""
+    _admin(user)
+    return _call(
+        lambda: resolve_person(
+            user.practice_id,
+            body.review_id,
+            decision=body.decision,
+            note_text=body.note,
+            actor=_actor(user),
         )
     )
 

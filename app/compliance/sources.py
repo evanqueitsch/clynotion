@@ -93,6 +93,7 @@ class ListedPerson:
     uei: str = ""
     record_status: str = ""
     termination_date: str = ""
+    agency: str = ""
 
     def proof(self) -> dict[str, str]:
         npi = digits(self.npi)
@@ -129,6 +130,7 @@ class ListedPerson:
             "uei": self.uei,
             "record_status": self.record_status,
             "termination_date": self.termination_date,
+            "agency": self.agency,
         }
 
 
@@ -265,8 +267,20 @@ def sam_configured() -> bool:
     return bool((os.environ.get(SAM_KEY_ENV) or "").strip())
 
 
+def _sam_address_block(item: dict[str, Any]) -> dict[str, Any]:
+    for key in ("exclusionPrimaryAddress", "exclusionAddress", "primaryAddress"):
+        block = item.get(key)
+        if isinstance(block, dict):
+            return block
+    return {}
+
+
 def parse_sam(payload: dict[str, Any], *, queried_on: str, raw: bytes) -> tuple[str, list[ListedPerson]]:
-    records = payload.get("excludedEntity") or payload.get("exclusionDetails") or []
+    records = payload.get("excludedEntity") or []
+    if not isinstance(records, list):
+        records = []
+    if isinstance(payload.get("exclusionDetails"), list):
+        records = payload["exclusionDetails"]
     if isinstance(payload.get("data"), list):
         records = payload["data"]
     rows: list[ListedPerson] = []
@@ -276,10 +290,10 @@ def parse_sam(payload: dict[str, Any], *, queried_on: str, raw: bytes) -> tuple[
                 continue
             ident = item.get("exclusionIdentification") if isinstance(item.get("exclusionIdentification"), dict) else item
             details = item.get("exclusionDetails") if isinstance(item.get("exclusionDetails"), dict) else item
-            address = item.get("exclusionAddress") if isinstance(item.get("exclusionAddress"), dict) else {}
+            address = _sam_address_block(item)
             actions = item.get("exclusionActions") if isinstance(item.get("exclusionActions"), dict) else {}
             action_list = actions.get("listOfActions") if isinstance(actions.get("listOfActions"), list) else []
-            action = action_list[0] if action_list and isinstance(action_list[0], dict) else {}
+            action = next((row for row in action_list if isinstance(row, dict)), {})
             other = item.get("exclusionOtherInformation") if isinstance(item.get("exclusionOtherInformation"), dict) else {}
             last = str(ident.get("lastName") or ident.get("exclusionName") or ident.get("entityName") or "").strip()
             first = str(ident.get("firstName") or "").strip()
@@ -301,8 +315,8 @@ def parse_sam(payload: dict[str, Any], *, queried_on: str, raw: bytes) -> tuple[
                     middle=str(ident.get("middleName") or "").strip(),
                     npi=digits(str(ident.get("npi") or "")),
                     kind=str(details.get("exclusionType") or details.get("exclusionProgram") or "").strip(),
-                    state=str(address.get("stateOrProvinceCode") or address.get("stateProvince") or "").strip(),
-                    active=True,
+                    state=str(address.get("stateOrProvinceCode") or address.get("state") or address.get("stateProvince") or "").strip(),
+                    active=str(action.get("recordStatus") or "").casefold() != "inactive",
                     dob=iso_date(dob),
                     address=" ".join(
                         part
@@ -316,11 +330,12 @@ def parse_sam(payload: dict[str, Any], *, queried_on: str, raw: bytes) -> tuple[
                     zip_code=str(address.get("zipCode") or address.get("zip") or "").strip(),
                     business=str(ident.get("entityName") or "").strip() if not first else "",
                     general=str(details.get("classificationType") or "").strip(),
-                    specialty=str(details.get("exclusionProgram") or "").strip(),
+                    specialty=str(details.get("occupation") or other.get("profession") or "").strip(),
                     excl_date=iso_date(str(action.get("activateDate") or details.get("exclusionDate") or "")),
                     uei=str(ident.get("ueiSAM") or ident.get("uei") or "").strip(),
                     record_status=str(action.get("recordStatus") or "").strip(),
                     termination_date=iso_date(str(action.get("terminationDate") or "")),
+                    agency=str(details.get("excludingAgencyName") or details.get("excludingAgencyCode") or "").strip(),
                 )
             )
     return file_sha256(raw), rows
@@ -377,6 +392,51 @@ def load_sam_person(fetcher: Fetcher, *, first: str, last: str, npi: str, today:
         ready=True,
         detail="",
         reported_count=reported,
+    )
+
+
+def load_sam_detail(fetcher: Fetcher, *, first: str, last: str, today: date) -> ListFile:
+    """Read exclusion records for one name. Tries more than one query. Does not change a stored result."""
+    key = (os.environ.get(SAM_KEY_ENV) or "").strip()
+    if not key:
+        return ListFile(name="sam", updated_on="", file_sha256="", ready=False, detail="not run: API key not configured")
+    queries = [
+        {"classification": "Individual", "exclusionName": f"{first} {last}".strip()},
+        {"exclusionName": f"{last}, {first}".strip(", ")},
+        {"exclusionName": last},
+    ]
+    rows: list[ListedPerson] = []
+    digest = ""
+    reported = 0
+    for extra in queries:
+        params = {"api_key": key, **{k: v for k, v in extra.items() if v}}
+        code, text, raw = fetcher.get(SAM_URL, params)
+        if code != 200:
+            continue
+        try:
+            payload = json_loads(text)
+        except ValueError:
+            continue
+        digest, found = parse_sam(payload, queried_on=today.isoformat(), raw=raw)
+        reported = int(payload.get("totalRecords") or len(found) or 0)
+        if found:
+            rows = found
+            break
+    if not rows and not digest:
+        return ListFile(name="sam", updated_on=today.isoformat(), file_sha256="", ready=False, detail="source unavailable")
+    wanted_last = norm_token(last)
+    if wanted_last:
+        named = [row for row in rows if norm_token(row.last) == wanted_last or wanted_last in norm_token(row.last)]
+        if named:
+            rows = named
+    return ListFile(
+        name="sam",
+        updated_on=today.isoformat(),
+        file_sha256=digest,
+        rows=rows,
+        ready=True,
+        detail="",
+        reported_count=reported or len(rows),
     )
 
 
