@@ -32,13 +32,19 @@
     ui().setStatus(status, "Loading…");
     root.innerHTML = "";
     try {
-      const [settings, roster, history, reviews] = await Promise.all([
+      const [settings, roster, history] = await Promise.all([
         ui().api("/compliance/settings"),
         ui().api("/compliance/roster"),
         ui().api("/compliance/screening"),
-        ui().api("/compliance/reviews/open"),
       ]);
-      await renderScreening(root, settings, roster, history, reviews);
+      let reviews = { people: [] };
+      let reviewError = "";
+      try {
+        reviews = await ui().api("/compliance/reviews/open");
+      } catch (error) {
+        reviewError = "Possible-match review could not be loaded. The rest of this page is still available.";
+      }
+      await renderScreening(root, settings, roster, history, reviews, reviewError);
       ui().setStatus(status, "");
     } catch (error) {
       ui().setStatus(status, error.message, "error");
@@ -191,7 +197,7 @@
     }
   }
 
-  async function renderScreening(root, settings, roster, history, reviews) {
+  async function renderScreening(root, settings, roster, history, reviews, reviewError) {
     const intro = document.createElement("p");
     intro.className = "meta";
     const counts = roster.counts || {};
@@ -201,6 +207,12 @@
       + ". SAM: " + settings.sam_status
       + ". " + settings.monthly_detail;
     root.appendChild(intro);
+    if (reviewError) {
+      const box = document.createElement("p");
+      box.className = "warn";
+      box.textContent = reviewError;
+      root.appendChild(box);
+    }
     renderReviews(root, reviews);
 
     const filters = document.createElement("div");

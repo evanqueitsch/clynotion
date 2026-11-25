@@ -810,42 +810,54 @@ def backfill_list_records(
         today = date.today()
     attached = 0
     for item in pending:
-        list_name = str(item.get("list_name") or "")
-        listing = supplied.get(list_name)
-        if listing is None and fetcher is not None and today is not None:
-            from app.compliance.sources import load_leie, load_medicheck, load_sam_detail
+        list_name = ""
+        try:
+            list_name = str(item.get("list_name") or "")
+            listing = supplied.get(list_name)
+            if listing is None and fetcher is not None and today is not None:
+                from app.compliance.sources import load_leie, load_medicheck, load_sam_detail
 
-            if list_name == "leie":
-                supplied["leie"] = load_leie(fetcher, today=today)
-                listing = supplied["leie"]
-            elif list_name == "medicheck":
-                supplied["medicheck"] = load_medicheck(fetcher, today=today)
-                listing = supplied["medicheck"]
-            elif list_name == "sam":
-                parts = str(item.get("display_name") or "").split()
-                first = parts[0] if parts else ""
-                last = parts[-1] if parts else ""
-                listing = load_sam_detail(fetcher, first=first, last=last, today=today)
-        if listing is None or not listing.ready:
-            if list_name == "sam" and listing is not None and listing.detail:
-                compliance_store.set_list_note(practice_id, str(item.get("id") or ""), listing.detail)
+                if list_name == "leie":
+                    supplied["leie"] = load_leie(fetcher, today=today)
+                    listing = supplied["leie"]
+                elif list_name == "medicheck":
+                    supplied["medicheck"] = load_medicheck(fetcher, today=today)
+                    listing = supplied["medicheck"]
+                elif list_name == "sam":
+                    parts = str(item.get("display_name") or "").split()
+                    first = parts[0] if parts else ""
+                    last = parts[-1] if parts else ""
+                    listing = load_sam_detail(fetcher, first=first, last=last, today=today)
+            if listing is None or not listing.ready:
+                if list_name == "sam" and listing is not None and listing.detail:
+                    compliance_store.set_list_note(practice_id, str(item.get("id") or ""), listing.detail)
+                continue
+            records = _records_for(item, listing)
+            if not records:
+                if list_name == "sam":
+                    compliance_store.set_list_note(
+                        practice_id,
+                        str(item.get("id") or ""),
+                        "SAM detail was not stored (no_readable_record). The match result is unchanged.",
+                    )
+                continue
+            before = str(item.get("result") or "")
+            compliance_store.set_list_records(
+                practice_id,
+                str(item.get("id") or ""),
+                records,
+                replace=list_name == "sam",
+            )
+            after = next(
+                (row for row in compliance_store.screenings(practice_id) if row.get("id") == item.get("id")),
+                {},
+            )
+            if str(after.get("result") or "") != before:
+                continue
+            attached += 1
+        except Exception:
+            from app.compliance.sources import logger
+
+            logger.warning("reviews_backfill reason=item_failed list=%s", list_name or "unknown")
             continue
-        records = _records_for(item, listing)
-        if not records:
-            if list_name == "sam":
-                compliance_store.set_list_note(
-                    practice_id,
-                    str(item.get("id") or ""),
-                    "SAM detail was not stored (no_readable_record). The match result is unchanged.",
-                )
-            continue
-        before = str(item.get("result") or "")
-        compliance_store.set_list_records(practice_id, str(item.get("id") or ""), records)
-        after = next(
-            (row for row in compliance_store.screenings(practice_id) if row.get("id") == item.get("id")),
-            {},
-        )
-        if str(after.get("result") or "") != before:
-            continue
-        attached += 1
     return attached

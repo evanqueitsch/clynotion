@@ -30,6 +30,8 @@ from zoneinfo import ZoneInfo
 
 import logging
 
+import httpx
+
 logger = logging.getLogger("app.compliance.sources")
 
 EASTERN = ZoneInfo("America/New_York")
@@ -428,7 +430,12 @@ def load_sam_detail(fetcher: Fetcher, *, first: str, last: str, today: date) -> 
     reported = 0
     for extra in queries:
         params = {"api_key": key, **{key_name: value for key_name, value in extra.items() if value}}
-        code, text, raw = fetcher.get(SAM_URL, params)
+        try:
+            code, text, raw = fetcher.get(SAM_URL, params)
+        except Exception:
+            last_reason = "request_failed"
+            logger.warning("sam_detail_reread reason=request_failed")
+            continue
         last_status = code
         if code != 200:
             last_reason = f"http_{code}"
@@ -439,7 +446,11 @@ def load_sam_detail(fetcher: Fetcher, *, first: str, last: str, today: date) -> 
             last_reason = "unparsed"
             continue
         digest, found = parse_sam(payload, queried_on=today.isoformat(), raw=raw)
-        reported = int(payload.get("totalRecords") or len(found) or 0)
+        reported = 0
+        try:
+            reported = int(payload.get("totalRecords") or len(found) or 0)
+        except (TypeError, ValueError):
+            reported = len(found)
         if reported and not found:
             last_reason = "unparsed"
             logger.warning("sam_detail_reread reason=unparsed status=%s keys=%s", code, ",".join(sorted(payload.keys())[:12]))

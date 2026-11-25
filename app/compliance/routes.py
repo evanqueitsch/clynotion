@@ -288,8 +288,20 @@ def get_open_reviews(user: CurrentUser) -> dict[str, Any]:
     from app.compliance.review import backfill_list_records, review_packets, sync_review_obligations
 
     sync_review_obligations(user.practice_id)
-    backfill_list_records(user.practice_id)
-    return {"people": review_packets(user.practice_id)}
+    try:
+        backfill_list_records(user.practice_id)
+    except Exception:
+        from app.compliance.sources import logger
+
+        logger.warning("reviews_open reason=backfill_failed")
+    try:
+        people = review_packets(user.practice_id)
+    except Exception:
+        from app.compliance.sources import logger
+
+        logger.warning("reviews_open reason=packet_failed")
+        people = []
+    return {"people": people}
 
 
 @router.post("/compliance/medicheck/manual")
