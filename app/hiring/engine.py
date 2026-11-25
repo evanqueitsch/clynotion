@@ -24,6 +24,7 @@ from typing import Any, Optional
 from zoneinfo import ZoneInfo
 
 from app.crypto import decrypt_utf8, encrypt_utf8
+from app.file_cache import DecryptedFileCache
 from app.hiring.checklist import (
     BILLING_STEP_KEYS,
     BLOCKED_DONE,
@@ -358,11 +359,13 @@ def _default_settings() -> dict[str, Any]:
 class HiringEngine:
     def __init__(self) -> None:
         self._memory: Optional[dict[str, Any]] = None
+        self._file_cache = DecryptedFileCache()
         self._hits: dict[str, list[float]] = {}
         self._otp_hits: dict[str, list[float]] = {}
 
     def reset(self) -> None:
         self._memory = None
+        self._file_cache.clear()
         self._hits.clear()
         self._otp_hits.clear()
         if not _file_mode():
@@ -377,9 +380,7 @@ class HiringEngine:
                 self._memory = _empty()
             return self._memory
         path = _path()
-        if not path.is_file():
-            return _empty()
-        payload = json.loads(decrypt_utf8(path.read_bytes()))
+        payload = self._file_cache.read_json(path, decrypt_utf8)
         if not isinstance(payload, dict):
             return _empty()
         payload.setdefault("practices", {})
@@ -404,6 +405,7 @@ class HiringEngine:
         finally:
             os.close(fd)
         os.replace(tmp, path)
+        self._file_cache.remember(path, cleaned)
 
     def _practice(self, payload: dict[str, Any], practice_id: str) -> dict[str, Any]:
         practices = payload.setdefault("practices", {})

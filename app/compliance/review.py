@@ -22,6 +22,18 @@ from app.hiring.checklist import add_business_days
 EASTERN = ZoneInfo("America/New_York")
 _CLOSED = {"not_the_same_person", "confirmed_exclusion"}
 _LIST_LABEL = {"leie": "OIG LEIE", "sam": "SAM.gov", "medicheck": "PA Medicheck"}
+NOT_ON_FILE = "Not on file — add license state in Credentialing"
+STATE_HREF = "#credentialing"
+PROBABLY_SAME = "Probably the same exclusion as the OIG LEIE entry above"
+_LICENSE_STATE_KEYS = {
+    "licensestate",
+    "licensurestate",
+    "issuingstate",
+    "jurisdiction",
+    "statecode",
+    "stateorprovince",
+    "stateorprovincecode",
+}
 _EXCLUSION_MEANING = {
     "1128a1": "Conviction for a program-related crime",
     "1128a2": "Conviction relating to patient abuse",
@@ -128,6 +140,7 @@ def staff_record(practice_id: str, person_id: str, display_name: str) -> dict[st
         "specialties": "",
         "hire_date": "",
         "service_state": "",
+        "practice_state": "",
     }
     if person_id.startswith("subject:"):
         _subject_into(practice_id, person_id.split(":", 1)[1], found)
@@ -163,17 +176,21 @@ def _subject_into(practice_id: str, subject_id: str, found: dict[str, str]) -> N
         found["city"] = city
     if service_state:
         found["service_state"] = service_state
-    for key in ("license_state", "licensure_state", "licenseState"):
-        value = str(subject.get(key) or "").strip()
-        if value and not found["license_state"]:
-            found["license_state"] = value
+    if not found["license_state"]:
+        found["license_state"] = _license_state_from_record(subject)
     if not found["license_state"]:
         found["license_state"] = _state_from_label(found.get("license_type") or "")
-    _license_state_elsewhere(subject, found)
+    if not found["license_state"]:
+        found["license_state"] = _state_from_license_number(str(subject.get("license_number") or ""))
     _employee_for_subject(practice_id, subject_id, found, str(subject.get("name") or ""))
+    legal = str(subject.get("legal_name") or "").strip()
+    if legal and not found["state"]:
+        _employee_for_subject(practice_id, subject_id, found, legal)
     clinician_id = str(subject.get("clinician_id") or "")
     if clinician_id and not found["state"]:
         _employee_for_clinician(practice_id, clinician_id, found)
+    if not found["service_state"] and not found["license_state"] and not found["state"]:
+        found["practice_state"] = _practice_service_state(practice_id, subject_id)
 
 
 def _state_from_label(value: str) -> str:
@@ -184,29 +201,122 @@ def _state_from_label(value: str) -> str:
     return ""
 
 
-def _license_state_elsewhere(subject: dict[str, Any], found: dict[str, str]) -> None:
-    """Read a license state stored under another key or inside a license list."""
-    if found.get("license_state"):
-        return
-    for key, value in subject.items():
-        if "state" not in str(key).casefold():
+def _key_compact(key: str) -> str:
+    return "".join(ch for ch in str(key).casefold() if ch.isalnum())
+
+
+def _dict_license_state(node: dict[str, Any]) -> str:
+    """A license state on this entry. A bare state counts only next to a license field."""
+    for key, value in node.items():
+        if not isinstance(value, str):
             continue
-        if isinstance(value, str) and _normalize_state(value):
-            found["license_state"] = value.strip()
-            return
-        if isinstance(value, dict):
-            nested = str(value.get("state") or value.get("license_state") or "")
-            if _normalize_state(nested):
-                found["license_state"] = nested.strip()
-                return
-        if isinstance(value, list):
-            for item in value:
-                if not isinstance(item, dict):
+        if _key_compact(key) in _LICENSE_STATE_KEYS:
+            code = _normalize_state(value)
+            if code:
+                return code
+    license_entry = any(
+        "license" in _key_compact(key) or _key_compact(key) in {"type", "number", "credential", "profession"}
+        for key in node
+    )
+    if not license_entry:
+        return ""
+    for key, value in node.items():
+        if _key_compact(key) != "state" or not isinstance(value, str):
+            continue
+        code = _normalize_state(value)
+        if code:
+            return code
+    license_type = " ".join(
+        str(node.get(key) or "")
+        for key in ("license_type", "type", "name", "profession")
+    )
+    for key in ("number", "license_number", "license"):
+        raw = str(node.get(key) or "")
+        code = _state_from_license_number(raw) or _profession_state(license_type, raw)
+        if code:
+            return code
+    return ""
+
+
+def _license_state_from_record(node: Any, depth: int = 0) -> str:
+    """Walk a credentialing record for a license state that is not the top-level field."""
+    if depth > 5:
+        return ""
+    if isinstance(node, list):
+        for item in node:
+            found = _license_state_from_record(item, depth + 1)
+            if found:
+                return found
+        return ""
+    if not isinstance(node, dict):
+        return ""
+    direct = _dict_license_state(node)
+    if direct:
+        return direct
+    if depth == 0:
+        top = _normalize_state(str(node.get("state") or ""))
+        if top:
+            return top
+    for key, value in node.items():
+        compact = _key_compact(key)
+        if compact in {"history", "clocks", "npi", "tin"}:
+            continue
+        if not any(token in compact for token in ("license", "credential", "address")) and not isinstance(value, (dict, list)):
+            continue
+        if isinstance(value, (dict, list)):
+            found = _license_state_from_record(value, depth + 1)
+            if found:
+                return found
+    history = node.get("history") if depth == 0 else None
+    if isinstance(history, list):
+        for item in reversed(history):
+            if not isinstance(item, dict) or not isinstance(item.get("changes"), dict):
+                continue
+            for key, change in item["changes"].items():
+                if _key_compact(key) not in _LICENSE_STATE_KEYS or not isinstance(change, dict):
                     continue
-                nested = str(item.get("state") or item.get("license_state") or "")
-                if _normalize_state(nested):
-                    found["license_state"] = nested.strip()
-                    return
+                for side in ("new", "old"):
+                    code = _normalize_state(str(change.get(side) or ""))
+                    if code:
+                        return code
+    return ""
+
+
+def _state_from_license_number(value: str) -> str:
+    """A leading postal abbreviation, such as PA-00000. A license prefix like CW is not itself a state."""
+    text = (value or "").strip().upper()
+    if not text or text.isdigit():
+        return ""
+    match = re.match(r"^([A-Z]{2})(?:[^A-Z]|$)", text)
+    if not match:
+        return ""
+    code = match.group(1)
+    return code if code in _POSTAL else ""
+
+
+def _profession_state(license_type: str, number: str) -> str:
+    """Pennsylvania social-work license numbers start with CW (LCSW) or SW (LSW)."""
+    folded = (license_type or "").casefold()
+    text = (number or "").strip().upper()
+    social = "lcsw" in folded or "lsw" in folded
+    if social and text.startswith(("CW", "SW")):
+        return "PA"
+    return ""
+
+
+def _practice_service_state(practice_id: str, subject_id: str) -> str:
+    from app.credentialing.store import credentialing_store
+
+    _, row = credentialing_store._load_practice(practice_id)
+    for key, subject in (row.get("subjects") or {}).items():
+        if key == subject_id or not isinstance(subject, dict):
+            continue
+        if str(subject.get("kind") or "") != "practice":
+            continue
+        _, code = _city_state(str(subject.get("service_address") or ""))
+        if code:
+            return code
+    return ""
 
 
 def _employee_for_subject(practice_id: str, subject_id: str, found: dict[str, str], name: str) -> None:
@@ -222,8 +332,7 @@ def _employee_for_subject(practice_id: str, subject_id: str, found: dict[str, st
                 (
                     item
                     for item in records
-                    if _tokens(str(item.get("preferred_name") or ""))[:1] + _tokens(str(item.get("preferred_name") or ""))[-1:]
-                    == [wanted[0], wanted[-1]]
+                    if _name_match(name, str(item.get("preferred_name") or ""), "", "")
                 ),
                 None,
             )
@@ -272,6 +381,18 @@ def _contact_into(record: dict[str, Any], found: dict[str, str]) -> None:
         found["city"] = str(record.get("city") or contact.get("city") or "").strip()
     if not found["state"]:
         found["state"] = str(record.get("state") or contact.get("state") or "").strip()
+    if not found["state"]:
+        _, parsed = _city_state(" ".join(
+            part
+            for part in (
+                str(record.get("street") or contact.get("street") or ""),
+                str(record.get("city") or contact.get("city") or ""),
+                str(record.get("zip") or contact.get("zip") or ""),
+            )
+            if part
+        ))
+        if parsed:
+            found["state"] = parsed
     if not found["dob"]:
         found["dob"] = iso_date(str(record.get("date_of_birth") or record.get("dob") or contact.get("dob") or ""))
     if not found.get("specialties"):
@@ -365,12 +486,20 @@ def _profession(value: str) -> str:
     return value.strip() if _family(value) else ""
 
 
+_POSTAL = {
+    "AL", "AK", "AZ", "AR", "CA", "CO", "CT", "DE", "FL", "GA", "HI", "ID", "IL", "IN", "IA",
+    "KS", "KY", "LA", "ME", "MD", "MA", "MI", "MN", "MS", "MO", "MT", "NE", "NV", "NH", "NJ",
+    "NM", "NY", "NC", "ND", "OH", "OK", "OR", "PA", "RI", "SC", "SD", "TN", "TX", "UT", "VT",
+    "VA", "WA", "WV", "WI", "WY", "DC",
+}
+
+
 def _normalize_state(value: str) -> str:
     text = (value or "").strip()
     if not text:
         return ""
     compact = "".join(ch for ch in text if ch.isalpha()).upper()
-    if len(compact) == 2:
+    if compact in _POSTAL:
         return compact
     names = {
         "ALABAMA": "AL", "ALASKA": "AK", "ARIZONA": "AZ", "ARKANSAS": "AR", "CALIFORNIA": "CA",
@@ -397,11 +526,12 @@ def _state_codes(*values: str) -> list[str]:
     return found
 
 
-def _staff_state(staff: dict[str, str]) -> tuple[str, list[str]]:
-    """Contact state, otherwise the credentialing license state. The label says which."""
+def _staff_state(staff: dict[str, str]) -> tuple[str, list[str], str]:
+    """Contact, license, then an address. The label says which source was used."""
     contact = _normalize_state(staff.get("state") or "")
     licensed = _normalize_state(staff.get("license_state") or "")
     service = _normalize_state(staff.get("service_state") or "")
+    practice = _normalize_state(staff.get("practice_state") or "")
     parts: list[str] = []
     codes: list[str] = []
     if contact:
@@ -415,14 +545,19 @@ def _staff_state(staff: dict[str, str]) -> tuple[str, list[str]]:
     if not contact and not licensed and service:
         parts.append(service + " (service address)")
         codes.append(service)
-    return ", ".join(parts), codes
+    elif not contact and not licensed and practice:
+        parts.append(practice + " (practice address)")
+        codes.append(practice)
+    if not parts:
+        return NOT_ON_FILE, [], STATE_HREF
+    return ", ".join(parts), codes, ""
 
 
 def _both(left: str, right: str) -> bool:
     return not left.strip() and not right.strip()
 
 
-def _row(label: str, list_value: str, staff_value: str, *, name: bool = False, npi: bool = False, dob: bool = False, mark: str = "") -> dict[str, str]:
+def _row(label: str, list_value: str, staff_value: str, *, name: bool = False, npi: bool = False, dob: bool = False, mark: str = "", staff_href: str = "") -> dict[str, str]:
     left = list_value.strip()
     right = staff_value.strip()
     blank = _both(left, right)
@@ -455,6 +590,7 @@ def _row(label: str, list_value: str, staff_value: str, *, name: bool = False, n
         "staff_value": _show(right),
         "mark": chosen,
         "both_blank": "yes" if blank else "",
+        "staff_href": staff_href,
     }
 
 
@@ -494,7 +630,7 @@ def comparison_rows(record: dict[str, str], staff: dict[str, str]) -> list[dict[
     list_profession = _list_profession_text(record)
     staff_profession = " · ".join(part for part in (staff.get("license_type") or "", staff.get("specialties") or "") if part)
     list_states = _state_codes(record.get("state") or "")
-    staff_state, our_states = _staff_state(staff)
+    staff_state, our_states, state_href = _staff_state(staff)
     if not list_states or not our_states:
         state_mark = "Not available"
     elif list_states[0] in our_states and all(code == list_states[0] for code in our_states):
@@ -516,7 +652,7 @@ def comparison_rows(record: dict[str, str], staff: dict[str, str]) -> list[dict[
         _row("UPIN", record.get("upin") or "", ""),
         _row("Address", record.get("address") or "", ""),
         _row("City", record.get("city") or "", staff.get("city") or ""),
-        _row("State", " ".join(list_states), staff_state, mark=state_mark),
+        _row("State", " ".join(list_states), staff_state, mark=state_mark, staff_href=state_href),
         _row("Business name", record.get("business") or "", ""),
         _row("Specialty / discipline", list_profession, staff_profession, mark=discipline_mark),
         _row("Hire date", "", staff.get("hire_date") or ""),
@@ -715,24 +851,31 @@ def _mark_same_hhs_record(lists: list[dict[str, Any]]) -> None:
     sam = next((item for item in lists if item.get("list_name") == "sam"), None)
     if leie is None or sam is None:
         return
-    if norm_token(_row_text(leie, "Full name")) != norm_token(_row_text(sam, "Full name")):
+    names_match = _name_match(_row_text(leie, "Full name"), _row_text(sam, "Full name"), "", "")
+    if not names_match:
         return
-    if _thin_sam(sam):
-        sam["alignment"] = "Probably the same exclusion as the OIG LEIE entry above"
+    if _thin_sam(sam) or sam.get("sam_busy"):
+        sam["alignment"] = PROBABLY_SAME
+        sam["likelihood"] = str(leie.get("likelihood") or sam.get("likelihood") or "")
+        sam["likelihood_reason"] = "Based on the OIG LEIE details above."
+        sam["next_step"] = ""
         return
     if not _hhs_agency(_row_text(sam, "Excluding agency")):
         return
     sam["alignment"] = "Same exclusion reported by HHS/OIG"
 
 
-def _person_likelihood(lists: list[dict[str, Any]]) -> str:
+def _person_read(lists: list[dict[str, Any]]) -> dict[str, str]:
+    """One read for the person. A thin or busy SAM row follows the LEIE evidence."""
     leie = next((item for item in lists if item.get("list_name") == "leie"), None)
     sam = next((item for item in lists if item.get("list_name") == "sam"), None)
     if leie and sam and str(sam.get("alignment") or "").startswith("Probably"):
-        return str(leie.get("likelihood") or "")
+        label = str(leie.get("likelihood") or "")
+        summary = f"{label} — based on the OIG LEIE details above." if label else ""
+        return {"likelihood": label, "summary": summary}
     if lists and all(item.get("likelihood") == "Likely different person" for item in lists):
-        return "Likely different person"
-    return ""
+        return {"likelihood": "Likely different person", "summary": "Likely different person."}
+    return {"likelihood": "", "summary": ""}
 
 
 def review_token(practice_id: str, person_id: str) -> str:
@@ -777,12 +920,14 @@ def review_packets(practice_id: str) -> list[dict[str, Any]]:
                 lists.append(list_name)
             rendered.append(_packet_for(practice_id, item, staff))
         _mark_same_hhs_record(rendered)
+        read = _person_read(rendered)
         packets.append(
             {
                 "review_id": review_token(practice_id, person_id),
                 "name": staff.get("name") or name,
                 "header": _header(staff.get("name") or name, lists),
-                "likelihood": _person_likelihood(rendered),
+                "likelihood": read["likelihood"],
+                "summary": read["summary"],
                 "lists": rendered,
                 "consequences": {
                     "not_the_same_person": "Clears every flagged list for this person. Activate stays blocked until each one is clear.",

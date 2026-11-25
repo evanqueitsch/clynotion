@@ -29,14 +29,21 @@
     const root = $("screening-root");
     const status = $("screening-status");
     if (!root) return;
-    ui().setStatus(status, "Loading…");
     root.innerHTML = "";
+    const heading = document.createElement("h2");
+    heading.textContent = "Exclusion screening";
+    root.appendChild(heading);
+    const loading = document.createElement("p");
+    loading.textContent = "Loading screening…";
+    root.appendChild(loading);
+    ui().setStatus(status, "");
     try {
       const [settings, roster, history] = await Promise.all([
         ui().api("/compliance/settings"),
         ui().api("/compliance/roster"),
         ui().api("/compliance/screening"),
       ]);
+      root.innerHTML = "";
       await renderScreening(root, settings, roster, history, { people: [] }, "", true);
       ui().setStatus(status, "");
       const controller = new AbortController();
@@ -44,12 +51,14 @@
       try {
         const reviews = await ui().api("/compliance/reviews/open", { signal: controller.signal });
         clearTimeout(timer);
+        root.innerHTML = "";
         await renderScreening(root, settings, roster, history, reviews, "", false);
       } catch (error) {
         clearTimeout(timer);
         const reviewError = controller.signal.aborted
           ? "The review is taking too long. The rest of this page is ready."
           : "Possible-match review could not be loaded. The rest of this page is still available.";
+        root.innerHTML = "";
         await renderScreening(root, settings, roster, history, { people: [] }, reviewError, false);
       }
     } catch (error) {
@@ -70,6 +79,13 @@
       const header = document.createElement("h3");
       header.textContent = person.header || "";
       card.appendChild(header);
+      if (person.summary) {
+        const overall = document.createElement("p");
+        const strong = document.createElement("strong");
+        strong.textContent = person.summary;
+        overall.appendChild(strong);
+        card.appendChild(overall);
+      }
       (person.lists || []).forEach(function (list) {
         const block = document.createElement("div");
         block.className = "review-list";
@@ -79,19 +95,22 @@
         const why = document.createElement("p");
         why.textContent = "Why this was flagged: " + (list.why || "");
         block.appendChild(why);
-        const likelihood = document.createElement("p");
-        const label = document.createElement("strong");
-        label.textContent = (list.likelihood || "") + ".";
-        likelihood.appendChild(label);
-        if (list.likelihood_reason) {
-          likelihood.appendChild(document.createElement("br"));
-          likelihood.appendChild(document.createTextNode(list.likelihood_reason));
-        }
-        block.appendChild(likelihood);
-        if (list.next_step) {
-          const step = document.createElement("p");
-          step.textContent = list.next_step;
-          block.appendChild(step);
+        const tied = String(list.alignment || "").indexOf("Probably the same exclusion") === 0;
+        if (!tied) {
+          const likelihood = document.createElement("p");
+          const label = document.createElement("strong");
+          label.textContent = (list.likelihood || "") + ".";
+          likelihood.appendChild(label);
+          if (list.likelihood_reason) {
+            likelihood.appendChild(document.createElement("br"));
+            likelihood.appendChild(document.createTextNode(list.likelihood_reason));
+          }
+          block.appendChild(likelihood);
+          if (list.next_step) {
+            const step = document.createElement("p");
+            step.textContent = list.next_step;
+            block.appendChild(step);
+          }
         }
         if (list.alignment) {
           const same = document.createElement("p");
@@ -101,7 +120,7 @@
         if (list.sam_busy || (list.list_name === "sam" && list.detail_note)) {
           const busy = document.createElement("p");
           busy.textContent = list.sam_busy
-            ? "SAM.gov was busy, so details couldn't be loaded. Try again later."
+            ? "SAM.gov was busy, so its details couldn't be loaded. Click Retry to try again."
             : (list.detail_note || "");
           block.appendChild(busy);
           block.appendChild(button("Retry", "ghost", async function () {
@@ -116,6 +135,7 @@
                 await openScreening();
                 return;
               }
+              root.innerHTML = "";
               await renderScreening(root, current.settings, current.roster, current.history, refreshed, "", false);
             } catch (error) {
               ui().setStatus($("screening-status"), error.message, "error");
@@ -142,9 +162,16 @@
           const tr = document.createElement("tr");
           const mark = item.mark || "Not available";
           tr.className = mark === "Match" ? "cmp-match" : (mark === "Different" ? "cmp-different" : "cmp-missing");
-          [item.label, item.list_value, item.staff_value, mark].forEach(function (value) {
+          [item.label, item.list_value, item.staff_value, mark].forEach(function (value, index) {
             const cell = document.createElement("td");
-            cell.textContent = value || "";
+            if (index === 2 && item.staff_href) {
+              const link = document.createElement("a");
+              link.href = item.staff_href;
+              link.textContent = value || "";
+              cell.appendChild(link);
+            } else {
+              cell.textContent = value || "";
+            }
             tr.appendChild(cell);
           });
           target.appendChild(tr);
@@ -185,6 +212,12 @@
       const reason = document.createElement("input");
       reason.placeholder = "Short reason, for example NPI differs";
       card.appendChild(reason);
+      if ((person.lists || []).length > 1) {
+        const applies = document.createElement("p");
+        applies.className = "meta";
+        applies.textContent = "This decision applies to both list hits for this person.";
+        card.appendChild(applies);
+      }
       const actions = person.consequences || {};
       const clearClass = person.likelihood === "Likely different person" ? "primary" : "ghost";
       card.appendChild(button("Not the same person — clear this match", clearClass, function () {

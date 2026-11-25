@@ -109,6 +109,22 @@ app.include_router(compliance_router)
 app.middleware("http")(access_middleware)
 
 
+@app.middleware("http")
+async def _server_timing(request: Request, call_next):
+    """Record how long the request took. The log is the path and milliseconds only."""
+    import logging
+    import time
+
+    started = time.perf_counter()
+    response = await call_next(request)
+    elapsed = int((time.perf_counter() - started) * 1000)
+    response.headers["Server-Timing"] = f"app;dur={elapsed}"
+    path = request.url.path
+    if path == "/health" or path == "/home" or path.startswith("/compliance/"):
+        logging.getLogger("app.timing").info("route_ms route=%s ms=%s", path, elapsed)
+    return response
+
+
 async def _audit_context_middleware(request: Request, call_next):
     from app.access.guard import _user_from_request
     from app.access.resolve import assigned_role_id

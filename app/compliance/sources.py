@@ -21,14 +21,16 @@ from __future__ import annotations
 import csv
 import hashlib
 import io
+import logging
 import os
 import re
+import tempfile
+import time
 from dataclasses import dataclass, field
 from datetime import date, datetime
+from pathlib import Path
 from typing import Any, Optional, Protocol
 from zoneinfo import ZoneInfo
-
-import logging
 
 import httpx
 
@@ -367,13 +369,90 @@ def parse_sam(payload: dict[str, Any], *, queried_on: str, raw: bytes) -> tuple[
     return file_sha256(raw), rows
 
 
+_LEIE_TTL_S = 12 * 60 * 60
+_SAM_TTL_S = 24 * 60 * 60
+_leie_mem: tuple[float, ListFile] | None = None
+_sam_mem: dict[str, tuple[float, ListFile]] = {}
+
+
+def clear_list_cache() -> None:
+    """Drop in-memory list caches. Tests call this so one lookup cannot leak into the next."""
+    global _leie_mem
+    _leie_mem = None
+    _sam_mem.clear()
+
+
+def _list_cache_dir() -> Path:
+    raw = (os.environ.get("ATTUNE_LIST_CACHE_DIR") or "").strip()
+    if raw:
+        return Path(raw)
+    data = Path("/data")
+    if data.is_dir() and os.access(data, os.W_OK):
+        return data / "list-cache"
+    return Path(tempfile.gettempdir()) / "clynotion-list-cache"
+
+
+def _leie_cached() -> ListFile | None:
+    global _leie_mem
+    now = time.time()
+    if _leie_mem is not None and now - _leie_mem[0] < _LEIE_TTL_S and _leie_mem[1].ready:
+        return _leie_mem[1]
+    directory = _list_cache_dir()
+    csv_path = directory / "leie.csv"
+    meta_path = directory / "leie-updated.txt"
+    try:
+        if not csv_path.is_file():
+            return None
+        age = now - csv_path.stat().st_mtime
+        if age > _LEIE_TTL_S:
+            return None
+        raw = csv_path.read_bytes()
+        updated = meta_path.read_text(encoding="utf-8").strip() if meta_path.is_file() else ""
+    except OSError:
+        return None
+    parsed = parse_leie(raw.decode("utf-8", errors="replace"), updated_on=updated, raw=raw)
+    if not parsed.ready:
+        return None
+    _leie_mem = (now, parsed)
+    return parsed
+
+
+def _leie_store(listing: ListFile, raw: bytes) -> None:
+    global _leie_mem
+    _leie_mem = (time.time(), listing)
+    directory = _list_cache_dir()
+    try:
+        directory.mkdir(parents=True, exist_ok=True)
+        csv_path = directory / "leie.csv"
+        tmp = directory / "leie.csv.tmp"
+        tmp.write_bytes(raw)
+        os.replace(tmp, csv_path)
+        (directory / "leie-updated.txt").write_text(listing.updated_on or "", encoding="utf-8")
+    except OSError:
+        logger.info("leie_cache result=disk_skip")
+
+
 def load_leie(fetcher: Fetcher, *, today: date) -> ListFile:
+    real = isinstance(fetcher, HttpxFetcher)
+    if real:
+        cached = _leie_cached()
+        if cached is not None:
+            logger.info("leie_cache result=hit")
+            return cached
+    started = time.perf_counter()
     status, page, _ = fetcher.get(LEIE_PAGE_URL)
     updated = leie_updated_on(page if status == 200 else "", today.isoformat())
     code, text, raw = fetcher.get(LEIE_CSV_URL)
+    elapsed = int((time.perf_counter() - started) * 1000)
     if code != 200 or "LASTNAME" not in (text[:400] if text else ""):
+        if real:
+            logger.info("leie_cache result=unavailable ms=%s", elapsed)
         return ListFile(name="leie", updated_on="", file_sha256="", ready=False, detail="source unavailable")
-    return parse_leie(text, updated_on=updated, raw=raw)
+    parsed = parse_leie(text, updated_on=updated, raw=raw)
+    if real and parsed.ready:
+        _leie_store(parsed, raw or b"")
+        logger.info("leie_cache result=fetched ms=%s", elapsed)
+    return parsed
 
 
 def load_medicheck(fetcher: Fetcher, *, today: date) -> ListFile:
@@ -421,14 +500,22 @@ def load_sam_person(fetcher: Fetcher, *, first: str, last: str, npi: str, today:
     )
 
 
-import time
+SAM_BUSY = "SAM.gov was busy, so its details couldn't be loaded. Click Retry to try again."
 
-SAM_BUSY = "SAM.gov was busy, so details couldn't be loaded. Try again later."
+
+def _sam_cache_key(first: str, last: str) -> str:
+    return norm_token(first) + "|" + norm_token(last)
 
 
 def load_sam_detail(fetcher: Fetcher, *, first: str, last: str, today: date) -> ListFile:
     """Read exclusion records for one name. The log has a reason code, never the key or a name."""
     key = (os.environ.get(SAM_KEY_ENV) or "").strip()
+    cache_key = _sam_cache_key(first, last)
+    if isinstance(fetcher, HttpxFetcher) and cache_key != "|":
+        hit = _sam_mem.get(cache_key)
+        if hit is not None and time.time() - hit[0] < _SAM_TTL_S and hit[1].ready:
+            logger.info("sam_detail_cache result=hit")
+            return hit[1]
     if not key:
         logger.warning("sam_detail_reread reason=missing_key status=0")
         return ListFile(name="sam", updated_on="", file_sha256="", ready=False, detail="not run: API key not configured")
@@ -514,15 +601,19 @@ def load_sam_detail(fetcher: Fetcher, *, first: str, last: str, today: date) -> 
             ready=False,
             detail=f"SAM detail was not stored ({last_reason}). The match result is unchanged.",
         )
-        return ListFile(
-            name="sam",
-            updated_on=today.isoformat(),
-            file_sha256=digest,
-            rows=chosen,
-            ready=True,
-            detail="",
-            reported_count=reported or len(chosen),
-        )
+    found = ListFile(
+        name="sam",
+        updated_on=today.isoformat(),
+        file_sha256=digest,
+        rows=chosen,
+        ready=True,
+        detail="",
+        reported_count=reported or len(chosen),
+    )
+    if isinstance(fetcher, HttpxFetcher) and cache_key != "|":
+        _sam_mem[cache_key] = (time.time(), found)
+        logger.info("sam_detail_cache result=stored")
+    return found
 
 
 def json_loads(text: str) -> dict[str, Any]:

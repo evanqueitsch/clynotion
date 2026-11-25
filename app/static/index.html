@@ -1276,7 +1276,7 @@
   <script src="/static/employee.js?v=0.24.4"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
   <script src="/static/hiring.js?v=0.30.4"></script>
-  <script src="/static/compliance.js?v=0.30.4"></script>
+  <script src="/static/compliance.js?v=0.30.5"></script>
   <script>
     const state = {
       token: null,
@@ -2842,6 +2842,15 @@
       }
       if ((ob.href || "").includes("onboarding") || ob.source === "hr_onboarding") {
         await openOnboarding();
+        return;
+      }
+      if ((ob.href || "").indexOf("#screening") !== -1 || ob.source === "exclusion-review") {
+        const hash = (ob.href || "").indexOf("#") === -1 ? "#screening" : ob.href.slice(ob.href.indexOf("#"));
+        if ((window.location.hash || "") !== hash) {
+          window.history.replaceState({}, "", "/" + hash);
+        }
+        show("screening-panel");
+        if (window.clyCompliance) window.clyCompliance.openScreening();
         return;
       }
       if (ob.href) window.location.href = ob.href;

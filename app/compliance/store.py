@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import Any, Optional
 
 from app.crypto import decrypt_utf8, encrypt_utf8
+from app.file_cache import DecryptedFileCache
 
 ENV_PATH = "ATTUNE_COMPLIANCE_DATA_PATH"
 ENV_MODE = "ATTUNE_COMPLIANCE_PERSISTENCE"
@@ -76,10 +77,12 @@ def _practice_blob() -> dict[str, Any]:
 class ComplianceStore:
     def __init__(self) -> None:
         self._memory: Optional[dict[str, Any]] = None
+        self._file_cache = DecryptedFileCache()
 
     def reset(self) -> None:
         with _lock:
             self._memory = None
+            self._file_cache.clear()
             if not _file_mode():
                 self._memory = _empty()
 
@@ -89,9 +92,7 @@ class ComplianceStore:
                 self._memory = _empty()
             return self._memory
         path = _path()
-        if not path.is_file():
-            return _empty()
-        payload = json.loads(decrypt_utf8(path.read_bytes()))
+        payload = self._file_cache.read_json(path, decrypt_utf8)
         if not isinstance(payload, dict):
             return _empty()
         payload.setdefault("practices", {})
@@ -112,6 +113,7 @@ class ComplianceStore:
         finally:
             os.close(fd)
         os.replace(tmp, path)
+        self._file_cache.remember(path, payload)
 
     def _practice(self, practice_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         practices = payload.setdefault("practices", {})
