@@ -146,4 +146,4 @@ def test_eligibility_rejects_client_name(client: TestClient) -> None:
 
 
 def test_health_version_011(client: TestClient) -> None:
-    assert client.get("/health").json()["version"] == "0.30.5"
+    assert client.get("/health").json()["version"] == "0.30.6"
