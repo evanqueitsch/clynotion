@@ -110,7 +110,11 @@ def _settings_public(practice_id: str) -> dict[str, Any]:
         "sam_status": sam_status(),
         "monthly_detail": "Off. The run is the first business day of the month at 7:00 AM Eastern, and only after this is turned on.",
         "integrity_detail": "Off. The daily check runs only after this is turned on. Verify log runs when you press the button.",
-        "drive_detail": "Not configured." if not folder else "A daily copy is sent to the saved Shared Drive folder.",
+        "drive_detail": (
+            "No folder is set, so the daily copy does not run."
+            if not folder
+            else "A daily copy is sent to the saved Shared Drive folder."
+        ),
     }
 
 
@@ -140,10 +144,27 @@ def put_settings(body: SettingsBody, user: CurrentUser) -> dict[str, Any]:
 @router.get("/compliance/roster")
 def get_roster(user: CurrentUser) -> dict[str, Any]:
     _admin(user)
+    from app.compliance.screening import test_people
+
     people = []
     for item in roster(user.practice_id):
-        people.append({"person_id": item["person_id"], "name": item["name"], "kind": item["kind"]})
-    return {"people": people, "sam_status": sam_status()}
+        people.append({"person_id": item["person_id"], "name": item["name"], "kind": item["kind"], "test_record": False})
+    tests = []
+    for item in test_people(user.practice_id):
+        tests.append({"person_id": item["person_id"], "name": item["name"], "kind": "test", "test_record": True})
+    return {"people": people, "test_people": tests, "sam_status": sam_status()}
+
+
+@router.post("/compliance/test-hires")
+def post_test_hire(user: CurrentUser) -> dict[str, Any]:
+    """Create one flagged test hire. No email, no Drive folder, no personnel record."""
+    _admin(user)
+    from app.hiring.engine import HiringError, hiring
+
+    try:
+        return hiring.create_test_hire(user.practice_id, _actor(user))
+    except HiringError as exc:
+        raise HTTPException(status_code=exc.status, detail=exc.detail) from exc
 
 
 @router.post("/compliance/screening/run")
@@ -187,9 +208,16 @@ def list_screenings(
     person_id: str = "",
     month: str = "",
     list_name: str = "",
+    include_test: bool = False,
 ) -> dict[str, Any]:
     _admin(user)
-    rows = filtered_screenings(user.practice_id, person_id=person_id, month=month, list_name=list_name)
+    rows = filtered_screenings(
+        user.practice_id,
+        person_id=person_id,
+        month=month,
+        list_name=list_name,
+        include_test=include_test,
+    )
     resolutions = compliance_store.resolutions(user.practice_id)
     return {"results": rows, "resolutions": resolutions}
 
@@ -315,6 +343,7 @@ def export_screening_csv(
 ) -> Response:
     _admin(user)
     rows = filtered_screenings(user.practice_id, person_id=person_id, month=month, list_name=list_name)
+    _log_export(user, "csv", "exclusion_screening", len(rows))
     buffer = io.StringIO()
     writer = csv.writer(buffer)
     writer.writerow(["checked_at_et", "person_id", "display_name", "list", "result", "list_updated_on", "source_sha256", "detail"])
@@ -331,7 +360,6 @@ def export_screening_csv(
                 scrub_text(item["detail"]),
             ]
         )
-    _log_export(user, "csv", "exclusion_screening", len(rows))
     return Response(content=buffer.getvalue(), media_type="text/csv")
 
 
@@ -409,7 +437,7 @@ def list_audit(
 @router.post("/compliance/audit/verify")
 def post_verify(user: CurrentUser) -> dict[str, Any]:
     _admin(user)
-    return verify_chain(user.practice_id)
+    return verify_chain(user.practice_id, actor=_actor(user), actor_role=assigned_role_id(user))
 
 
 @router.api_route("/compliance/audit/{entry_id}", methods=["PUT", "PATCH", "DELETE"])
@@ -434,6 +462,8 @@ def export_audit_csv(
     end: str = "",
 ) -> Response:
     _audit_reader(user)
+    prior = _filtered_audit(user.practice_id, person=person, action=action, object_type=object_type, start=start, end=end)
+    _log_export(user, "csv", "audit_chain", len(prior) + 1)
     rows = _filtered_audit(user.practice_id, person=person, action=action, object_type=object_type, start=start, end=end)
     buffer = io.StringIO()
     writer = csv.writer(buffer)
@@ -451,7 +481,6 @@ def export_audit_csv(
                 item["hash"],
             ]
         )
-    _log_export(user, "csv", "audit_chain", len(rows))
     return Response(content=buffer.getvalue(), media_type="text/csv")
 
 
@@ -465,6 +494,8 @@ def export_audit_pdf(
     end: str = "",
 ) -> Response:
     _audit_reader(user)
+    prior = _filtered_audit(user.practice_id, person=person, action=action, object_type=object_type, start=start, end=end)
+    _log_export(user, "pdf", "audit_chain", len(prior) + 1)
     rows = _filtered_audit(user.practice_id, person=person, action=action, object_type=object_type, start=start, end=end)
     lines = ["Audit log"]
     for item in rows:
@@ -480,7 +511,6 @@ def export_audit_pdf(
                 ]
             )
         )
-    _log_export(user, "pdf", "audit_chain", len(rows))
     return Response(content=text_pdf(lines, title="Audit log"), media_type="application/pdf")
 
 

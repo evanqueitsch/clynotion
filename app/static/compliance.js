@@ -33,7 +33,7 @@
       const [settings, roster, history] = await Promise.all([
         ui().api("/compliance/settings"),
         ui().api("/compliance/roster"),
-        ui().api("/compliance/screening"),
+        ui().api("/compliance/screening?include_test=1"),
       ]);
       renderScreening(root, settings, roster, history);
       ui().setStatus(status, "");
@@ -119,27 +119,65 @@
     const fixture = document.createElement("div");
     const fixtureNote = document.createElement("p");
     fixtureNote.className = "meta";
-    fixtureNote.textContent = "Test list for one person. A match here does not clear a hire.";
+    fixtureNote.textContent = "Test records only. A match here does not clear a real hire, and it cannot be recorded against an employee.";
+    const testPicker = document.createElement("select");
+    const testBlank = document.createElement("option");
+    testBlank.value = "";
+    testBlank.textContent = "Choose a test record";
+    testPicker.appendChild(testBlank);
+    (roster.test_people || []).forEach(function (item) {
+      const option = document.createElement("option");
+      option.value = item.person_id;
+      option.textContent = item.name;
+      testPicker.appendChild(option);
+    });
     const fixtureCsv = document.createElement("textarea");
     fixtureCsv.rows = 3;
     fixtureCsv.placeholder = "LASTNAME,FIRSTNAME,NPI";
-    fixture.appendChild(fixtureNote);
-    fixture.appendChild(fixtureCsv);
-    fixture.appendChild(button("Record test match", "ghost", async function () {
-      if (!picker.value) {
-        ui().setStatus($("screening-status"), "Choose the test person first.", "error");
+    const recordMatch = button("Record test match", "ghost", async function () {
+      if (!testPicker.value) {
+        ui().setStatus($("screening-status"), "Choose a test record. Real employees cannot be used here.", "error");
         return;
       }
       try {
         await ui().api("/compliance/screening/fixture", {
           method: "POST",
-          json: { person_id: picker.value, list_name: "leie", csv_text: fixtureCsv.value },
+          json: { person_id: testPicker.value, list_name: "leie", csv_text: fixtureCsv.value },
         });
         await openScreening();
       } catch (error) {
         ui().setStatus($("screening-status"), error.message, "error");
       }
+    });
+    recordMatch.disabled = !(roster.test_people || []).length;
+    fixture.appendChild(fixtureNote);
+    fixture.appendChild(button("Create test hire", "ghost", async function () {
+      try {
+        const created = await ui().api("/compliance/test-hires", { method: "POST", json: {} });
+        ui().setStatus($("screening-status"), "Test record created. No email was sent.", "ok");
+        if (created && created.id) window.location.hash = "#hiring?hire=" + encodeURIComponent(created.id);
+        else await openScreening();
+      } catch (error) {
+        ui().setStatus($("screening-status"), error.message, "error");
+      }
     }));
+    fixture.appendChild(testPicker);
+    fixture.appendChild(button("Screen this test record", "primary", async function () {
+      if (!testPicker.value) {
+        ui().setStatus($("screening-status"), "Choose a test record.", "error");
+        return;
+      }
+      ui().setStatus($("screening-status"), "Running…");
+      try {
+        await ui().api("/compliance/screening/run", { method: "POST", json: { person_id: testPicker.value } });
+        await openScreening();
+        ui().setStatus($("screening-status"), "Test screening saved.", "ok");
+      } catch (error) {
+        ui().setStatus($("screening-status"), error.message, "error");
+      }
+    }));
+    fixture.appendChild(fixtureCsv);
+    fixture.appendChild(recordMatch);
     root.appendChild(fixture);
 
     const manual = document.createElement("form");
@@ -169,10 +207,18 @@
     }));
     root.appendChild(manual);
 
+    const testHeading = document.createElement("h3");
+    testHeading.textContent = "Test record results";
+    root.appendChild(testHeading);
+    const testRows = document.createElement("div");
+    testRows.className = "due-list";
+    root.appendChild(testRows);
+    const allResults = history.results || [];
+    drawRows(testRows, allResults.filter(function (item) { return item.kind === "test"; }), history.resolutions || []);
     const rows = document.createElement("div");
     rows.className = "due-list";
     root.appendChild(rows);
-    drawRows(rows, history.results || [], history.resolutions || []);
+    drawRows(rows, allResults.filter(function (item) { return item.kind !== "test"; }), history.resolutions || []);
   }
 
   function drawRows(root, results, resolutions) {

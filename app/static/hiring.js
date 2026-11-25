@@ -661,10 +661,12 @@
       if (!status.allowed) {
         const button = card.querySelector('[data-action="activate"]');
         if (button) button.disabled = true;
-        const why = document.createElement("p");
-        why.className = "meta hire-activate-reason";
-        why.textContent = status.message || "Exclusion check is not clear.";
-        slot.appendChild(why);
+        if (!card.querySelector(".hire-activate-reason")) {
+          const why = document.createElement("p");
+          why.className = "meta hire-activate-reason";
+          why.textContent = status.message || "Exclusion check is not clear.";
+          slot.appendChild(why);
+        }
       }
     }).catch(function () {});
   }
@@ -1337,12 +1339,19 @@
         const needsClearance = hire.direct_client_access && clearances.status !== "done" && clearances.status !== "n/a";
         const beforeStart = !!(hire.start_date && hire.start_date > easternToday());
         const waitingQb = !hire.qb_invite_at;
+        const exclusionBlocked = hire.exclusion_allowed === false;
         const activate = document.createElement("button");
         activate.type = "button";
         activate.className = "primary";
         activate.dataset.action = "activate";
         activate.textContent = "Activate";
-        activate.disabled = !!needsClearance || beforeStart || waitingQb;
+        activate.disabled = !!needsClearance || beforeStart || waitingQb || exclusionBlocked;
+        if (exclusionBlocked) {
+          const why = document.createElement("p");
+          why.className = "meta hire-activate-reason";
+          why.textContent = hire.exclusion_message || "Exclusion check is not clear.";
+          card.appendChild(why);
+        }
         if (beforeStart) {
           const why = document.createElement("p");
           why.className = "meta hire-activate-reason";
@@ -1743,8 +1752,14 @@
       card.dataset.offerId = hire.offer_id;
       const title = document.createElement("div");
       title.className = "due-title";
-      title.textContent = (hire.display_name || "Hire") + " — " + (hire.status || "");
+      title.textContent = (hire.test_record ? "TEST RECORD — " : "") + (hire.display_name || "Hire") + " — " + (hire.status || "");
       card.appendChild(title);
+      if (hire.test_record) {
+        const flag = document.createElement("p");
+        flag.className = "exclusion-banner";
+        flag.textContent = "Test record. No email is sent and this person is not on the employee roster.";
+        card.appendChild(flag);
+      }
       exclusionStatus(card, hire);
       card.appendChild(stageBar(hire.stage, hire.owner, data.billing_label));
       const linkedOffer = (data.offers || []).filter(function (offer) { return offer.id === hire.offer_id; })[0];
@@ -1846,12 +1861,19 @@
         const needsClearance = hire.direct_client_access && clearances && clearances.status !== "done" && clearances.status !== "n/a";
         const beforeStart = !!(hire.start_date && hire.start_date > easternToday());
         const waitingQb = !hire.qb_invite_at;
+        const exclusionBlocked = hire.exclusion_allowed === false;
         const activate = document.createElement("button");
         activate.type = "button";
         activate.className = "primary";
         activate.dataset.action = "activate";
         activate.textContent = "Activate";
-        activate.disabled = !!needsClearance || beforeStart || waitingQb;
+        activate.disabled = !!needsClearance || beforeStart || waitingQb || exclusionBlocked;
+        if (exclusionBlocked) {
+          const why = document.createElement("p");
+          why.className = "meta hire-activate-reason";
+          why.textContent = hire.exclusion_message || "Exclusion check is not clear.";
+          card.appendChild(why);
+        }
         if (beforeStart) {
           const why = document.createElement("p");
           why.className = "meta";
