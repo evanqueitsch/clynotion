@@ -245,7 +245,7 @@ def test_confirmed_exclusion_banner_and_manual_medicheck() -> None:
 
 def test_schedule_stays_off_and_settings_do_not_run_a_job() -> None:
     health = client.get("/health").json()
-    assert health["version"] == "0.30.2"
+    assert health["version"] == "0.30.3"
     assert health["exclusion_schedule"] == "off"
     assert health["audit_drive"] == "not_configured"
     assert health["sam"] == "not_configured"
@@ -874,3 +874,73 @@ def test_state_and_license_make_a_different_person_without_changing_the_result()
     assert "http_403" in logged
     assert "not-a-real-key" not in logged
     assert "Person" not in logged
+
+
+def test_open_reviews_survives_a_failed_sam_reread() -> None:
+    """A thin SAM row plus a failed detail fetch must not take down the review page."""
+    import os
+
+    from app.compliance.sources import httpx
+
+    saved = credentialing_store.save_subject(
+        "practice-a",
+        {
+            "name": "Testperson Alpha",
+            "kind": "clinician",
+            "active": True,
+            "license_type": "LCSW",
+            "license_state": "PA",
+        },
+        actor="qa",
+    )
+    person_id = "subject:" + saved["id"]
+    compliance_store.append_screening(
+        "practice-a",
+        {
+            "person_id": person_id,
+            "display_name": "Testperson Alpha",
+            "kind": "employee",
+            "result": "possible_match",
+            "list_name": "sam",
+            "source_mode": "official",
+            "matches": [{"last": "Alpha", "first": "Testperson", "kind": "Prohibition/Restriction"}],
+            "list_records": [
+                {"last": "Alpha", "first": "Testperson", "exclusion_type": "Prohibition/Restriction"}
+            ],
+            "checked_at": "2026-11-25T00:00:00+00:00",
+        },
+    )
+    before_decisions = list(compliance_store.resolutions("practice-a"))
+    previous = os.environ.get("SAM_API_KEY")
+    os.environ["SAM_API_KEY"] = "not-a-real-key"
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("token-should-not-appear")
+
+    original = httpx.get
+    httpx.get = boom
+    try:
+        response = client.get("/compliance/reviews/open", headers=_alice())
+    finally:
+        httpx.get = original
+        if previous is None:
+            os.environ.pop("SAM_API_KEY", None)
+        else:
+            os.environ["SAM_API_KEY"] = previous
+    assert response.status_code == 200, response.text
+    assert "token-should-not-appear" not in response.text
+    assert "not-a-real-key" not in response.text
+    view = response.json()["people"][0]["lists"][0]
+    state = next(item for item in view["rows"] if item["label"] == "State")
+    specialty = next(item for item in view["rows"] if item["label"] == "Specialty / discipline")
+    exclusion = next(item for item in view["rows"] if item["label"] == "Exclusion type")
+    assert state["staff_value"] == "PA (license)"
+    assert "LCSW" in specialty["staff_value"]
+    assert "Prohibition/Restriction" in exclusion["list_value"]
+    assert "request_failed" in view["detail_note"]
+    stored = next(item for item in compliance_store.screenings("practice-a") if item["list_name"] == "sam")
+    assert stored["result"] == "possible_match"
+    assert stored["list_records"][0]["exclusion_type"] == "Prohibition/Restriction"
+    assert compliance_store.resolutions("practice-a") == before_decisions
+    script = open("app/static/compliance.js", encoding="utf-8").read()
+    assert "The rest of this page is still available." in script
