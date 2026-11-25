@@ -405,6 +405,7 @@ async def auth_logout(request: Request) -> Response:
     except Exception:
         reason = "logout"
     from app.access.guard import _user_from_request
+    from app.access.resolve import assigned_role_id
     from app.compliance.audit_chain import note_from_request
 
     user = _user_from_request(request)
@@ -415,6 +416,7 @@ async def auth_logout(request: Request) -> Response:
             object_type="session",
             object_id=user.user_id,
             actor=user.email or user.username,
+            actor_role=assigned_role_id(user),
         )
     response = Response(content='{"ok":true}', media_type="application/json")
     _clear_session_cookie(response)
@@ -428,6 +430,7 @@ def login(body: TokenRequest, request: Request, response: Response) -> TokenResp
             status_code=403,
             detail="password login disabled; use Google Workspace SSO",
         )
+    from app.access.resolve import assigned_role_id
     from app.compliance.audit_chain import note_from_request
     from app.google_oauth import default_practice_id
 
@@ -439,6 +442,7 @@ def login(body: TokenRequest, request: Request, response: Response) -> TokenResp
             object_type="session",
             object_id="password",
             actor=(body.username or "")[:180],
+            actor_role="",
         )
         raise HTTPException(status_code=401, detail="invalid credentials")
     note_from_request(
@@ -447,6 +451,7 @@ def login(body: TokenRequest, request: Request, response: Response) -> TokenResp
         object_type="session",
         object_id=user.user_id,
         actor=user.email or user.username,
+        actor_role=assigned_role_id(user),
     )
     token = issue_token(user)
     # Dev convenience: also set cookie (Secure may be ignored on http://localhost by browsers).
@@ -520,6 +525,7 @@ def google_callback(
         name=identity.name,
     )
     token = issue_token(user)
+    from app.access.resolve import assigned_role_id
     from app.compliance.audit_chain import note_from_request
 
     note_from_request(
@@ -528,6 +534,7 @@ def google_callback(
         object_type="session",
         object_id=user.user_id,
         actor=user.email or user.username,
+        actor_role=assigned_role_id(user),
     )
     response = RedirectResponse("/", status_code=302)
     _set_session_cookie(response, token)

@@ -244,7 +244,7 @@ def test_confirmed_exclusion_banner_and_manual_medicheck() -> None:
 
 def test_schedule_stays_off_and_settings_do_not_run_a_job() -> None:
     health = client.get("/health").json()
-    assert health["version"] == "0.29.0"
+    assert health["version"] == "0.29.1"
     assert health["exclusion_schedule"] == "off"
     assert health["audit_drive"] == "not_configured"
     settings = client.get("/compliance/settings", headers=_alice()).json()
@@ -302,6 +302,107 @@ def test_audit_chain_genesis_verify_and_rejects_edits() -> None:
     broken = verify_chain("practice-a")
     assert broken["ok"] is False
     assert any(item.source == "audit-integrity" for item in due_engine.list_open("practice-a"))
+
+
+def test_test_hire_can_be_screened_without_email_and_activate_stays_blocked() -> None:
+    from app.hiring.mailer import clear_capture_for_tests, set_capture_for_tests
+    from app.hr.time_mail import RecordingMailer
+
+    box = RecordingMailer()
+    set_capture_for_tests(box)
+    try:
+        created = client.post("/compliance/test-hires", headers=_alice())
+        assert created.status_code == 200, created.text
+        body = created.json()
+        assert body["test_record"] is True
+        assert body["display_name"].startswith("TEST ")
+        assert body["exclusion_allowed"] is False
+        assert "leie has not been run" in body["exclusion_message"]
+        assert "sam has not been run" in body["exclusion_message"]
+        assert "medicheck has not been run" in body["exclusion_message"]
+        hire_id = body["id"]
+        assert box.sent == []
+        roster_body = client.get("/compliance/roster", headers=_alice()).json()
+        assert all(item["person_id"] != f"hire:{hire_id}" for item in roster_body["people"])
+        assert any(item["person_id"] == f"hire:{hire_id}" for item in roster_body["test_people"])
+        billing = client.get("/hiring/bootstrap", headers=_alice()).json()
+        assert any(item["id"] == hire_id and item["test_record"] for item in billing["hires"])
+        real = credentialing_store.save_subject(
+            "practice-a",
+            {"name": "Testperson Alpha", "kind": "clinician", "active": True},
+            actor="qa",
+        )
+        denied = client.post(
+            "/compliance/screening/fixture",
+            headers=_alice(),
+            json={
+                "person_id": "subject:" + real["id"],
+                "list_name": "leie",
+                "csv_text": "LASTNAME,FIRSTNAME\nAlpha,Testperson\n",
+            },
+        )
+        assert denied.status_code == 403
+        blocked = client.post(
+            f"/hiring/hires/{hire_id}/activate",
+            headers=_alice(),
+            json={"work_email": "test.record@example.test"},
+        )
+        assert blocked.status_code == 409
+        assert "Exclusion check" in blocked.json()["detail"]
+        run_screening(
+            "practice-a",
+            "qa",
+            person_ids=[f"hire:{hire_id}"],
+            lists=_lists([], sam_ready=False, sam_detail="not run: API key not configured"),
+        )
+        still = client.post(
+            f"/hiring/hires/{hire_id}/activate",
+            headers=_alice(),
+            json={"work_email": "test.record@example.test"},
+        )
+        assert still.status_code == 409
+        assert "sam" in still.json()["detail"]
+        run_screening(
+            "practice-a",
+            "qa",
+            person_ids=[f"hire:{hire_id}"],
+            lists=_lists([], sam_ready=True),
+        )
+        allowed = client.post(
+            f"/hiring/hires/{hire_id}/activate",
+            headers=_alice(),
+            json={"work_email": "test.record@example.test"},
+        )
+        assert allowed.status_code == 200, allowed.text
+        assert allowed.json()["status"] == "active"
+        names = {item["name"] for item in credentialing_store.list_subject_names("practice-a")}
+        assert "TEST Testperson Alpha" not in names
+        assert all(not str(item).startswith("test.record") for item in names)
+        page = open("app/static/hiring.js", encoding="utf-8").read()
+        assert "hire.exclusion_allowed === false" in page
+        html = open("app/static/index.html", encoding="utf-8").read()
+        boot = html.split("async function bootstrapAuth", 1)[1].split("function show(", 1)[0]
+        assert boot.index("else if (wantScreening)") < boot.rindex("await enterHome()")
+        assert boot.index("else if (wantAudit)") < boot.rindex("await enterHome()")
+    finally:
+        clear_capture_for_tests()
+
+
+def test_login_role_verify_actor_and_audit_csv_includes_the_export() -> None:
+    client.post("/auth/token", json={"username": "alice", "password": "alice-pass"})
+    login = next(item for item in compliance_store.audit_entries("practice-a") if item["action"] == "login")
+    assert login["actor_role"] == "admin"
+    verified = client.post("/compliance/audit/verify", headers=_alice())
+    assert verified.status_code == 200, verified.text
+    verify_row = next(item for item in reversed(compliance_store.audit_entries("practice-a")) if item["action"] == "verify_log")
+    assert verify_row["actor"] == "alice@example.com"
+    assert verify_row["actor_role"] == "admin"
+    exported = client.get("/compliance/audit/export.csv", headers=_alice())
+    assert exported.status_code == 200
+    assert ",export," in exported.text
+    settings = client.get("/compliance/settings", headers=_alice()).json()
+    sentence = "Off-box audit copy: " + settings["drive_status"] + ". " + settings["drive_detail"]
+    assert sentence.count("Not configured") == 1
 
 
 def test_exports_are_logged_and_practice_owner_can_read() -> None:

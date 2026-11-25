@@ -1262,8 +1262,8 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.24.4"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.29.0"></script>
-  <script src="/static/compliance.js?v=0.29.0"></script>
+  <script src="/static/hiring.js?v=0.29.1"></script>
+  <script src="/static/compliance.js?v=0.29.1"></script>
   <script>
     const state = {
       token: null,
@@ -2446,6 +2446,8 @@
         const wantTimeSettings = timeRoute.path === "time-settings";
         const wantTimeSelfTest = timeRoute.path === "time-self-test";
         const wantRoles = hash === "#roles";
+        const wantScreening = timeRoute.path === "screening";
+        const wantAudit = timeRoute.path === "audit-log";
         if (window.location.search.includes("auth_error=") || window.location.search.includes("directory")) {
           window.history.replaceState({}, "", wantSupervision ? "/#supervision" : "/");
         }
@@ -2496,6 +2498,10 @@
           await openTimeSelfTest();
         } else if (wantRoles) {
           await openAccess();
+        } else if (wantScreening) {
+          await openScreening();
+        } else if (wantAudit) {
+          await openAuditLog();
         } else {
           await enterHome();
         }

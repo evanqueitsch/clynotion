@@ -220,7 +220,34 @@ def hire_person(practice_id: str, hire_id: str) -> dict[str, str]:
     name = str(values.get("candidate_full_name") or candidate.get("display_name") or "").strip()
     if not name:
         raise ScreeningError(400, "That hire has no name to screen.")
-    return {"person_id": f"hire:{hire_id}", "name": name, "npi": str(values.get("npi") or ""), "kind": "hire"}
+    kind = "test" if hire.get("test_record") else "hire"
+    return {"person_id": f"hire:{hire_id}", "name": name, "npi": str(values.get("npi") or ""), "kind": kind}
+
+
+def test_people(practice_id: str) -> list[dict[str, str]]:
+    """Flagged test hires only. They are not part of the employee roster."""
+    from app.hiring.engine import hiring
+
+    payload = hiring._read()
+    row = hiring._practice(payload, practice_id)
+    found: list[dict[str, str]] = []
+    for hire in (row.get("hires") or {}).values():
+        if not isinstance(hire, dict) or not hire.get("test_record"):
+            continue
+        if hire.get("status") == "archived":
+            continue
+        candidate = (row.get("candidates") or {}).get(hire.get("candidate_id") or "") or {}
+        name = str(candidate.get("display_name") or "").strip()
+        if not name:
+            continue
+        found.append({"person_id": f"hire:{hire.get('id')}", "name": name, "npi": "", "kind": "test"})
+    return found
+
+
+def is_test_person(practice_id: str, person_id: str) -> bool:
+    if not str(person_id or "").startswith("hire:"):
+        return False
+    return any(item["person_id"] == person_id for item in test_people(practice_id))
 
 
 def _search_terms(name: str, npi: str) -> list[str]:
@@ -398,6 +425,8 @@ def screen_fixture(
     """A test list for one person. The result cannot clear a hire."""
     if list_name not in LISTS:
         raise ScreeningError(400, "Unknown list.")
+    if not is_test_person(practice_id, person_id):
+        raise ScreeningError(403, "A test match can only be recorded for a test record.")
     people = _select(practice_id, [person_id])
     person = people[0]
     first, last = _split_name(person["name"])
@@ -620,8 +649,11 @@ def filtered_screenings(
     person_id: str = "",
     month: str = "",
     list_name: str = "",
+    include_test: bool = False,
 ) -> list[dict[str, Any]]:
     rows = [public_screening(item) for item in compliance_store.screenings(practice_id)]
+    if not include_test:
+        rows = [item for item in rows if item.get("kind") != "test"]
     if person_id:
         rows = [item for item in rows if item["person_id"] == person_id]
     if list_name:

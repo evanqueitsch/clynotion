@@ -241,7 +241,12 @@ def note(
         return compliance_store.append_audit(practice_id, body)
 
 
-def verify_chain(practice_id: str) -> dict[str, Any]:
+def verify_chain(
+    practice_id: str,
+    *,
+    actor: str = "clynotion",
+    actor_role: str = "system",
+) -> dict[str, Any]:
     """Walk the chain. A break opens a high-priority Admin home item."""
     entries = compliance_store.audit_entries(practice_id)
     problems: list[str] = []
@@ -276,8 +281,8 @@ def verify_chain(practice_id: str) -> dict[str, Any]:
             action="verify_log",
             object_type="audit_chain",
             object_id=str(record.get("id") or ""),
-            actor="clynotion",
-            actor_role="system",
+            actor=actor or "clynotion",
+            actor_role=actor_role or "system",
             diff={"ok": ok, "checked": len(entries), "problem_count": len(problems)},
         )
     except Exception:

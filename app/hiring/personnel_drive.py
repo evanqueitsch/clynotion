@@ -34,6 +34,10 @@ class DriveClient(Protocol):
 
     def trash(self, file_id: str) -> None: ...
 
+    def is_empty(self, folder_id: str) -> bool: ...
+
+    def provision_folder(self, name: str) -> tuple[str, bool]: ...
+
     def move(self, file_id: str, folder_id: str, name: str = "") -> None: ...
 
 
@@ -196,6 +200,30 @@ class PersonnelDrive:
         )
         if getattr(response, "status_code", 500) not in {200, 201}:
             raise StorageError("drive_move_failed")
+
+    def is_empty(self, folder_id: str) -> bool:
+        response = self._request(
+            "GET",
+            _FILES,
+            params={
+                "supportsAllDrives": "true",
+                "includeItemsFromAllDrives": "true",
+                "corpora": "drive",
+                "driveId": self._drive_id,
+                "q": f"'{folder_id}' in parents and trashed = false",
+                "fields": "files(id)",
+                "pageSize": "1",
+            },
+        )
+        if getattr(response, "status_code", 500) != 200:
+            return False
+        return not (response.json().get("files") or [])
+
+    def provision_folder(self, name: str) -> tuple[str, bool]:
+        found = self._find_folder(name)
+        if found:
+            return found, False
+        return self._create_folder(name), True
 
     def trash(self, file_id: str) -> None:
         response = self._request(

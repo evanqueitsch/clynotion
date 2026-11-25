@@ -126,6 +126,12 @@ class RecordingDrive:
         if file_id in self.files:
             self.files[file_id]["trashed"] = True
 
+    def is_empty(self, folder_id: str) -> bool:
+        for meta in self.files.values():
+            if meta.get("parent") == folder_id and not meta.get("trashed") and not meta.get("folder"):
+                return False
+        return True
+
 
 def test_all_caps_and_lower_names_are_title_cased() -> None:
     caps = "Full legal name: JORDAN EXAMPLE\nFirst name: JORDAN\n"
@@ -528,6 +534,56 @@ def test_deleting_an_offer_with_no_hire_trashes_its_folder() -> None:
         assert removed.status_code == 200, removed.text
         assert folder_id in drive.trashed
         assert folder_id in drive.folders
+        history = client.get("/hiring/bootstrap", headers=_alice()).json()["history"]
+        assert any(item["action"] == "drive_trashed" and item["entity_id"] == offer_id for item in history)
+    finally:
+        clear_personnel_drive_for_tests()
+
+
+def test_a_draft_folder_with_a_file_or_someone_elses_folder_is_not_trashed() -> None:
+    from app.hiring.engine import hiring
+
+    drive = RecordingDrive()
+    set_personnel_drive_for_tests(drive)
+    try:
+        filled = client.post(
+            "/hiring/offers",
+            headers=_alice(),
+            json=_offer(email="filled.sample@example.com", name="Filled Sample"),
+        )
+        assert filled.status_code == 200, filled.text
+        filled_id = filled.json()["id"]
+        folder_id = next(iter(drive.folders))
+        drive.upload(folder_id, "note.txt", b"kept", "text/plain")
+        removed = client.post(
+            f"/hiring/offers/{filled_id}/delete",
+            headers=_alice(),
+            json={"confirm": "Filled Sample"},
+        )
+        assert removed.status_code == 200, removed.text
+        assert folder_id not in drive.trashed
+        shared = client.post(
+            "/hiring/offers",
+            headers=_alice(),
+            json=_offer(email="shared.sample@example.com", name="Shared Sample"),
+        )
+        shared_id = shared.json()["id"]
+        payload = hiring._read()
+        offer = None
+        for row in payload["practices"].values():
+            offer = (row.get("offers") or {}).get(shared_id)
+            if offer:
+                offer["drive_folder_owned"] = False
+                break
+        hiring._save(payload)
+        assert offer is not None
+        kept = client.post(
+            f"/hiring/offers/{shared_id}/delete",
+            headers=_alice(),
+            json={"confirm": "Shared Sample"},
+        )
+        assert kept.status_code == 200, kept.text
+        assert offer["drive_folder_id"] not in drive.trashed
     finally:
         clear_personnel_drive_for_tests()
 

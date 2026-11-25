@@ -98,6 +98,7 @@ _DRIVE_OFFER_KEYS = (
     "drive_signed_file_id",
     "resume_in_onboarding",
     "pdf_in_onboarding",
+    "drive_folder_owned",
 )
 _scheduler_started = False
 
@@ -220,6 +221,21 @@ def _drive_async() -> bool:
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _exclusion_message(row: dict[str, Any], hire: dict[str, Any]) -> str:
+    if str(hire.get("status") or "") != "onboarding":
+        return ""
+    practice_id = str(row.get("_runtime_practice_id") or "")
+    if not practice_id:
+        return ""
+    from app.compliance.screening import activation_block_reason
+
+    return activation_block_reason(practice_id, str(hire.get("id") or ""))
+
+
+def _exclusion_allowed(row: dict[str, Any], hire: dict[str, Any]) -> bool:
+    return not _exclusion_message(row, hire)
 
 
 def _iso(moment: datetime | None = None) -> str:
@@ -888,6 +904,74 @@ class HiringEngine:
         row["candidates"][candidate["id"]] = candidate
         return candidate
 
+    def create_test_hire(self, practice_id: str, actor: str) -> dict[str, Any]:
+        """Admin test hire. No mail, no Drive folder, and no personnel record."""
+        with _lock:
+            payload = self._read()
+            row = self._practice(payload, practice_id)
+            name = "TEST Testperson Alpha"
+            email = f"test.record.{uuid.uuid4().hex[:8]}@example.test"
+            candidate = {
+                "id": _new_id("cand-"),
+                "display_name": name,
+                "personal_email": email,
+                "created_at": _iso(),
+                "archived_at": "",
+                "test_record": True,
+            }
+            row["candidates"][candidate["id"]] = candidate
+            hire_id = _new_id("hire-")
+            start = _today()
+            closed = closed_set(row["settings"].get("business_closed_days") or [])
+            items = build_items(
+                hire_id=hire_id,
+                employment_type="full-time",
+                start=start,
+                accepted=start,
+                direct_client_access=False,
+                needs_supervision=False,
+                has_license=False,
+                closed=closed,
+                new_id=_new_id,
+            )
+            for item in items:
+                row["checklist_items"][item["id"]] = item
+            hire = {
+                "id": hire_id,
+                "candidate_id": candidate["id"],
+                "offer_id": "",
+                "employment_type": "full-time",
+                "position": "Test record",
+                "start_date": start.isoformat(),
+                "supervisor_title": "",
+                "supervisor_name": "",
+                "direct_client_access": False,
+                "created_on": start.isoformat(),
+                "status": "onboarding",
+                "stage": "accepted",
+                "owner": "admin",
+                "packet_form_keys": [],
+                "handoff_at": "",
+                "staff_email_status": "",
+                "candidate_email_status": "",
+                "first_day_worked_for_pay": "",
+                "activated_at": "",
+                "employee_view_id": "",
+                "work_email": "",
+                "folders": {},
+                "drive_subfolders": {},
+                "i9_drive": "pending",
+                "qb_invite_at": _iso(),
+                "qb_invite_by": "test-record",
+                "test_record": True,
+            }
+            row["hires"][hire_id] = hire
+            self._history(row, "hire", hire_id, "test_record", actor, "Test record created")
+            self._save(payload)
+            public = self._hire_public(row, hire)
+            public["test_record"] = True
+            return public
+
     def delete_draft(self, practice_id: str, offer_id: str, actor: str) -> None:
         with _lock:
             payload = self._read()
@@ -944,7 +1028,11 @@ class HiringEngine:
                 row["hires"].pop(hire_id, None)
             self._void_tokens(row, "offer", offer_id, "deleted")
             self._drop_offer_resumes(row, offer)
-            self._trash_drive_ids([str(offer.get("drive_folder_id") or "")])
+            never_sent_draft = offer.get("status") == "draft" and not str(offer.get("sent_at") or "").strip()
+            if never_sent_draft:
+                self._trash_owned_empty_folder(row, offer, actor)
+            else:
+                self._trash_drive_ids([str(offer.get("drive_folder_id") or "")])
             row["offers"].pop(offer_id, None)
             self._history(row, "offer", offer_id, "deleted", actor, "Offer deleted")
             self._save(payload)
@@ -1322,7 +1410,7 @@ class HiringEngine:
             row = self._practice(payload, practice_id)
             hires = []
             for hire in row["hires"].values():
-                if hire.get("status") == "archived" or not self._billing_visible(hire):
+                if hire.get("test_record") or hire.get("status") == "archived" or not self._billing_visible(hire):
                     continue
                 public = self._hire_public(row, hire)
                 public.pop("packet_choices", None)
@@ -1464,8 +1552,14 @@ class HiringEngine:
                         self._history(row, "offer", offer["id"], "drive_renamed", actor, "Personnel folder renamed")
                 folder_id, url = current, folder_link(current)
             else:
-                folder_id, url = client.ensure_folder("", desired)
-                if folder_id:
+                if hasattr(client, "provision_folder"):
+                    folder_id, created = client.provision_folder(desired)
+                    url = folder_link(folder_id)
+                else:
+                    folder_id, url = client.ensure_folder("", desired)
+                    created = True
+                offer["drive_folder_owned"] = bool(offer.get("drive_folder_owned")) or bool(created)
+                if folder_id and created:
                     self._history(row, "offer", offer["id"], "drive_folder", actor, "Personnel folder created")
             offer["drive_folder_id"] = folder_id
             offer["drive_folder_url"] = url
@@ -1593,6 +1687,8 @@ class HiringEngine:
                 live = self._practice(payload, practice_id)
                 live_offer = live["offers"].get(offer_id)
                 if not live_offer:
+                    self._trash_owned_empty_folder(live, offer, actor)
+                    self._save(payload)
                     return
                 for key in _DRIVE_OFFER_KEYS:
                     if key in offer:
@@ -1840,6 +1936,9 @@ class HiringEngine:
             "document_sends": _document_sends(hire),
             "staff_email_status": hire.get("staff_email_status") or "",
             "candidate_email_status": hire.get("candidate_email_status") or "",
+            "test_record": bool(hire.get("test_record")),
+            "exclusion_allowed": _exclusion_allowed(row, hire),
+            "exclusion_message": _exclusion_message(row, hire),
             "welcome": _welcome_text(candidate.get("display_name") or "", hire),
             "items": [self._item_public(row, item) for item in items],
         }
@@ -2814,6 +2913,18 @@ class HiringEngine:
             blocked = activation_block_reason(practice_id, hire_id)
             if blocked:
                 raise HiringError(409, blocked)
+            if hire.get("test_record"):
+                hire["status"] = "active"
+                hire["stage"] = "active"
+                hire["activated_at"] = _iso()
+                for item in row["checklist_items"].values():
+                    if item.get("hire_id") == hire_id and item.get("template_key") == "activate":
+                        item["status"] = "done"
+                        item["done_at"] = _iso()
+                        item["done_by"] = actor
+                self._history(row, "hire", hire_id, "activated", actor, "Test record gate passed")
+                self._save(payload)
+                return self._hire_public(row, hire)
             candidate = row["candidates"][hire["candidate_id"]]
             email = (work_email or candidate.get("personal_email") or "").strip().lower()
             if not EMAIL_RX.match(email):
@@ -2886,6 +2997,30 @@ class HiringEngine:
             due_engine.complete(practice_id=practice_id, source="hiring-qb", source_ref=hire_id + ":qb")
             self._history(row, "hire", hire_id, "deleted", actor, "Hire deleted")
             self._save(payload)
+
+    def _trash_owned_empty_folder(self, row: dict[str, Any], offer: dict[str, Any], actor: str) -> None:
+        """Trash a draft folder only when this offer created it and it has no files."""
+        folder_id = str(offer.get("drive_folder_id") or "")
+        offer_id = str(offer.get("id") or "")
+        if not folder_id or not offer.get("drive_folder_owned"):
+            return
+        from app.hiring.personnel_drive import personnel_client
+
+        client = personnel_client()
+        if client is None or not hasattr(client, "trash"):
+            return
+        empty = True
+        if hasattr(client, "is_empty"):
+            try:
+                empty = bool(client.is_empty(folder_id))
+            except Exception:
+                empty = False
+        if not empty:
+            self._history(row, "offer", offer_id, "drive_kept", actor, "Personnel folder kept because it is not empty")
+            return
+        self._trash_drive_ids([folder_id])
+        offer["drive_status"] = "trashed"
+        self._history(row, "offer", offer_id, "drive_trashed", actor, "Empty personnel folder trashed")
 
     def _trash_drive_ids(self, file_ids: list[str]) -> None:
         from app.hiring.personnel_drive import personnel_client
