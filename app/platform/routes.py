@@ -122,6 +122,13 @@ def _build_pulse(practice_id: str) -> PulseOut:
         except ValueError:
             age_days = None
     headcount = len(clinician_store.list_for_practice(practice_id))
+    screening_count = 0
+    try:
+        from app.compliance.screening import roster as screening_roster
+
+        screening_count = len(screening_roster(practice_id))
+    except Exception:
+        screening_count = 0
     access = intake_store.access_performance(practice_id)
     elig = eligibility_store.list_for_practice(practice_id)
     elig_30 = 0
@@ -138,10 +145,26 @@ def _build_pulse(practice_id: str) -> PulseOut:
         overdue_count=len(bands["overdue"]),
         unsigned_aging_rows=unsigned_rows,
         open_headcount=headcount,
+        screening_roster=screening_count,
         documentation_ingest_age_days=age_days,
         access_pct_met=access.get("pct_met"),
         eligibility_checks_30d=elig_30,
     )
+
+
+def _attach_screening_count(units: list[dict], user: CurrentUser) -> None:
+    """Label the exclusion card with the screening roster, not the clinician list."""
+    from app.compliance.screening import roster as screening_roster
+
+    try:
+        count = len(screening_roster(user.practice_id))
+    except Exception:
+        return
+    for unit in units:
+        for tool in unit.get("tools") or []:
+            if tool.get("id") == "exclusion_checks":
+                tool["count"] = count
+                tool["count_label"] = "Screening roster"
 
 
 def _attach_denial_count(units: list[dict], user: CurrentUser) -> None:
@@ -349,6 +372,7 @@ def _home_payload(user: CurrentUser) -> HomeOut:
             full_catalog=False,
         )
     units = _visible_units(user)
+    _attach_screening_count(units, user)
     _attach_denial_count(units, user)
     tools = _open_tools(units)
     if not sees_every_module(user):

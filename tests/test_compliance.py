@@ -244,7 +244,7 @@ def test_confirmed_exclusion_banner_and_manual_medicheck() -> None:
 
 def test_schedule_stays_off_and_settings_do_not_run_a_job() -> None:
     health = client.get("/health").json()
-    assert health["version"] == "0.29.3"
+    assert health["version"] == "0.29.4"
     assert health["exclusion_schedule"] == "off"
     assert health["audit_drive"] == "not_configured"
     assert health["sam"] == "not_configured"
@@ -460,7 +460,20 @@ def test_record_test_match_opens_a_home_item_and_delete_clears_it() -> None:
     after_items = [item for band in ("overdue", "this_week") for item in after["bands"][band]]
     assert all(item["source_ref"] != matched.json()["id"] for item in after_items)
     kept = client.get("/compliance/screening?include_test=1", headers=_alice()).json()["results"]
-    assert any(item["person_id"] == f"hire:{hire_id}" and item["result"] == "possible_match" for item in kept)
+    kept_row = next(item for item in kept if item["person_id"] == f"hire:{hire_id}" and item["result"] == "possible_match")
+    assert kept_row["detail"] == "TEST possible match"
+    stored = next(item for item in compliance_store.screenings("practice-a") if item["id"] == matched.json()["id"])
+    assert stored["result"] == "possible_match"
+    assert stored["detail"] == "TEST possible match"
+    closed = [
+        item
+        for item in compliance_store.resolutions("practice-a")
+        if item.get("result_id") == matched.json()["id"]
+    ]
+    assert closed[-1]["decision"] == "closed_test_record"
+    close_rows = [item for item in compliance_store.audit_entries("practice-a") if item["action"] == "close_test_match"]
+    assert close_rows[-1]["diff"] == {"closed": 1}
+    assert "TEST possible match" not in str(close_rows[-1]["diff"])
     deleted = [
         item
         for item in compliance_store.audit_entries("practice-a")
@@ -502,3 +515,85 @@ def test_exports_are_logged_and_practice_owner_can_read() -> None:
     assert viewed.json()["read_only"] is True
     assert client.post("/compliance/audit/verify", headers=owner).status_code == 403
     assert client.get("/compliance/screening", headers=owner).status_code == 403
+
+
+def test_orphaned_test_match_closes_on_history_and_leaves_a_real_decision() -> None:
+    from app.hiring.engine import hiring
+
+    credentialing_store.save_subject(
+        "practice-a",
+        {"name": "Testperson Alpha", "kind": "clinician", "active": True},
+        actor="qa",
+    )
+    person_id = next(item["person_id"] for item in roster("practice-a") if item["name"] == "Testperson Alpha")
+    real = run_screening(
+        "practice-a",
+        "qa",
+        person_ids=[person_id],
+        lists=_lists([ListedPerson(last="Alpha", first="Testperson", kind="1128a1")]),
+    )
+    real_id = next(item["id"] for item in real["results"] if item["result"] == "possible_match")
+    resolved = client.post(
+        f"/compliance/reviews/{real_id}",
+        headers=_alice(),
+        json={"decision": "not_the_same_person", "note": "Synthetic names only"},
+    )
+    assert resolved.status_code == 200, resolved.text
+    created = client.post("/compliance/test-hires", headers=_alice())
+    hire_id = created.json()["id"]
+    matched = client.post(
+        "/compliance/screening/fixture",
+        headers=_alice(),
+        json={"person_id": f"hire:{hire_id}"},
+    )
+    assert matched.status_code == 200, matched.text
+    payload = hiring._read()
+    hiring._practice(payload, "practice-a")["hires"].pop(hire_id)
+    hiring._save(payload)
+    listed = client.get("/compliance/screening?include_test=1", headers=_alice()).json()
+    closed = [item for item in listed["resolutions"] if item.get("result_id") == matched.json()["id"]]
+    assert closed[-1]["decision"] == "closed_test_record"
+    again = client.get("/compliance/screening?include_test=1", headers=_alice()).json()
+    assert sum(1 for item in again["resolutions"] if item.get("result_id") == matched.json()["id"]) == 1
+    real_decisions = [item for item in again["resolutions"] if item.get("result_id") == real_id]
+    assert real_decisions[-1]["decision"] == "not_the_same_person"
+    assert real_decisions[-1]["note"] == "Synthetic names only"
+    real_row = next(item for item in compliance_store.screenings("practice-a") if item["id"] == real_id)
+    assert real_row["result"] == "possible_match"
+
+
+def test_roster_run_writes_one_count_summary() -> None:
+    credentialing_store.save_subject(
+        "practice-a",
+        {"name": "Testperson Alpha", "kind": "clinician", "active": True},
+        actor="qa",
+    )
+    compliance_store.save_outside_supervisor("practice-a", {"name": "Outside Beta", "paid": True, "active": True})
+    people = roster("practice-a")
+    run_screening("practice-a", "qa", confirm="SCREEN ROSTER", lists=_lists([]))
+    summaries = [item for item in compliance_store.audit_entries("practice-a") if item["action"] == "screen_roster"]
+    assert summaries
+    diff = summaries[-1]["diff"]
+    assert set(diff) == {"people", "results", "clear", "possible_match", "not_run"}
+    assert diff["people"] == len(people)
+    assert diff["results"] == len(people) * 3
+    assert diff["clear"] == len(people) * 3
+    assert "Testperson" not in str(diff)
+    assert "Outside" not in str(diff)
+    person_id = next(item["person_id"] for item in people if item["name"] == "Testperson Alpha")
+    run_screening("practice-a", "qa", person_ids=[person_id], lists=_lists([]))
+    again = [item for item in compliance_store.audit_entries("practice-a") if item["action"] == "screen_roster"]
+    assert len(again) == len(summaries)
+    body = client.get("/compliance/roster", headers=_alice()).json()
+    assert body["counts"]["total"] == len(people)
+    assert body["counts"]["employee"] >= 1
+    assert body["counts"]["outside_supervisor"] >= 1
+    home = client.get("/home", headers=_alice()).json()
+    assert home["pulse"]["screening_roster"] == body["counts"]["total"]
+    page = open("app/static/index.html", encoding="utf-8").read()
+    assert '["Clinicians", pulse.open_headcount]' in page
+    assert '["Screening roster", pulse.screening_roster]' in page
+    assert '["Roster", pulse.open_headcount]' not in page
+    script = open("app/static/compliance.js", encoding="utf-8").read()
+    assert "included supervision clinicians" in script
+    assert "Closed — test hire deleted" in script
