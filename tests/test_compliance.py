@@ -245,7 +245,7 @@ def test_confirmed_exclusion_banner_and_manual_medicheck() -> None:
 
 def test_schedule_stays_off_and_settings_do_not_run_a_job() -> None:
     health = client.get("/health").json()
-    assert health["version"] == "0.30.6"
+    assert health["version"] == "0.30.7"
     assert health["exclusion_schedule"] == "off"
     assert health["audit_drive"] == "not_configured"
     assert health["sam"] == "not_configured"
@@ -752,6 +752,7 @@ def test_state_and_license_make_a_different_person_without_changing_the_result()
         lists=_lists([listed], sam_ready=True),
     )
     packet = review_packets("practice-a")[0]
+    assert packet["consequences"]["not_the_same_person"] == "Activate stays blocked until every list hit for this person is cleared."
     assert "Testperson" not in packet["review_id"]
     assert packet["review_id"] == review_token("practice-a", person_id)
     view = packet["lists"][0]

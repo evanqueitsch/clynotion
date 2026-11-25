@@ -930,7 +930,7 @@ def review_packets(practice_id: str) -> list[dict[str, Any]]:
                 "summary": read["summary"],
                 "lists": rendered,
                 "consequences": {
-                    "not_the_same_person": "Activate stays blocked until each one is clear.",
+                    "not_the_same_person": "Activate stays blocked until every list hit for this person is cleared.",
                     "confirmed_exclusion": "This person cannot bill Medicaid or Medicare. Activate stays blocked.",
                     "need_more_info": "Keeps this review open. Nothing is cleared and nothing is confirmed.",
                 },
