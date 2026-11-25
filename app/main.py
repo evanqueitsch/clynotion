@@ -359,7 +359,15 @@ def health() -> dict[str, Any]:
         "mode": provider_modes()["mode"],
         "exclusion_schedule": "on" if flags.get("monthly") else "off",
         "audit_drive": "configured" if flags.get("drive") else "not_configured",
+        "sam": _sam_health(),
     }
+
+
+def _sam_health() -> str:
+    """Whether a SAM key is present. The key itself is never returned."""
+    from app.compliance.sources import sam_configured
+
+    return "configured" if sam_configured() else "not_configured"
 
 
 @app.get("/auth/config", response_model=AuthConfigResponse)

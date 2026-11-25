@@ -171,9 +171,10 @@ def test_health_reports_mode_without_internal_paths(client: TestClient) -> None:
     body = r.json()
     assert body["status"] == "ok"
     assert body["mode"] == "mock"
-    assert set(body) == {"status", "version", "auth", "mode", "exclusion_schedule", "audit_drive"}
+    assert set(body) == {"status", "version", "auth", "mode", "exclusion_schedule", "audit_drive", "sam"}
     assert body["exclusion_schedule"] == "off"
     assert body["audit_drive"] == "not_configured"
+    assert body["sam"] == "not_configured"
     text = r.text.casefold()
     assert "phi_path" not in body
     assert "deepgram" not in text

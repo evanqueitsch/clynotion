@@ -945,7 +945,7 @@ class HiringEngine:
                 new_id=_new_id,
             )
             for item in items:
-                if item.get("template_key") == "exclusion_screening":
+                if item.get("template_key") in {"exclusion_screening", "clearances"}:
                     item["due_date"] = start.isoformat()
                 row["checklist_items"][item["id"]] = item
             hire = {
