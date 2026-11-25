@@ -656,6 +656,7 @@
     .cg-payer-row .cg-link-pick { width: auto; margin: 0; flex: 0 0 auto; }
     .cg-payer-name { flex: 1 1 auto; }
     details > summary { cursor: pointer; margin: 0.6rem 0; }
+    .exclusion-banner { background: #f3d0d0; color: #8b2e2e; font-weight: 700; padding: 0.65rem 0.8rem; border-radius: 8px; margin: 0.4rem 0; }
   </style>
 </head>
 <body>
@@ -852,6 +853,26 @@
       <div id="hiring-root"></div>
     </section>
 
+    <section id="screening-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">Exclusion screening</h2>
+        <button class="ghost" id="btn-screening-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <p class="meta">LEIE, SAM, and PA Medicheck. Results are kept. The monthly run stays off until you turn it on in Settings.</p>
+      <p class="status" id="screening-status"></p>
+      <div id="screening-root"></div>
+    </section>
+
+    <section id="audit-panel" class="panel hidden">
+      <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
+        <h2 style="margin:0;">Audit log</h2>
+        <button class="ghost" id="btn-audit-home" type="button" style="padding:0.45rem 0.9rem;font-size:0.85rem;">Clynotion home</button>
+      </div>
+      <p class="meta">Append-only. Times are shown in Eastern. Stored in UTC.</p>
+      <p class="status" id="audit-status"></p>
+      <div id="audit-root"></div>
+    </section>
+
     <section id="settings-panel" class="panel hidden">
       <div class="session-head" style="display:flex;align-items:center;justify-content:space-between;gap:0.75rem;margin-bottom:0.85rem;">
         <h2 style="margin:0;">Settings</h2>
@@ -863,6 +884,7 @@
       <div id="settings-phi"></div>
       <div id="settings-retention"></div>
       <div id="settings-audit"></div>
+      <div id="settings-compliance"></div>
     </section>
 
     <section id="billing-panel" class="panel hidden">
@@ -1240,7 +1262,8 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.24.4"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.28.3"></script>
+  <script src="/static/hiring.js?v=0.29.0"></script>
+  <script src="/static/compliance.js?v=0.29.0"></script>
   <script>
     const state = {
       token: null,
@@ -1439,7 +1462,7 @@
     async function doLogout(reason) {
       clearIdle();
       try {
-        await api("/auth/logout", { method: "POST" });
+        await api("/auth/logout", { method: "POST", json: { reason: reason && String(reason).indexOf("inactivity") >= 0 ? "idle" : "logout" } });
       } catch {
         /* ignore */
       }
@@ -2483,7 +2506,7 @@
     }
 
     function show(panel) {
-      ["auth-panel", "no-access-panel", "access-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel", "credentialing-panel", "billing-panel", "denials-panel", "settings-panel", "hiring-panel", "employee-panel", "employees-panel", "time-panel", "time-admin-panel", "time-settings-panel", "time-self-test-panel"].forEach((id) => {
+      ["auth-panel", "no-access-panel", "access-panel", "home-panel", "capture-panel", "review-panel", "comply-panel", "ingest-panel", "intake-panel", "eligibility-panel", "onboarding-panel", "credentialing-panel", "billing-panel", "denials-panel", "settings-panel", "hiring-panel", "screening-panel", "audit-panel", "employee-panel", "employees-panel", "time-panel", "time-admin-panel", "time-settings-panel", "time-self-test-panel"].forEach((id) => {
         $(id).classList.toggle("hidden", id !== panel);
       });
       document.body.classList.toggle("credentialing-open", panel === "credentialing-panel");
@@ -2539,6 +2562,8 @@
       if (href.includes("#billing")) return window.openBilling();
       if (href.includes("#denials")) return window.openDenials();
       if (href.includes("#settings")) return window.openSettings();
+      if (href.includes("#screening")) return openScreening();
+      if (href.includes("#audit-log")) return openAuditLog();
       if (href.includes("#hiring")) return openHiring(href);
       if (href.includes("#employees")) return window.openEmployees();
       if (href.includes("#employee")) return window.openEmployee();
@@ -4194,6 +4219,24 @@
       show("capture-panel");
     };
 
+    async function openScreening() {
+      if ((window.location.hash || "") !== "#screening" && (window.location.hash || "").indexOf("#screening?") !== 0) {
+        window.location.hash = "#screening";
+        return;
+      }
+      show("screening-panel");
+      if (window.clyCompliance) await window.clyCompliance.openScreening();
+    }
+
+    async function openAuditLog() {
+      if ((window.location.hash || "") !== "#audit-log") {
+        window.location.hash = "#audit-log";
+        return;
+      }
+      show("audit-panel");
+      if (window.clyCompliance) await window.clyCompliance.openAudit();
+    }
+
     async function openHiring(href) {
       const source = href || window.location.hash || "";
       const raw = String(source).replace(/^.*#\/?/, "");
@@ -4252,6 +4295,8 @@
       else if (route.path === "settings") openSettings();
       else if (route.path === "employee") openEmployee();
       else if (route.path === "employees") openEmployees();
+      else if (route.path === "screening") openScreening();
+      else if (route.path === "audit-log") openAuditLog();
       else if (route.path === "hiring") openHiring();
       else if (route.path === "onboarding") openOnboarding();
       else if (route.path === "supervision" || route.path === "clynotion") openSupervision();

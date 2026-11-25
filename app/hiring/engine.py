@@ -373,9 +373,13 @@ class HiringEngine:
         if not _file_mode():
             self._memory = payload
             return
+        cleaned = json.loads(json.dumps(payload))
+        for practice_row in (cleaned.get("practices") or {}).values():
+            if isinstance(practice_row, dict):
+                practice_row.pop("_runtime_practice_id", None)
         path = _path()
         path.parent.mkdir(parents=True, exist_ok=True)
-        data = encrypt_utf8(json.dumps(payload))
+        data = encrypt_utf8(json.dumps(cleaned))
         tmp = path.with_name(path.name + ".tmp")
         fd = os.open(tmp, os.O_CREAT | os.O_TRUNC | os.O_WRONLY, 0o600)
         try:
@@ -411,6 +415,7 @@ class HiringEngine:
         ):
             row.setdefault(bucket, {})
         row.setdefault("history", [])
+        row["_runtime_practice_id"] = practice_id
         row.setdefault("mail_queue", [])
         self._ensure_forms(row)
         return row
@@ -465,6 +470,18 @@ class HiringEngine:
                 "summary": summary,
             }
         )
+        from app.compliance.audit_chain import note_from_request
+        from app.compliance.masking import scrub_text
+
+        note_from_request(
+            str(row.get("_runtime_practice_id") or ""),
+            action=action,
+            object_type=entity,
+            object_id=entity_id,
+            actor=actor,
+            ip=ip,
+            diff={"summary": scrub_text(summary)},
+        )
 
     def _expire_row(self, row: dict[str, Any]) -> int:
         count = 0
@@ -502,6 +519,7 @@ class HiringEngine:
             for practice_id, row in (payload.get("practices") or {}).items():
                 if not isinstance(row, dict) or "offers" not in row:
                     continue
+                row["_runtime_practice_id"] = str(practice_id)
                 expired += self._expire_row(row)
                 reminded += self._remind(row, str(practice_id))
             self._save(payload)
@@ -1911,6 +1929,12 @@ class HiringEngine:
                 raise HiringError(404, "Checklist item not found.")
             if key == "activate":
                 raise HiringError(409, "Activation marks this item done.")
+            if key == "exclusion_screening" and status in {"done", "n/a"}:
+                from app.compliance.screening import activation_block_reason
+
+                blocked = activation_block_reason(practice_id, hire_id)
+                if blocked:
+                    raise HiringError(409, blocked)
             if status == "done" and key in BLOCKED_DONE:
                 raise HiringError(409, BLOCKED_DONE[key])
             if status == "done" and key == "supervision_agreement" and not row["settings"].get("supervision_agreement_approved"):
@@ -2785,6 +2809,11 @@ class HiringEngine:
                     raise HiringError(409, "PA clearances have to be marked received before activation.")
             if not str(hire.get("qb_invite_at") or "").strip():
                 raise HiringError(409, "Waiting on Admin: QuickBooks invite")
+            from app.compliance.screening import activation_block_reason
+
+            blocked = activation_block_reason(practice_id, hire_id)
+            if blocked:
+                raise HiringError(409, blocked)
             candidate = row["candidates"][hire["candidate_id"]]
             email = (work_email or candidate.get("personal_email") or "").strip().lower()
             if not EMAIL_RX.match(email):

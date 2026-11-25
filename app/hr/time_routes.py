@@ -273,4 +273,12 @@ def time_tick(request: Request) -> dict:
         hiring.tick()
     except Exception:
         pass
+    try:
+        from app.compliance.schedule import run_scheduled
+
+        # No-op while exclusion screening, the integrity check, and the Drive
+        # folder are left off. This does not send mail.
+        run_scheduled()
+    except Exception:
+        pass
     return result

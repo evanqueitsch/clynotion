@@ -148,7 +148,12 @@ class ConnectedMailboxMailer:
 
         if not message.practice_id:
             return MailResult(status="failed", detail="mail_practice_missing")
-        return deliver_self_test_message(message.practice_id, message)
+        result = deliver_self_test_message(message.practice_id, message)
+        if result.status == "sent":
+            from app.hiring.mailer import _note_email
+
+            _note_email(message.practice_id, message.to, "time_entry")
+        return result
 
 
 def build_mailer() -> Optional[MailSender]:
@@ -250,6 +255,9 @@ class GmailSender:
                     provider_id = safe_provider_id(str(body.get("id") or ""))
             except Exception:
                 provider_id = ""
+            from app.hiring.mailer import _note_email
+
+            _note_email(message.practice_id, message.to, "time_entry")
             return MailResult(status="sent", detail="gmail_accepted", provider_id=provider_id)
         return MailResult(status="failed", detail=f"gmail_http_{response.status_code}")
 

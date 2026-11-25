@@ -18,6 +18,7 @@ from app.access.guard import access_middleware
 from app.access.routes import router as access_router
 from app.billing.routes import router as billing_router
 from app.denials.routes import router as denials_router
+from app.compliance.routes import router as compliance_router
 from app.hiring.routes import router as hiring_router
 from app.credentialing.routes import router as credentialing_router
 from app.employees.routes import router as employee_router
@@ -104,7 +105,42 @@ app.include_router(employee_router)
 app.include_router(billing_router)
 app.include_router(denials_router)
 app.include_router(hiring_router)
+app.include_router(compliance_router)
 app.middleware("http")(access_middleware)
+
+
+async def _audit_context_middleware(request: Request, call_next):
+    from app.access.guard import _user_from_request
+    from app.access.resolve import assigned_role_id
+    from app.compliance.audit_chain import AuditContext, reset_audit_context, set_audit_context
+
+    user = _user_from_request(request)
+    role = ""
+    actor = ""
+    practice = ""
+    if user is not None:
+        actor = user.email or user.username
+        practice = user.practice_id
+        try:
+            role = assigned_role_id(user)
+        except Exception:
+            role = ""
+    token = set_audit_context(
+        AuditContext(
+            actor=actor,
+            role=role,
+            practice_id=practice,
+            ip=request.client.host if request.client else "",
+            user_agent=request.headers.get("user-agent", ""),
+        )
+    )
+    try:
+        return await call_next(request)
+    finally:
+        reset_audit_context(token)
+
+
+app.middleware("http")(_audit_context_middleware)
 
 
 @app.on_event("startup")
@@ -309,11 +345,20 @@ def _parse_present_form(present_json: Optional[str]) -> list[PresentMember]:
 @app.get("/health")
 def health() -> dict[str, Any]:
     """Uptime check. No vendor names, data paths, or PHI-path details."""
+    from app.compliance.store import compliance_store
+
+    flags = {"monthly": False, "drive": False}
+    try:
+        flags = compliance_store.any_enabled()
+    except Exception:
+        flags = {"monthly": False, "drive": False}
     return {
         "status": "ok",
         "version": APP_VERSION,
         "auth": auth_mode(),
         "mode": provider_modes()["mode"],
+        "exclusion_schedule": "on" if flags.get("monthly") else "off",
+        "audit_drive": "configured" if flags.get("drive") else "not_configured",
     }
 
 
@@ -351,22 +396,58 @@ def auth_me(user: CurrentUser) -> MeResponse:
 
 
 @app.post("/auth/logout")
-def auth_logout() -> Response:
+async def auth_logout(request: Request) -> Response:
+    reason = "logout"
+    try:
+        payload = await request.json()
+        if isinstance(payload, dict) and payload.get("reason") == "idle":
+            reason = "session_expired"
+    except Exception:
+        reason = "logout"
+    from app.access.guard import _user_from_request
+    from app.compliance.audit_chain import note_from_request
+
+    user = _user_from_request(request)
+    if user is not None:
+        note_from_request(
+            user.practice_id,
+            action=reason,
+            object_type="session",
+            object_id=user.user_id,
+            actor=user.email or user.username,
+        )
     response = Response(content='{"ok":true}', media_type="application/json")
     _clear_session_cookie(response)
     return response
 
 
 @app.post("/auth/token", response_model=TokenResponse)
-def login(body: TokenRequest, response: Response) -> TokenResponse:
+def login(body: TokenRequest, request: Request, response: Response) -> TokenResponse:
     if not password_login_enabled():
         raise HTTPException(
             status_code=403,
             detail="password login disabled; use Google Workspace SSO",
         )
+    from app.compliance.audit_chain import note_from_request
+    from app.google_oauth import default_practice_id
+
     user = user_store.authenticate(body.username, body.password)
     if user is None:
+        note_from_request(
+            default_practice_id(),
+            action="login_failed",
+            object_type="session",
+            object_id="password",
+            actor=(body.username or "")[:180],
+        )
         raise HTTPException(status_code=401, detail="invalid credentials")
+    note_from_request(
+        user.practice_id,
+        action="login",
+        object_type="session",
+        object_id=user.user_id,
+        actor=user.email or user.username,
+    )
     token = issue_token(user)
     # Dev convenience: also set cookie (Secure may be ignored on http://localhost by browsers).
     response.set_cookie(
@@ -439,6 +520,15 @@ def google_callback(
         name=identity.name,
     )
     token = issue_token(user)
+    from app.compliance.audit_chain import note_from_request
+
+    note_from_request(
+        user.practice_id,
+        action="login",
+        object_type="session",
+        object_id=user.user_id,
+        actor=user.email or user.username,
+    )
     response = RedirectResponse("/", status_code=302)
     _set_session_cookie(response, token)
     response.delete_cookie(key=_OAUTH_STATE_COOKIE, path="/")

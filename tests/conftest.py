@@ -27,6 +27,9 @@ os.environ.pop("ATTUNE_EMPLOYEES_ENCRYPTION_KEY", None)
 os.environ["ATTUNE_DENIALS_PERSISTENCE"] = "memory"
 os.environ.pop("DENIALS_FERNET_KEY", None)
 os.environ["ATTUNE_ONBOARDING_PERSISTENCE"] = "memory"
+os.environ["ATTUNE_COMPLIANCE_PERSISTENCE"] = "memory"
+os.environ.pop("SAM_API_KEY", None)
+os.environ.pop("ATTUNE_COMPLIANCE_DATA_PATH", None)
 os.environ["ATTUNE_ONBOARDING_FILES_PATH"] = tempfile.mkdtemp(prefix="clynotion-hiring-")
 os.environ["ATTUNE_OFFER_PDF"] = "stub"
 os.environ["ATTUNE_HIRING_SCHEDULER"] = "off"
@@ -81,6 +84,9 @@ def _reset_clinician_store():
             "tool:time_entry",
         ],
     )
+    from app.compliance.store import compliance_store
+
+    compliance_store.reset()
     set_clock(None)
     clear_mailer_for_tests()
     yield
@@ -97,6 +103,9 @@ def _reset_clinician_store():
     from app.hiring.personnel_drive import clear_personnel_drive_for_tests
 
     clear_personnel_drive_for_tests()
+    from app.compliance.store import compliance_store
+
+    compliance_store.reset()
     set_clock(None)
     clear_mailer_for_tests()
     clinician_store.reset()
