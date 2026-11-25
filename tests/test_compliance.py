@@ -129,8 +129,9 @@ def test_screening_is_append_only_and_sam_missing_is_not_a_pass() -> None:
     assert stored[0]["result"] == "clear"
     assert any(item["result"] == "possible_match" and item["list_name"] == "leie" for item in second["results"])
     home = [item for item in due_engine.list_open("practice-a") if item.source == "exclusion-review"]
-    assert home
-    assert home[0].title == "Review a possible exclusion match"
+    assert len(home) == 1
+    assert home[0].source_ref == person_id
+    assert home[0].title.startswith("Possible exclusion match:")
 
 
 def test_match_review_home_task_and_activate_gate() -> None:
@@ -244,7 +245,7 @@ def test_confirmed_exclusion_banner_and_manual_medicheck() -> None:
 
 def test_schedule_stays_off_and_settings_do_not_run_a_job() -> None:
     health = client.get("/health").json()
-    assert health["version"] == "0.29.4"
+    assert health["version"] == "0.30.0"
     assert health["exclusion_schedule"] == "off"
     assert health["audit_drive"] == "not_configured"
     assert health["sam"] == "not_configured"
@@ -441,7 +442,9 @@ def test_record_test_match_opens_a_home_item_and_delete_clears_it() -> None:
     assert matched.json()["created_on"] == hire["created_on"]
     home = client.get("/home", headers=_alice()).json()
     open_items = [item for band in ("overdue", "this_week") for item in home["bands"][band]]
-    assert any(item["source_ref"] == matched.json()["id"] for item in open_items)
+    refs = {item.get("source_ref") for item in open_items if item.get("source") == "exclusion-review"}
+    assert matched.json()["id"] not in refs
+    assert f"hire:{hire_id}" not in refs
     blocked = client.post(
         f"/hiring/hires/{hire_id}/activate",
         headers=_alice(),
@@ -597,3 +600,102 @@ def test_roster_run_writes_one_count_summary() -> None:
     script = open("app/static/compliance.js", encoding="utf-8").read()
     assert "included supervision clinicians" in script
     assert "Closed — test hire deleted" in script
+    assert "QA tools (test records only)" in script
+    assert "Fake records used only to test this feature; not real staff." in script
+
+
+def test_review_groups_lists_and_compares_without_changing_a_decision() -> None:
+    from app.compliance.review import backfill_list_records, review_packets
+
+    saved = credentialing_store.save_subject(
+        "practice-a",
+        {
+            "name": "Testperson Alpha",
+            "kind": "clinician",
+            "active": True,
+            "npi": "1234567893",
+            "license_state": "PA",
+            "service_address": "1 Example St, Harrisburg, PA 17101",
+            "date_of_birth": "1980-01-02",
+        },
+        actor="qa",
+    )
+    person_id = "subject:" + saved["id"]
+    leie = ListedPerson(
+        last="Alpha",
+        first="Testperson",
+        npi="1999999999",
+        kind="1128a1",
+        state="OH",
+        city="Columbus",
+        dob="1970-05-05",
+        address="9 Other St",
+        excl_date="2020-01-01",
+    )
+    sam = ListedPerson(last="Alpha", first="Testperson", kind="Ineligible", uei="UEI123456789", record_status="Active")
+    lists = _lists([leie])
+    lists["sam"] = ListFile(name="sam", updated_on="2026-11-25", file_sha256="sam", rows=[sam])
+    run_screening("practice-a", "qa", person_ids=[person_id], lists=lists)
+    home = [item for item in due_engine.list_open("practice-a") if item.source == "exclusion-review"]
+    assert len(home) == 1
+    assert home[0].source_ref == person_id
+    stored = [item for item in compliance_store.screenings("practice-a") if item["result"] == "possible_match"]
+    assert len(stored) == 2
+    target = next(item for item in stored if item["list_name"] == "leie")
+    status_before = target["result"]
+    decision_before = [
+        item for item in compliance_store.resolutions("practice-a") if item.get("result_id") == target["id"]
+    ]
+    live = next(
+        item
+        for item in compliance_store._read()["practices"]["practice-a"]["screenings"]
+        if item["id"] == target["id"]
+    )
+    del live["list_records"]
+    attached = backfill_list_records("practice-a", lists=lists)
+    assert attached == 1
+    refreshed = next(item for item in compliance_store.screenings("practice-a") if item["id"] == target["id"])
+    assert refreshed["result"] == status_before == "possible_match"
+    assert refreshed["list_records"][0]["npi"] == "1999999999"
+    assert refreshed["list_records"][0]["dob"] == "1970-05-05"
+    assert decision_before == [
+        item for item in compliance_store.resolutions("practice-a") if item.get("result_id") == target["id"]
+    ]
+    packet = review_packets("practice-a")
+    assert len(packet) == 1
+    assert packet[0]["header"].startswith("Possible exclusion match: Testperson Alpha may match an entry on the OIG LEIE and SAM.gov")
+    leie_view = next(item for item in packet[0]["lists"] if item["list_name"] == "leie")
+    assert leie_view["why"] == "Last name and first name only."
+    assert leie_view["likelihood"] == "Likely different person"
+    npi_row = next(item for item in leie_view["rows"] if item["label"] == "NPI")
+    assert npi_row["mark"] == "Different"
+    name_row = next(item for item in leie_view["rows"] if item["label"] == "Full name")
+    assert name_row["mark"] == "Match"
+    assert any(link["label"] == "OIG LEIE online search" for link in leie_view["links"])
+    assert "Social Security number" in leie_view["ssn_note"]
+    held = client.post(
+        f"/compliance/reviews/{target['id']}",
+        headers=_alice(),
+        json={"decision": "need_more_info", "note": "Need a date of birth from the file"},
+    )
+    assert held.status_code == 200, held.text
+    still = [item for item in due_engine.list_open("practice-a") if item.source == "exclusion-review"]
+    assert any(item.source_ref == person_id for item in still)
+    logged = [item for item in compliance_store.audit_entries("practice-a") if item["action"] == "resolve_exclusion"]
+    assert logged[-1]["diff"]["decision"] == "need_more_info"
+    assert "Testperson" not in str(logged[-1]["diff"])
+    cleared = client.post(
+        f"/compliance/reviews/{target['id']}",
+        headers=_alice(),
+        json={"decision": "not_the_same_person", "note": "NPI differs"},
+    )
+    assert cleared.status_code == 200, cleared.text
+    sam_id = next(item["id"] for item in stored if item["list_name"] == "sam")
+    client.post(
+        f"/compliance/reviews/{sam_id}",
+        headers=_alice(),
+        json={"decision": "not_the_same_person", "note": "NPI differs"},
+    )
+    assert not any(
+        item.source_ref == person_id for item in due_engine.list_open("practice-a") if item.source == "exclusion-review"
+    )

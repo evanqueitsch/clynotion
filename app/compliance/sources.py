@@ -45,6 +45,20 @@ def file_sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def iso_date(value: str) -> str:
+    text = str(value or "").strip()
+    if not text or set(text) <= {"0"}:
+        return ""
+    candidates = [text[:10], text[:8]]
+    for raw in candidates:
+        for fmt in ("%Y-%m-%d", "%Y%m%d", "%m/%d/%Y", "%m-%d-%Y"):
+            try:
+                return datetime.strptime(raw, fmt).date().isoformat()
+            except ValueError:
+                continue
+    return ""
+
+
 def digits(value: str) -> str:
     found = "".join(ch for ch in (value or "") if ch.isdigit())
     if not found or set(found) == {"0"}:
@@ -65,6 +79,20 @@ class ListedPerson:
     kind: str = ""
     state: str = ""
     active: bool = True
+    dob: str = ""
+    upin: str = ""
+    address: str = ""
+    city: str = ""
+    zip_code: str = ""
+    business: str = ""
+    general: str = ""
+    specialty: str = ""
+    excl_date: str = ""
+    rein_date: str = ""
+    waiver_date: str = ""
+    uei: str = ""
+    record_status: str = ""
+    termination_date: str = ""
 
     def proof(self) -> dict[str, str]:
         npi = digits(self.npi)
@@ -76,6 +104,31 @@ class ListedPerson:
             "kind": self.kind,
             "state": self.state,
             "active": "yes" if self.active else "no",
+        }
+
+    def record(self) -> dict[str, str]:
+        """Full list entry for the Admin comparison. Stored on the result, not in the audit log."""
+        return {
+            "last": self.last,
+            "first": self.first,
+            "middle": self.middle,
+            "npi": digits(self.npi),
+            "upin": self.upin,
+            "dob": self.dob,
+            "address": self.address,
+            "city": self.city,
+            "state": self.state,
+            "zip": self.zip_code,
+            "business": self.business,
+            "general": self.general,
+            "specialty": self.specialty,
+            "exclusion_type": self.kind,
+            "exclusion_date": self.excl_date,
+            "reinstatement_date": self.rein_date,
+            "waiver_date": self.waiver_date,
+            "uei": self.uei,
+            "record_status": self.record_status,
+            "termination_date": self.termination_date,
         }
 
 
@@ -138,6 +191,17 @@ def parse_leie(csv_text: str, *, updated_on: str, raw: bytes | None = None) -> L
                 kind=str(item.get("EXCLTYPE") or "").strip(),
                 state=str(item.get("STATE") or "").strip(),
                 active=True,
+                dob=iso_date(str(item.get("DOB") or "")),
+                upin=str(item.get("UPIN") or "").strip(),
+                address=str(item.get("ADDRESS") or "").strip(),
+                city=str(item.get("CITY") or "").strip(),
+                zip_code=str(item.get("ZIP") or "").strip(),
+                business=str(item.get("BUSNAME") or "").strip(),
+                general=str(item.get("GENERAL") or "").strip(),
+                specialty=str(item.get("SPECIALTY") or "").strip(),
+                excl_date=iso_date(str(item.get("EXCLDATE") or "")),
+                rein_date=iso_date(str(item.get("REINDATE") or "")),
+                waiver_date=iso_date(str(item.get("WAIVERDATE") or "")),
             )
         )
     payload = raw if raw is not None else csv_text.encode("utf-8")
@@ -212,12 +276,24 @@ def parse_sam(payload: dict[str, Any], *, queried_on: str, raw: bytes) -> tuple[
                 continue
             ident = item.get("exclusionIdentification") if isinstance(item.get("exclusionIdentification"), dict) else item
             details = item.get("exclusionDetails") if isinstance(item.get("exclusionDetails"), dict) else item
+            address = item.get("exclusionAddress") if isinstance(item.get("exclusionAddress"), dict) else {}
+            actions = item.get("exclusionActions") if isinstance(item.get("exclusionActions"), dict) else {}
+            action_list = actions.get("listOfActions") if isinstance(actions.get("listOfActions"), list) else []
+            action = action_list[0] if action_list and isinstance(action_list[0], dict) else {}
+            other = item.get("exclusionOtherInformation") if isinstance(item.get("exclusionOtherInformation"), dict) else {}
             last = str(ident.get("lastName") or ident.get("exclusionName") or ident.get("entityName") or "").strip()
             first = str(ident.get("firstName") or "").strip()
             if not first and "," in last:
                 bits = [part.strip() for part in last.split(",", 1)]
                 if len(bits) == 2:
                     last, first = bits[0], bits[1]
+            dob = str(
+                ident.get("dateOfBirth")
+                or ident.get("dob")
+                or other.get("dateOfBirth")
+                or other.get("dob")
+                or ""
+            )
             rows.append(
                 ListedPerson(
                     last=last,
@@ -225,8 +301,26 @@ def parse_sam(payload: dict[str, Any], *, queried_on: str, raw: bytes) -> tuple[
                     middle=str(ident.get("middleName") or "").strip(),
                     npi=digits(str(ident.get("npi") or "")),
                     kind=str(details.get("exclusionType") or details.get("exclusionProgram") or "").strip(),
-                    state=str((item.get("exclusionAddress") or {}).get("stateProvince") or "") if isinstance(item.get("exclusionAddress"), dict) else "",
+                    state=str(address.get("stateOrProvinceCode") or address.get("stateProvince") or "").strip(),
                     active=True,
+                    dob=iso_date(dob),
+                    address=" ".join(
+                        part
+                        for part in (
+                            str(address.get("addressLine1") or "").strip(),
+                            str(address.get("addressLine2") or "").strip(),
+                        )
+                        if part
+                    ),
+                    city=str(address.get("city") or "").strip(),
+                    zip_code=str(address.get("zipCode") or address.get("zip") or "").strip(),
+                    business=str(ident.get("entityName") or "").strip() if not first else "",
+                    general=str(details.get("classificationType") or "").strip(),
+                    specialty=str(details.get("exclusionProgram") or "").strip(),
+                    excl_date=iso_date(str(action.get("activateDate") or details.get("exclusionDate") or "")),
+                    uei=str(ident.get("ueiSAM") or ident.get("uei") or "").strip(),
+                    record_status=str(action.get("recordStatus") or "").strip(),
+                    termination_date=iso_date(str(action.get("terminationDate") or "")),
                 )
             )
     return file_sha256(raw), rows
