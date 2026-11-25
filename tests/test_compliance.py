@@ -245,7 +245,7 @@ def test_confirmed_exclusion_banner_and_manual_medicheck() -> None:
 
 def test_schedule_stays_off_and_settings_do_not_run_a_job() -> None:
     health = client.get("/health").json()
-    assert health["version"] == "0.30.0"
+    assert health["version"] == "0.30.1"
     assert health["exclusion_schedule"] == "off"
     assert health["audit_drive"] == "not_configured"
     assert health["sam"] == "not_configured"
@@ -598,10 +598,11 @@ def test_roster_run_writes_one_count_summary() -> None:
     assert '["Screening roster", pulse.screening_roster]' in page
     assert '["Roster", pulse.open_headcount]' not in page
     script = open("app/static/compliance.js", encoding="utf-8").read()
-    assert "included supervision clinicians" in script
-    assert "Closed — test hire deleted" in script
+    assert "people (employees and paid outside supervisors)" in script
     assert "QA tools (test records only)" in script
     assert "Fake records used only to test this feature; not real staff." in script
+    assert "Show all fields" in script
+    assert "Same person — confirmed exclusion" in script
 
 
 def test_review_groups_lists_and_compares_without_changing_a_decision() -> None:
@@ -699,3 +700,104 @@ def test_review_groups_lists_and_compares_without_changing_a_decision() -> None:
     assert not any(
         item.source_ref == person_id for item in due_engine.list_open("practice-a") if item.source == "exclusion-review"
     )
+
+
+def test_state_and_license_make_a_different_person_without_changing_the_result() -> None:
+    from app.compliance.review import review_packets, review_token
+    from app.compliance.sources import parse_sam
+    from app.employees.store import employees_store
+
+    saved = credentialing_store.save_subject(
+        "practice-a",
+        {
+            "name": "Testperson Alpha",
+            "kind": "clinician",
+            "active": True,
+            "license_type": "LPC",
+            "license_state": "PA",
+            "hire_date": "2024-03-01",
+        },
+        actor="qa",
+    )
+    employees_store.save_contact(
+        "practice-a",
+        "alpha@example.test",
+        {"preferred_name": "Testperson Alpha", "city": "Harrisburg", "state": "PA"},
+        "qa",
+    )
+    employees_store.set_link("practice-a", "alpha@example.test", saved["id"], "qa")
+    person_id = "subject:" + saved["id"]
+    listed = ListedPerson(
+        last="Alpha",
+        first="Testperson",
+        state="OH",
+        general="NURSING SERVICE PROVIDERS",
+        specialty="Nurse",
+        city="Columbus",
+    )
+    run_screening(
+        "practice-a",
+        "qa",
+        person_ids=[person_id],
+        lists=_lists([listed], sam_ready=True),
+    )
+    packet = review_packets("practice-a")[0]
+    assert "Testperson" not in packet["review_id"]
+    assert packet["review_id"] == review_token("practice-a", person_id)
+    view = packet["lists"][0]
+    assert view["likelihood"] == "Likely different person"
+    assert "a nurse in OH" in view["likelihood_reason"]
+    assert "a licensed counselor in PA" in view["likelihood_reason"]
+    assert "Testperson" not in view["likelihood_reason"]
+    state_row = next(item for item in view["rows"] if item["label"] == "State")
+    discipline = next(item for item in view["rows"] if item["label"] == "Specialty / discipline")
+    city = next(item for item in view["rows"] if item["label"] == "City")
+    assert state_row["mark"] == "Different"
+    assert discipline["mark"] == "Different"
+    assert city["staff_value"] == "Harrisburg"
+    assert any(item["both_blank"] == "yes" for item in view["rows"])
+    assert view["ssn_note"]
+    home = next(item for item in due_engine.list_open("practice-a") if item.source == "exclusion-review")
+    assert home.href.endswith(packet["review_id"])
+    assert "Testperson" not in home.href
+    decided = client.post(
+        "/compliance/reviews/decide",
+        headers=_alice(),
+        json={"review_id": packet["review_id"], "decision": "not_the_same_person", "note": "State and license differ"},
+    )
+    assert decided.status_code == 200, decided.text
+    stored = next(item for item in compliance_store.screenings("practice-a") if item["list_name"] == "leie")
+    assert stored["result"] == "possible_match"
+    logged = [item for item in compliance_store.audit_entries("practice-a") if item["action"] == "resolve_exclusion"][-1]
+    assert logged["diff"]["decision"] == "not_the_same_person"
+    assert logged["diff"]["review_id"] == packet["review_id"]
+    assert "Testperson" not in str(logged["diff"])
+    _, parsed = parse_sam(
+        {
+            "excludedEntity": [
+                {
+                    "exclusionDetails": {
+                        "classificationType": "Individual",
+                        "exclusionType": "Ineligible",
+                        "excludingAgencyName": "Health and Human Services",
+                    },
+                    "exclusionIdentification": {"firstName": "Test", "lastName": "Person", "ueiSAM": "UEIEXAMPLE1"},
+                    "exclusionPrimaryAddress": {
+                        "addressLine1": "1 Example St",
+                        "city": "Columbus",
+                        "stateOrProvinceCode": "OH",
+                    },
+                    "exclusionActions": {
+                        "listOfActions": [{"activateDate": "2020-01-01", "recordStatus": "Active", "terminationDate": ""}]
+                    },
+                }
+            ]
+        },
+        queried_on="2026-11-25",
+        raw=b"{}",
+    )
+    assert parsed[0].state == "OH"
+    assert parsed[0].city == "Columbus"
+    assert parsed[0].address == "1 Example St"
+    assert parsed[0].agency == "Health and Human Services"
+    assert parsed[0].record_status == "Active"

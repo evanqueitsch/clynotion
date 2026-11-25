@@ -185,7 +185,14 @@ class ComplianceStore:
         stored["id"] = _new_id("scr-")
         return self._append(practice_id, "screenings", stored)
 
-    def set_list_records(self, practice_id: str, result_id: str, records: list[dict[str, str]]) -> None:
+    def set_list_records(
+        self,
+        practice_id: str,
+        result_id: str,
+        records: list[dict[str, str]],
+        *,
+        replace: bool = False,
+    ) -> None:
         """Add list-entry detail onto one result. The result status is left as stored."""
         with _lock:
             payload = self._read()
@@ -195,7 +202,7 @@ class ComplianceStore:
             for item in row.get("screenings") or []:
                 if not isinstance(item, dict) or item.get("id") != result_id:
                     continue
-                if "list_records" in item:
+                if "list_records" in item and item.get("list_records") and not replace:
                     return
                 status = item.get("result")
                 item["list_records"] = [dict(record) for record in records]
