@@ -27,9 +27,11 @@ from app.compliance.screening import (
     gate,
     public_screening,
     record_manual_medicheck,
+    close_orphaned_test_matches,
     record_test_match,
     resolve_match,
     roster,
+    roster_counts,
     run_screening,
     sam_status,
 )
@@ -159,7 +161,12 @@ def get_roster(user: CurrentUser) -> dict[str, Any]:
                 "created_on": item.get("created_on") or "",
             }
         )
-    return {"people": people, "test_people": tests, "sam_status": sam_status()}
+    return {
+        "people": people,
+        "test_people": tests,
+        "counts": roster_counts(people),
+        "sam_status": sam_status(),
+    }
 
 
 @router.post("/compliance/test-hires")
@@ -207,6 +214,7 @@ def list_screenings(
     include_test: bool = False,
 ) -> dict[str, Any]:
     _admin(user)
+    close_orphaned_test_matches(user.practice_id, actor=_actor(user))
     rows = filtered_screenings(
         user.practice_id,
         person_id=person_id,

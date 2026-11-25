@@ -49,6 +49,7 @@ class PulseOut(BaseModel):
     overdue_count: int = 0
     unsigned_aging_rows: int = 0
     open_headcount: int = 0
+    screening_roster: int = 0
     documentation_ingest_age_days: Optional[int] = None
     access_pct_met: Optional[float] = None
     eligibility_checks_30d: int = 0

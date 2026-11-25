@@ -46,7 +46,16 @@
   function renderScreening(root, settings, roster, history) {
     const intro = document.createElement("p");
     intro.className = "meta";
-    intro.textContent = "Monthly schedule: " + (settings.monthly_screening_enabled ? "on" : "off")
+    const counts = roster.counts || {};
+    const parts = [];
+    if (counts.employee) parts.push(counts.employee + (counts.employee === 1 ? " employee" : " employees"));
+    if (counts.outside_supervisor) {
+      parts.push(counts.outside_supervisor + (counts.outside_supervisor === 1 ? " paid outside supervisor" : " paid outside supervisors"));
+    }
+    intro.textContent = "Screening roster: " + (counts.total || (roster.people || []).length)
+      + (parts.length ? " (" + parts.join(", ") + ")" : "")
+      + ". Home Clinicians counts included supervision clinicians, not this list. "
+      + "Monthly schedule: " + (settings.monthly_screening_enabled ? "on" : "off")
       + ". SAM: " + settings.sam_status
       + ". " + settings.monthly_detail;
     root.appendChild(intro);
@@ -243,6 +252,9 @@
         bits.push(item.person_id);
         const createdOn = item.created_on || created[item.person_id];
         if (createdOn) bits.push("created " + createdOn);
+      }
+      if (decided[item.id] && decided[item.id].decision === "closed_test_record") {
+        bits.push("Closed — test hire deleted");
       }
       text.textContent = bits.join(" — ");
       row.appendChild(text);

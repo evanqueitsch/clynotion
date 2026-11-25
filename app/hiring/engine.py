@@ -3008,9 +3008,11 @@ class HiringEngine:
             due_engine.complete(practice_id=practice_id, source="hiring-payroll", source_ref=hire_id + ":packet")
             due_engine.complete(practice_id=practice_id, source="hiring-qb", source_ref=hire_id + ":qb")
             from app.compliance.masking import mask_text
-            from app.compliance.screening import close_open_reviews
+            from app.compliance.screening import close_open_reviews, close_test_matches
 
             close_open_reviews(practice_id, f"hire:{hire_id}")
+            if hire.get("test_record"):
+                close_test_matches(practice_id, f"hire:{hire_id}", actor=actor)
             row["_runtime_practice_id"] = practice_id
             email = str(candidate.get("personal_email") or "")
             self._history(

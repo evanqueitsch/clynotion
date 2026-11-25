@@ -412,6 +412,26 @@ def run_screening(
             matches = match_rows(first, last, person.get("npi") or "", listing.rows) if listing.ready else []
             row = _result_row(person, listing, matches, purpose=purpose, actor=actor, source_mode="official")
             stored_rows.append(_store_result(practice_id, row))
+    if person_ids is None:
+        tally = {"clear": 0, "possible_match": 0, "not_run": 0}
+        for item in stored_rows:
+            key = str(item.get("result") or "")
+            if key in tally:
+                tally[key] += 1
+        note(
+            practice_id,
+            action="screen_roster",
+            object_type="exclusion_screening",
+            object_id=practice_id,
+            actor=actor,
+            diff={
+                "people": len(selected),
+                "results": len(stored_rows),
+                "clear": tally["clear"],
+                "possible_match": tally["possible_match"],
+                "not_run": tally["not_run"],
+            },
+        )
     return {"count": len(stored_rows), "results": [public_screening(item) for item in stored_rows]}
 
 
@@ -455,6 +475,88 @@ def close_open_reviews(practice_id: str, person_id: str) -> None:
             source="exclusion-review",
             source_ref=str(item.get("id") or ""),
         )
+
+
+_TEST_CLOSED = "closed_test_record"
+
+
+def _is_open_test_match(item: dict[str, Any], resolutions: list[dict[str, Any]]) -> bool:
+    """A synthetic TEST possible match with no decision yet. Official rows are not included."""
+    if item.get("source_mode") != "fixture" or item.get("kind") != "test":
+        return False
+    if item.get("result") != "possible_match":
+        return False
+    if str(item.get("detail") or "") != "TEST possible match":
+        return False
+    return _resolution_for(str(item.get("id") or ""), resolutions) is None
+
+
+def close_test_matches(practice_id: str, person_id: str, *, actor: str) -> int:
+    """Close unresolved TEST matches for one hire. Stored results and other decisions stay."""
+    from app.platform.due import due_engine
+
+    resolutions = compliance_store.resolutions(practice_id)
+    closed = 0
+    for item in compliance_store.screenings(practice_id):
+        if item.get("person_id") != person_id or not _is_open_test_match(item, resolutions):
+            continue
+        result_id = str(item.get("id") or "")
+        compliance_store.append_resolution(
+            practice_id,
+            {
+                "result_id": result_id,
+                "person_id": person_id,
+                "decision": _TEST_CLOSED,
+                "note": "",
+                "actor": actor or "clynotion",
+                "at": datetime.now(timezone.utc).isoformat(),
+            },
+        )
+        due_engine.complete(practice_id=practice_id, source="exclusion-review", source_ref=result_id)
+        closed += 1
+        resolutions = compliance_store.resolutions(practice_id)
+    if closed:
+        note(
+            practice_id,
+            action="close_test_match",
+            object_type="exclusion_review",
+            object_id=person_id,
+            actor=actor or "clynotion",
+            diff={"closed": closed},
+        )
+    return closed
+
+
+def close_orphaned_test_matches(practice_id: str, *, actor: str) -> int:
+    """Close TEST matches whose hire is already gone. Official results stay."""
+    from app.hiring.engine import hiring
+
+    payload = hiring._read()
+    row = hiring._practice(payload, practice_id)
+    hires = row.get("hires") or {}
+    resolutions = compliance_store.resolutions(practice_id)
+    pending: list[str] = []
+    for item in compliance_store.screenings(practice_id):
+        person_id = str(item.get("person_id") or "")
+        if not person_id.startswith("hire:") or person_id in pending:
+            continue
+        if not _is_open_test_match(item, resolutions):
+            continue
+        hire_id = person_id.split(":", 1)[1]
+        if hire_id in hires:
+            continue
+        pending.append(person_id)
+    return sum(close_test_matches(practice_id, person_id, actor=actor) for person_id in pending)
+
+
+def roster_counts(people: list[dict[str, str]]) -> dict[str, int]:
+    """How many people are on the screening roster, by kind. Test hires are not included."""
+    counts = {"total": len(people), "employee": 0, "outside_supervisor": 0}
+    for item in people:
+        kind = str(item.get("kind") or "")
+        if kind in counts:
+            counts[kind] += 1
+    return counts
 
 
 def _latest(rows: list[dict[str, Any]], list_name: str) -> Optional[dict[str, Any]]:

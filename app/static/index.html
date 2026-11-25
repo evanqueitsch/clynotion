@@ -1262,8 +1262,8 @@
   <script src="/static/billing.js?v=0.19.5"></script>
   <script src="/static/employee.js?v=0.24.4"></script>
   <script src="/static/denials.js?v=0.21.0"></script>
-  <script src="/static/hiring.js?v=0.29.3"></script>
-  <script src="/static/compliance.js?v=0.29.3"></script>
+  <script src="/static/hiring.js?v=0.29.4"></script>
+  <script src="/static/compliance.js?v=0.29.4"></script>
   <script>
     const state = {
       token: null,
@@ -2651,7 +2651,8 @@
         ["Open", pulse.open_obligations],
         ["Overdue", pulse.overdue_count],
         ["Unsigned notes", pulse.unsigned_aging_rows],
-        ["Roster", pulse.open_headcount],
+        ["Clinicians", pulse.open_headcount],
+        ["Screening roster", pulse.screening_roster],
         ["Access %", pulse.access_pct_met == null ? "—" : pulse.access_pct_met],
         ["Elig 30d", pulse.eligibility_checks_30d],
       ];
