@@ -23,6 +23,7 @@ from zoneinfo import ZoneInfo
 from cryptography.fernet import Fernet
 
 from app.crypto import decrypt_utf8, encrypt_utf8
+from app.file_cache import DecryptedFileCache
 from app.employees.contact_format import normalize_contact
 from app.history_text import (
     change_fields,
@@ -188,9 +189,11 @@ def _public_history(items: Any) -> list[dict[str, str]]:
 class EmployeesStore:
     def __init__(self) -> None:
         self._memory: Optional[dict[str, Any]] = None
+        self._file_cache = DecryptedFileCache()
 
     def reset(self) -> None:
         self._memory = None
+        self._file_cache.clear()
         if not _file_mode():
             self._memory = _empty()
 
@@ -200,9 +203,10 @@ class EmployeesStore:
                 self._memory = _empty()
             return self._memory
         path = _path()
-        if not path.is_file():
+        payload = self._file_cache.read_json(path, _decrypt)
+        if not isinstance(payload, dict):
             return _empty()
-        return json.loads(_decrypt(path.read_bytes()))
+        return payload
 
     def _save(self, payload: dict[str, Any]) -> None:
         if not _file_mode():
@@ -222,6 +226,7 @@ class EmployeesStore:
         finally:
             os.close(fd)
         os.replace(tmp, path)
+        self._file_cache.remember(path, payload)
 
     def _practice(self, practice_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         practices = payload.setdefault("practices", {})

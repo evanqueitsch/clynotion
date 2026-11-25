@@ -245,7 +245,7 @@ def test_confirmed_exclusion_banner_and_manual_medicheck() -> None:
 
 def test_schedule_stays_off_and_settings_do_not_run_a_job() -> None:
     health = client.get("/health").json()
-    assert health["version"] == "0.30.4"
+    assert health["version"] == "0.30.5"
     assert health["exclusion_schedule"] == "off"
     assert health["audit_drive"] == "not_configured"
     assert health["sam"] == "not_configured"
@@ -924,6 +924,7 @@ def test_open_reviews_survives_a_failed_sam_reread() -> None:
                 {
                     "last": "Alpha",
                     "first": "Testperson",
+                    "middle": "Q",
                     "state": "MO",
                     "specialty": "Nurse's aide",
                 }
@@ -942,6 +943,9 @@ def test_open_reviews_survives_a_failed_sam_reread() -> None:
             "at": "2026-11-25T00:00:00+00:00",
         },
     )
+    from app.compliance.sources import clear_list_cache
+
+    clear_list_cache()
     calls = {"n": 0}
     previous = os.environ.get("SAM_API_KEY")
     os.environ["SAM_API_KEY"] = "not-a-real-key"
@@ -970,6 +974,7 @@ def test_open_reviews_survives_a_failed_sam_reread() -> None:
         )
         assert sam["alignment"] == "Probably the same exclusion as the OIG LEIE entry above"
         assert view["likelihood"] == "Likely different person"
+        assert view["summary"] == "Likely different person — based on the OIG LEIE details above."
         retried = client.post(
             "/compliance/reviews/sam-retry",
             headers=_alice(),
@@ -982,7 +987,7 @@ def test_open_reviews_survives_a_failed_sam_reread() -> None:
         assert again.status_code == 200
         assert calls["n"] == seen
         sam_after = next(item for item in again.json()["people"][0]["lists"] if item["list_name"] == "sam")
-        assert sam_after["detail_note"] == "SAM.gov was busy, so details couldn't be loaded. Try again later."
+        assert sam_after["detail_note"] == "SAM.gov was busy, so its details couldn't be loaded. Click Retry to try again."
     finally:
         httpx.get = original
         if previous is None:
@@ -997,3 +1002,186 @@ def test_open_reviews_survives_a_failed_sam_reread() -> None:
     script = open("app/static/compliance.js", encoding="utf-8").read()
     assert "Loading possible-match review" in script
     assert "The rest of this page is still available." in script
+    assert "Loading screening" in script
+    assert "This decision applies to both list hits for this person." in script
+    assert 'person.likelihood === "Likely different person" ? "primary"' in script
+
+
+def test_state_comes_from_a_credential_entry_or_says_not_on_file() -> None:
+    """Blank top-level state, with the state living on a credential entry or nowhere at all."""
+    from app.compliance.review import NOT_ON_FILE, comparison_rows, staff_record
+    from app.employees.store import employees_store
+
+    payload, row = credentialing_store._load_practice("practice-a")
+    row["subjects"]["alpha-license"] = {
+        "id": "alpha-license",
+        "name": "Testperson Alpha",
+        "kind": "clinician",
+        "active": True,
+        "license_type": "LCSW",
+        "license_state": "",
+        "service_address": "",
+        "license_number": "CW000000",
+        "credentials": [{"type": "LCSW", "license_state": "Pennsylvania", "number": "CW000000"}],
+    }
+    row["subjects"]["alpha-cw"] = {
+        "id": "alpha-cw",
+        "name": "Testperson Social",
+        "kind": "clinician",
+        "active": True,
+        "license_type": "LCSW",
+        "license_state": "",
+        "license_number": "CW000000",
+        "service_address": "",
+    }
+    row["subjects"]["alpha-prefix"] = {
+        "id": "alpha-prefix",
+        "name": "Testperson Prefix",
+        "kind": "clinician",
+        "active": True,
+        "license_type": "LCSW",
+        "license_state": "",
+        "license_number": "PA-00000",
+    }
+    row["subjects"]["alpha-blank"] = {
+        "id": "alpha-blank",
+        "name": "Testperson Blank",
+        "kind": "clinician",
+        "active": True,
+        "license_type": "LCSW",
+        "license_state": "",
+        "service_address": "10 Oak St",
+    }
+    row["subjects"]["practice-home"] = {
+        "id": "practice-home",
+        "name": "Example Practice",
+        "kind": "practice",
+        "active": True,
+        "service_address": "1 Main St, Harrisburg, PA 17101",
+    }
+    licensed = staff_record("practice-a", "subject:alpha-license", "Testperson Alpha")
+    state = next(item for item in comparison_rows({"state": "MO"}, licensed) if item["label"] == "State")
+    assert state["staff_value"] == "PA (license)"
+    assert state["staff_href"] == ""
+    social = staff_record("practice-a", "subject:alpha-cw", "Testperson Social")
+    state = next(item for item in comparison_rows({}, social) if item["label"] == "State")
+    assert state["staff_value"] == "PA (license)"
+    prefixed = staff_record("practice-a", "subject:alpha-prefix", "Testperson Prefix")
+    state = next(item for item in comparison_rows({}, prefixed) if item["label"] == "State")
+    assert state["staff_value"] == "PA (license)"
+    blank = staff_record("practice-a", "subject:alpha-blank", "Testperson Blank")
+    state = next(item for item in comparison_rows({}, blank) if item["label"] == "State")
+    assert state["staff_value"] == "PA (practice address)"
+    row["subjects"].pop("practice-home")
+    missing = staff_record("practice-a", "subject:alpha-blank", "Testperson Blank")
+    state = next(item for item in comparison_rows({}, missing) if item["label"] == "State")
+    assert state["staff_value"] == NOT_ON_FILE
+    assert state["staff_href"] == "#credentialing"
+    employees_store.save_contact(
+        "practice-a",
+        "alpha@example.test",
+        {"preferred_name": "Testperson Blank", "street": "10 Oak St, Philadelphia, PA 19103", "state": ""},
+        "qa",
+    )
+    employees_store.set_link("practice-a", "alpha@example.test", "alpha-blank", "qa")
+    home = staff_record("practice-a", "subject:alpha-blank", "Testperson Blank")
+    state = next(item for item in comparison_rows({}, home) if item["label"] == "State")
+    assert state["staff_value"] == "PA (contact)"
+
+
+def test_successful_sam_detail_is_cached(monkeypatch) -> None:
+    from datetime import date
+
+    from app.compliance.sources import HttpxFetcher, clear_list_cache, load_sam_detail
+    import app.compliance.sources as sources
+
+    clear_list_cache()
+    monkeypatch.setenv("SAM_API_KEY", "not-a-real-key")
+    calls = {"n": 0}
+    body = (
+        '{"totalRecords": 1, "exclusionIdentification": {"firstName": "Testperson", "lastName": "Alpha", '
+        '"ueiSAM": "UEI0000000001"}, "exclusionDetails": {"exclusionType": "Prohibition/Restriction"}}'
+    )
+
+    class _Ok:
+        status_code = 200
+        text = body
+        content = body.encode()
+
+    def fake_get(*_args, **_kwargs):
+        calls["n"] += 1
+        return _Ok()
+
+    monkeypatch.setattr(sources.httpx, "get", fake_get)
+    try:
+        first = load_sam_detail(HttpxFetcher(timeout=2), first="Testperson", last="Alpha", today=date(2026, 11, 25))
+        assert first.ready is True
+        assert calls["n"] >= 1
+        seen = calls["n"]
+        second = load_sam_detail(HttpxFetcher(timeout=2), first="Testperson", last="Alpha", today=date(2026, 11, 25))
+        assert second.ready is True
+        assert calls["n"] == seen
+    finally:
+        clear_list_cache()
+
+
+def test_leie_csv_is_parsed_once(monkeypatch, tmp_path) -> None:
+    from datetime import date
+
+    from app.compliance.sources import HttpxFetcher, clear_list_cache, load_leie
+    import app.compliance.sources as sources
+
+    clear_list_cache()
+    monkeypatch.setenv("ATTUNE_LIST_CACHE_DIR", str(tmp_path))
+    csv_text = "LASTNAME,FIRSTNAME,STATE\nALPHA,TESTPERSON,MO\n"
+    calls = {"n": 0}
+
+    class _Page:
+        status_code = 200
+        text = "11-01-2026 Last Update"
+        content = b""
+
+    class _Csv:
+        status_code = 200
+        text = csv_text
+        content = csv_text.encode()
+
+    def fake_get(url, *_args, **_kwargs):
+        calls["n"] += 1
+        if "downloadables" in str(url):
+            return _Csv()
+        return _Page()
+
+    monkeypatch.setattr(sources.httpx, "get", fake_get)
+    try:
+        first = load_leie(HttpxFetcher(), today=date(2026, 11, 25))
+        assert first.ready is True
+        seen = calls["n"]
+        second = load_leie(HttpxFetcher(), today=date(2026, 11, 25))
+        assert second.ready is True
+        assert calls["n"] == seen
+    finally:
+        clear_list_cache()
+
+
+def test_decrypted_file_is_read_once_until_it_changes(tmp_path) -> None:
+    from app.file_cache import DecryptedFileCache
+
+    path = tmp_path / "blob.bin"
+    path.write_bytes(b"cipher")
+    calls = {"n": 0}
+
+    def decrypt(_blob: bytes) -> str:
+        calls["n"] += 1
+        return '{"ok": true}'
+
+    cache = DecryptedFileCache()
+    assert cache.read_json(path, decrypt)["ok"] is True
+    assert cache.read_json(path, decrypt)["ok"] is True
+    assert calls["n"] == 1
+
+
+def test_health_reports_server_timing() -> None:
+    response = client.get("/health")
+    assert response.status_code == 200
+    assert "app;dur=" in response.headers.get("server-timing", "")

@@ -21,6 +21,7 @@ from app.credentialing.csvio import (
 )
 from app.credentialing.link import apply_payer_link, build_link_plan
 from app.crypto import decrypt_utf8, encrypt_utf8
+from app.file_cache import DecryptedFileCache
 from app.dates import DATE_HINT, calendar_date, parse_calendar_date, shift_calendar_date
 from app.history_text import format_history_line
 
@@ -147,9 +148,11 @@ def _secret_delta(old: str, new: str) -> Optional[dict[str, str]]:
 class CredentialingStore:
     def __init__(self) -> None:
         self._memory: Optional[dict[str, Any]] = None
+        self._file_cache = DecryptedFileCache()
 
     def reset(self) -> None:
         self._memory = None
+        self._file_cache.clear()
         if not _file_mode():
             self._memory = _empty()
 
@@ -159,9 +162,7 @@ class CredentialingStore:
                 self._memory = _empty()
             return self._memory
         path = _path()
-        if not path.is_file():
-            return _empty()
-        payload = json.loads(decrypt_utf8(path.read_bytes()))
+        payload = self._file_cache.read_json(path, decrypt_utf8)
         if not isinstance(payload, dict):
             return _empty()
         payload.setdefault("practices", {})
@@ -182,6 +183,7 @@ class CredentialingStore:
         finally:
             os.close(fd)
         os.replace(tmp, path)
+        self._file_cache.remember(path, payload)
 
     def _backup(self) -> str:
         if not _file_mode():
